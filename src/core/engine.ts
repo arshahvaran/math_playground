@@ -34,7 +34,16 @@ export function createEngine(getInstance: () => VizInstance | null): EngineHandl
 
   function frame(now: number): void {
     const inst = getInstance();
-    if (!inst) return;
+    if (!inst) {
+      // Nothing to drive yet: the shell may start the loop before the first
+      // route resolves, or swap instances across an await while a tab's module
+      // loads. Idle rather than exit — a loop that dies here leaves `running`
+      // true, and no later start() can revive it. Resetting `last` keeps the
+      // idle time from being banked and replayed onto the instance that arrives.
+      last = now;
+      raf = requestAnimationFrame(frame);
+      return;
+    }
 
     const elapsed = Math.min(now - last, MAX_FRAME_MS);
     last = now;

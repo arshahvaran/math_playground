@@ -1,4 +1,6 @@
 import type { Viz } from '../core/types';
+import { galton } from './galton';
+import { buffon } from './buffon';
 
 /**
  * Every visualization in the app, in tab order.
@@ -7,8 +9,11 @@ import type { Viz } from '../core/types';
  * randomness group, then breadth. Do not sort this alphabetically.
  */
 export const registry: readonly Viz[] = [
-  // Populated in Phase 1+. See docs/VISUALIZATIONS.md for the planned catalogue
-  // and .claude/skills/add-visualization/SKILL.md for the procedure.
+  galton,
+  // `clt` (Central Limit Machine) belongs here once built: the board is that
+  // machine with a fixed Bernoulli source, so the general statement sits between
+  // the hero and the first route to π.
+  buffon,
 ];
 
 export function findViz(id: string): Viz | undefined {
