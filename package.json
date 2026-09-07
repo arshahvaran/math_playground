@@ -4,7 +4,7 @@
   "private": true,
   "description": "Interactive, parameter-driven visualizations of classic results in probability, chaos, and number theory.",
   "type": "module",
-  "license": "MIT",
+  "license": "CC-BY-NC-4.0",
   "author": "Ali Reza Shahvaran",
   "homepage": "https://arshahvaran.github.io/math_playground/",
   "repository": {
