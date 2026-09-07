@@ -143,7 +143,9 @@ export interface Rng {
  * the Galton board's pegs, Buffon's ruled lines, the Mandelbrot escape field.
  * It is repainted only on resize or parameter change.
  *
- * `foreground` is cleared and repainted every frame.
+ * `foreground` belongs to `draw()`, which clears it — or fades it with a
+ * translucent fill of the canvas colour, for persistent trails — every frame.
+ * The shell never clears it for you.
  *
  * Painting static geometry into `foreground` every frame is the single easiest
  * way to lose the frame budget here.
@@ -153,13 +155,48 @@ export interface Layers {
   foreground: CanvasRenderingContext2D;
 }
 
+/**
+ * Colors and metrics the shell reads from the active CSS theme and hands to
+ * every visualization, so no canvas code ever hardcodes a color.
+ *
+ * One theme serves every tab. A visualization that needs a color not listed
+ * here should ask for a new token rather than inventing a hex value.
+ */
+export interface CanvasTheme {
+  /** Canvas ground. */
+  canvas: string;
+  ink: string;
+  inkMuted: string;
+  /** Recessive structure: pegs, ruled lines, grid, axes. */
+  grid: string;
+  /** Primary data mark — particles, the live estimate. */
+  data1: string;
+  /** Secondary data mark — the theoretical or fitted overlay. */
+  data2: string;
+  /** Tertiary data mark — histogram bars, envelopes. */
+  data3: string;
+  accent: string;
+  /** CSS font shorthand for in-canvas labels, e.g. `12px "IBM Plex Mono"`. */
+  labelFont: string;
+  /** Hairline width in CSS px. The DPR transform scales it. */
+  lineWidth: number;
+  /** Default particle radius in CSS px. */
+  particleRadius: number;
+}
+
 export interface VizContext {
   layers: Layers;
-  /** CSS pixels, not device pixels. Draw in these units; the DPR transform is applied for you. */
+  /**
+   * CSS pixels, not device pixels. Draw in these units; the DPR transform is
+   * applied for you. The shell updates these in place on resize and then calls
+   * `drawBackground()`.
+   */
   width: number;
   height: number;
   rng: Rng;
+  /** Updated in place by the shell before `onParamChange()` / `reset()`. */
   params: ParamValues;
+  theme: CanvasTheme;
   /** Publish results. Call at most once per frame; the shell throttles rendering. */
   emit(readouts: readonly Readout[]): void;
   /** True when the user has asked for reduced motion. Skip continuous animation. */
@@ -180,6 +217,15 @@ export interface VizInstance {
 
   /** Repaint `layers.foreground`. Called once per frame. Must not mutate simulation state. */
   draw(): void;
+
+  /**
+   * React to one parameter changing. Return `true` if the change was absorbed
+   * live; return `false` (or omit the method) to have the shell call `reset()`.
+   *
+   * Cosmetic parameters absorb — toggling a Gaussian overlay must not restart
+   * ten thousand balls. Structural ones reset — a new row count is a new board.
+   */
+  onParamChange?(key: string, value: ParamValue): boolean;
 
   /** Return to the initial state, reusing the current parameters and reseeding the RNG. */
   reset(): void;
