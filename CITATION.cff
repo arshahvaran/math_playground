@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "Math Playground: interactive visualizations of classic mathematical results"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Shahvaran
+    given-names: Ali Reza
+    email: ar.shahvaran@gmail.com
+repository-code: "https://github.com/arshahvaran/math_playground"
+url: "https://arshahvaran.github.io/math_playground/"
+abstract: >-
+  A client-side web application presenting interactive, parameter-driven
+  visualizations of classic results in probability, chaos, and number theory,
+  including the Galton board, the central limit theorem, Buffon's needle,
+  random walks, Fourier series, and the logistic map. Every simulation is
+  seeded and reproducible, and each converges to a value verifiable in closed form.
+keywords:
+  - mathematics
+  - visualization
+  - probability
+  - central-limit-theorem
+  - monte-carlo
+  - chaos
+  - interactive
+  - education
+  - webtool
+license: MIT
+version: 0.1.0
+date-released: "2026-09-07"
