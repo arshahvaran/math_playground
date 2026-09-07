@@ -225,30 +225,16 @@ function simParams(values: ParamValues): GaltonParams {
 }
 
 /**
- * `#rgb`, `#rrggbb` or `#rrggbbaa` → `rgba(r, g, b, alpha)`. Theme colours
- * arrive as hex; anything else comes back untouched, so an unexpected
- * `rgb(…)` degrades to an opaque fill rather than an invalid one.
- */
-export function withAlpha(color: string, alpha: number): string {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(color.trim());
-  if (!m) return color;
-  let hex = m[1] ?? '';
-  if (hex.length === 3) hex = hex.replace(/./g, (c) => c + c);
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-/**
  * How the pile is drawn, fixed for a run so bars, dots and overlays share one
  * vertical scale.
  *
  * Resting balls sit in a grid of `cols` per row at a pitch of 2·radius, so a
- * pile of c balls is c·(2·radius/cols) px tall — that is `unit`, and it is
- * also the height of the histogram bar and the scale of the theoretical
- * overlays. The radius is chosen so the expected tallest pile fills the bin
- * depth with HEADROOM to spare, and never exceeds the in-flight ball size.
+ * pile of c balls is about c·(2·radius/cols) px tall. `unit` is that height per
+ * ball, and it is also the height of the histogram bar and the scale of the
+ * theoretical overlays. The radius is chosen so the expected tallest pile fills
+ * the bin depth with HEADROOM to spare, and never exceeds the in-flight ball
+ * size; where the radius is clamped rather than derived, `unit` falls back to
+ * the bin depth so the bar and the overlays still fit.
  */
 interface Pile {
   radius: number;
@@ -263,7 +249,7 @@ interface Pile {
   sigma: number;
 }
 
-function pileMetrics(g: BoardGeometry, p: number, balls: number, particleRadius: number): Pile {
+export function pileMetrics(g: BoardGeometry, p: number, balls: number, particleRadius: number): Pile {
   const rows = g.rows;
   const expected = new Float64Array(rows + 1);
   let pmax = 0;
@@ -273,7 +259,8 @@ function pileMetrics(g: BoardGeometry, p: number, balls: number, particleRadius:
     if (q > pmax) pmax = q;
   }
   const tallest = Math.max(1, balls * pmax * HEADROOM);
-  const area = Math.max(1, g.pegSpacing * (g.binBottom - g.binTop));
+  const depth = Math.max(1, g.binBottom - g.binTop);
+  const area = Math.max(1, g.pegSpacing * depth);
   // A c-ball pile occupies c·(2r)² of bin area, so r = ½·√(area / tallest) fills it exactly.
   let radius = 0.5 * Math.sqrt(area / tallest);
   radius = Math.min(particleRadius, Math.max(0.5, radius));
@@ -281,7 +268,15 @@ function pileMetrics(g: BoardGeometry, p: number, balls: number, particleRadius:
   return {
     radius,
     cols,
-    unit: (2 * radius) / cols,
+    // The dot pitch 2r/cols is the area derivation only while the radius is the
+    // one it produced. Clamping r up to the 0.5 px floor — twenty rows and
+    // twenty thousand balls on an ordinary canvas — makes the pitch larger than
+    // the area allows, and the bar, the binomial marks and the normal peak all
+    // clip against the bin mouth. depth/tallest is the scale that puts the
+    // expected tallest pile at depth/HEADROOM by construction, so take the
+    // smaller of the two: the dots keep their own pitch, and the seam where the
+    // bar takes over from them is under a pixel at the dot cap.
+    unit: Math.min((2 * radius) / cols, depth / tallest),
     cap: Math.max(1, Math.floor(DOT_BUDGET / (rows + 1))),
     expected,
     mu: rows * p,
@@ -307,8 +302,12 @@ function create(ctx: VizContext): VizInstance {
   }
 
   function syncLayout(): void {
-    geometry = layoutBoard(ctx.width, ctx.height, sim.rows);
+    // From the parameters, not from the sim: the contract does not fix whether
+    // the shell calls drawBackground() or reset() first after a row change, and
+    // sim.rows only moves inside reset(). layoutBoard clamps rows the same way
+    // the sim does, so the two agree once reset() has run either way.
     const sp = simParams(ctx.params);
+    geometry = layoutBoard(ctx.width, ctx.height, sp.rows);
     pile = pileMetrics(geometry, sp.p, Math.min(MAX_BALLS, sp.balls), ctx.theme.particleRadius);
   }
 
@@ -413,11 +412,26 @@ function create(ctx: VizContext): VizInstance {
 
       const depth = g.binBottom - g.binTop;
       const half = g.pegSpacing / 2;
+      const bandLeft = binCentreX(g, 0) - half;
+      const bandRight = binCentreX(g, rows) + half;
 
-      // Histogram bars under the pile. Same `unit` as the dots, so a bar is
-      // exactly as tall as the pile it sits behind and carries on above the
-      // dot cap without a seam.
-      fg.fillStyle = withAlpha(theme.data3, BAR_ALPHA);
+      // The bins are redrawn in full every frame — bars, pile, marks, curve are
+      // all clamped to `depth` — so clear the band rather than fade it. Fading
+      // it would composite each translucent bar onto its own residue: with
+      // BAR_ALPHA 0.35 and TRAIL_FADE 0.1 the fixed point of
+      // a ← 0.35 + 0.65·0.9·a is 0.84, so within a quarter second the bars
+      // would read as solid and a toggled-off overlay would leave a ghost the
+      // fade never removes. Trails still live in the peg region above.
+      const pad = 2 * theme.lineWidth;
+      fg.clearRect(bandLeft - pad, g.binTop - pad, bandRight - bandLeft + 2 * pad, depth + 2 * pad);
+
+      // Histogram bars under the pile, on the same `unit` as the dots so a bar
+      // backs the pile it sits behind and carries the count on above the dot
+      // cap. The alpha goes on the context, not into the colour: theme values
+      // are whatever the stylesheet wrote — oklch(), a named colour — and
+      // parsing them here would silently give an opaque bar.
+      fg.globalAlpha = BAR_ALPHA;
+      fg.fillStyle = theme.data3;
       let tallest = 0;
       let mode = 0;
       for (let k = 0; k <= rows; k++) {
@@ -430,6 +444,7 @@ function create(ctx: VizContext): VizInstance {
         const h = Math.min(depth, c * pile.unit);
         fg.fillRect(binCentreX(g, k) - half, g.binBottom - h, g.pegSpacing, h);
       }
+      fg.globalAlpha = 1;
 
       // Resting dots and moving balls share one colour, so one path and one fill.
       fg.fillStyle = theme.data1;
@@ -481,13 +496,11 @@ function create(ctx: VizContext): VizInstance {
       // p = 0 or 1 is a point mass; there is no curve to draw.
       if (showNormal && pile.sigma > 0) {
         const balls = num(ctx.params, 'balls', DEFAULT_BALLS);
-        const left = binCentreX(g, 0) - half;
-        const right = binCentreX(g, rows) + half;
         fg.strokeStyle = theme.data2;
         fg.lineWidth = 2 * theme.lineWidth;
         fg.lineJoin = 'round';
         fg.beginPath();
-        for (let px = left; px <= right; px += 2) {
+        for (let px = bandLeft; px <= bandRight; px += 2) {
           // Continuous bin coordinate; a unit-width bin at u expects balls · pdf(u) landings.
           const u = (px - g.originX) / g.pegSpacing + rows / 2;
           const h = Math.min(depth, balls * normalPdf(u, pile.mu, pile.sigma) * pile.unit);

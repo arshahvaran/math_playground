@@ -241,7 +241,7 @@ function create(ctx: VizContext): VizInstance {
       }
       pending += (dropRate * dt) / 1000;
       // Drops per tick depend only on dt and dropRate, and each drop consumes
-      // exactly three rng draws, so the needle sequence for a seed is the same
+      // exactly four rng draws, so the needle sequence for a seed is the same
       // at every drop rate — only the clock differs.
       while (pending >= 1 && field.drops < maxDrops) {
         field.push(dropNeedle(ctx.rng, ctx.width, fieldHeight, length, spacing));
@@ -279,15 +279,15 @@ function create(ctx: VizContext): VizInstance {
       const paths = new Array<Path2D | undefined>(2 * ALPHA_LEVELS);
       const half = length / 2;
       const top = ALPHA_LEVELS - 1;
-      field.forEach((x, y, angle, crosses) => {
-        const s = Math.sin(angle);
-        const c = Math.cos(angle);
-        const level = showAngle ? Math.round(Math.abs(s) * top) : top;
+      field.forEach((x, y, cos, sin, crosses) => {
+        // The field hands back the direction it stored at push, so no needle
+        // costs a sin/cos here — 20,000 pairs a frame was a measurable slice.
+        const level = showAngle ? Math.round(Math.abs(sin) * top) : top;
         const b = crosses ? ALPHA_LEVELS + level : level;
         const path = paths[b] ?? (paths[b] = new Path2D());
         const cy = originY + y;
-        path.moveTo(x - half * c, cy - half * s);
-        path.lineTo(x + half * c, cy + half * s);
+        path.moveTo(x - half * cos, cy - half * sin);
+        path.lineTo(x + half * cos, cy + half * sin);
       });
 
       fg.lineWidth = 1.5 * theme.lineWidth;

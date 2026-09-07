@@ -82,6 +82,22 @@ describe('buffon convergence', () => {
   it('differs between seeds', () => {
     expect(run(1).crossings).not.toBe(run(2).crossings);
   });
+
+  it('gives the same crossings at any field height, so a permalink survives the recipient’s window', () => {
+    // Crossing is decided by y₀ and θ, drawn before the layout is consulted;
+    // the field height only picks the strip the needle is painted in, and it
+    // costs the same one draw whatever the height. Heights here span 3, 10 and
+    // 37 whole strips plus a partial one, and one shorter than a single strip.
+    const counts = [0.4, 3, 10, 37.5].map((height) => {
+      const rng = createRng(SEED);
+      const field = new NeedleField(100);
+      for (let i = 0; i < 20_000; i++) field.push(dropNeedle(rng, 10, height, LENGTH, SPACING));
+      return field.crossings;
+    });
+    expect(new Set(counts).size, `crossings varied with field height: ${counts.join(', ')}`).toBe(1);
+    // A live check that the count is the real one, not zero on every height.
+    expect(counts[0]).toBeGreaterThan(9_000);
+  });
 });
 
 describe('dropNeedle', () => {

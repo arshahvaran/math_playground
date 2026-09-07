@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { Readout, VizContext } from '../src/core/types';
-import { galton, withAlpha } from '../src/viz/galton/index';
+import { galton, pileMetrics } from '../src/viz/galton/index';
+import { binomialPmf } from '../src/core/stats';
 import {
   MAX_ROWS,
   binCentreX,
@@ -430,17 +431,61 @@ describe('galton viz instance', () => {
   });
 });
 
-describe('withAlpha', () => {
-  it('turns theme hex colours into rgba', () => {
-    expect(withAlpha('#ff0000', 0.5)).toBe('rgba(255, 0, 0, 0.5)');
-    expect(withAlpha('#0a0b0c', 1)).toBe('rgba(10, 11, 12, 1)');
-    expect(withAlpha('#abc', 0.2)).toBe('rgba(170, 187, 204, 0.2)');
-    expect(withAlpha('#11223344', 0.3)).toBe('rgba(17, 34, 51, 0.3)');
-    expect(withAlpha(' #FFFFFF ', 0.1)).toBe('rgba(255, 255, 255, 0.1)');
+describe('pileMetrics', () => {
+  /** The presets, plus the defaults, as (rows, p, balls) triples. */
+  const configs: ReadonlyArray<[number, number, number]> = [
+    [12, 0.5, 2_000],
+    ...(galton.presets ?? []).map(
+      (preset) =>
+        [
+          typeof preset.values['rows'] === 'number' ? preset.values['rows'] : 12,
+          typeof preset.values['p'] === 'number' ? preset.values['p'] : 0.5,
+          typeof preset.values['balls'] === 'number' ? preset.values['balls'] : 2_000,
+        ] as [number, number, number],
+    ),
+  ];
+  const sizes: ReadonlyArray<[number, number]> = [
+    [360, 640],
+    [640, 480],
+    [800, 600],
+    [1280, 720],
+  ];
+
+  it('keeps the expected tallest pile inside the bin at every preset and canvas size', () => {
+    for (const [rows, p, balls] of configs) {
+      let pmax = 0;
+      for (let k = 0; k <= rows; k++) pmax = Math.max(pmax, binomialPmf(rows, k, p));
+      for (const [width, height] of sizes) {
+        const g = layoutBoard(width, height, rows);
+        const depth = g.binBottom - g.binTop;
+        const pile = pileMetrics(g, p, balls, 3);
+        const peak = balls * pmax * pile.unit;
+        // The scale is derived so the expected peak lands at depth/HEADROOM =
+        // depth/1.15. The tallest bin fluctuates about balls·pmax with SD
+        // √(balls·pmax(1−pmax)) — under 2% of it at 20,000 balls — so anything
+        // at or under `depth` here never clips against the bin mouth in play.
+        expect(peak, `rows ${rows}, p ${p}, balls ${balls} at ${width}x${height}`).toBeLessThanOrEqual(depth);
+      }
+    }
   });
 
-  it('leaves anything that is not hex alone', () => {
-    expect(withAlpha('rgb(1, 2, 3)', 0.5)).toBe('rgb(1, 2, 3)');
-    expect(withAlpha('tomato', 0.5)).toBe('tomato');
+  it('still fills the bin it is protecting, and keeps the dot grid inside the bin width', () => {
+    // The ceiling above must not be bought by shrinking the pile to nothing:
+    // once there are enough balls for the bin depth to be the binding
+    // constraint, the expected peak sits at depth/HEADROOM ≈ 0.87·depth.
+    for (const [rows, p, balls] of configs.filter(([, , n]) => n >= 5_000)) {
+      let pmax = 0;
+      for (let k = 0; k <= rows; k++) pmax = Math.max(pmax, binomialPmf(rows, k, p));
+      for (const [width, height] of sizes) {
+        const g = layoutBoard(width, height, rows);
+        const pile = pileMetrics(g, p, balls, 3);
+        const peak = balls * pmax * pile.unit;
+        expect(peak, `rows ${rows}, balls ${balls} at ${width}x${height}`).toBeGreaterThan(
+          0.6 * (g.binBottom - g.binTop),
+        );
+        // `cols` dots at a pitch of 2·radius must fit between the bin dividers.
+        expect(pile.cols * 2 * pile.radius).toBeLessThanOrEqual(g.pegSpacing + 1e-12);
+      }
+    }
   });
 });
