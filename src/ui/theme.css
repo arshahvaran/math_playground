@@ -1,0 +1,2500 @@
+/* ==========================================================================
+   math_playground — theme.css
+   Plotter Bench  ·  revision 2
+
+   A machined, cool-grey faceplate holding a bright white plotter bed. Three
+   grounds step up in brightness (surface 1.20:1 → raised 1.16:1 → canvas) and
+   the plate is always the brightest thing on the page, which is what a 2 px
+   vermilion particle needs. Depth comes from that stepping and from 1 px seams
+   at ~2:1, never from shadows.
+
+   The palette is three pens. --data-1 is the signal pen (vermilion) for what is
+   live and random; --data-2 the drafting pen (blue-black) for what is analytic;
+   --data-3 the graphite pen for area silhouettes, with --data-3-fill as its
+   opaque wash. The same vermilion is the chrome's single accent, spent by the
+   rubrication rule below. Agreement with theory is drawn in the drafting pen;
+   there is no green/amber pair.
+
+   THREE FILE-WIDE RULES, in order of how easily they are broken:
+
+   1. The `font:` shorthand is banned. It resets font-variant-numeric AND
+      font-stretch to normal, which silently kills tabular figures and the
+      width axis. Every rule uses longhands.
+   2. Every :hover rule lives inside @media (hover: hover) and (pointer: fine).
+      Hover here is a full inversion, and inversion means "pressed"; a latched
+      hover on a touch device would lie about state.
+   3. No colour literal outside §1 and the two scheme blocks. A needed colour
+      is a new token.
+
+   Section map:
+     1  Tokens                        9  Story mode
+     2  Base and typography          10  Fact card
+     3  Page layout                  11  Rail, transport, controls
+     4  Masthead                     12  Windows and keys
+     5  Tab bar                      13  Native controls
+     6  Bench, figure, plate         14  Footer and utilities
+     7  Caption                      15  Responsive
+     8  Readouts: hero + ledger      16  Reduced motion, forced colors, print, dark
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Registered custom properties.
+
+   --ticks and --viz-aspect are written by the shell and consumed inside calc()
+   and aspect-ratio. Unregistered, an empty or malformed value makes the whole
+   declaration invalid at computed-value time: the fader's engraved scale would
+   vanish and .stage would collapse to a 1x1 backing store with no error
+   anywhere. Registered, a bad value falls back to the initial value.
+
+   --viz-aspect is a UNITLESS NUMBER (width / height), not a <ratio>: @property
+   has no <ratio> syntax, and a number is valid in both aspect-ratio and calc().
+   Galton 0.8, Mandelbrot 1.5, default 1.6.
+   -------------------------------------------------------------------------- */
+
+@property --ticks {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 10;
+}
+
+@property --viz-aspect {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1.6;
+}
+
+/* Hero needle position, 0 = full negative error, 0.5 = converged, 1 = full
+   positive. Deliberately NOT given to --viz-aspect-narrow, which must stay
+   unregistered so `var(--viz-aspect-narrow, …)` can fall back. */
+@property --err {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0.5;
+}
+
+/* --------------------------------------------------------------------------
+   1  Tokens
+   -------------------------------------------------------------------------- */
+
+:root {
+  /* Grounds — a three-step machined stack; the plate is always brightest.
+     The step is 1.20:1 then 1.16:1 (1.38:1 end to end), enough that the rail
+     reads as a different plane from the faceplate on an uncalibrated laptop. */
+  --surface: #d6ddd8;          /* faceplate: masthead, footer, page ground */
+  --surface-raised: #edefec;   /* rails, plates, tab bar, figure sections */
+  --canvas: #ffffff;           /* plotter bed and display windows */
+  --line: #a2aba6;             /* 1 px seams — 2.04:1 on raised, visible */
+  --stroke: #657069;           /* control outlines, fader track (≥ 3.7:1 everywhere) */
+  --tick: #6f7975;             /* engraved graduations (≥ 3.2:1 on every ground) */
+
+  /* Ink */
+  --ink: #171b1d;
+  --ink-muted: #4e5750;
+
+  /* Ink and rules that live on the white plate and inside display windows.
+     These do NOT change in the dark scheme, because the plate and the windows
+     stay white there. Every rule that paints onto --canvas uses these, never
+     --ink / --stroke — that is what made dark-mode hover vanish in revision 1. */
+  --window-ink: #171b1d;
+  --window-ink-muted: #4e5750;
+  --window-stroke: #657069;
+  --window-stroke-hover: #171b1d;
+  --window-agree: #24467a;
+
+  /* The one signal colour.
+     RUBRICATION RULE — vermilion is spent only on what is current or moving:
+       particles and the live estimate on the plate (--data-1),
+       the Play/Pause key,
+       the ball on the active tab,
+       the index line on every fader thumb and the border of the control being
+         adjusted,
+       the current story step,
+       the transport rule while the simulation runs,
+       focus rings on neutral controls.
+     It never colours links, seams, static borders, or text on the grey grounds
+     (3.48:1 on --surface is below AA for text). The only accent text is
+     --accent-ink on --accent. */
+  --accent: #d53619;
+  --accent-hover: #bd2f16;
+  --accent-ink: #ffffff;
+
+  /* Agreement with theory, drawn in the drafting pen — a reading that matches
+     its reference is printed in the reference's ink. There is no warn colour:
+     deviation is the resting state of a converging estimate, not a fault, so
+     it stays --ink and is marked by a dotted underline and a hollow square. */
+  --agree: #24467a;
+
+  /* Pens, in declared order for every tab; never re-rolled per visualization.
+     Read by core/canvas.ts (CANVAS_THEME_VARS). Must stay 6-digit hex
+     literals — visualizations parse them. */
+  --data-1: #d53619;           /* signal pen: particles, walkers, the live estimate */
+  --data-2: #24467a;           /* drafting pen: fitted / theoretical overlay, thin marks */
+  --data-3: #7f8985;           /* graphite pen: area SILHOUETTES at full opacity (3.61:1) */
+  --data-3-fill: #d2d6d4;      /* graphite wash: area FILLS, opaque — never globalAlpha */
+  --grid: #23292b;             /* the experiment's own geometry: pegs, needles, ruled lines */
+  --grid-soft: #8a938f;        /* containers: bin dividers, axes, floors, frames (3.16:1) */
+
+  /* Hover / pressed washes for the themed <select> picker. */
+  --wash-1: rgb(23 27 29 / 0.06);
+  --wash-2: rgb(23 27 29 / 0.14);
+
+  /* Canvas contract (read by core/canvas.ts on .plate).
+     ctx.font carries no font-variation-settings, so the in-canvas label is
+     pinned to Martian Mono's default width axis and must not be given one. */
+  --canvas-label-font: 500 11px "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --canvas-line-width: 1;
+  --canvas-particle-radius: 2;
+
+  /* Type. Sizes are rem against the browser default so a reader who sets a
+     20 px root gets 20 px body text; only machined geometry stays in px. */
+  --font-display: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --t-11: 0.6875rem;
+  --lh-11: 1rem;
+  --t-12: 0.75rem;
+  --lh-12: 1rem;
+  --t-13: 0.8125rem;
+  --lh-13: 1.25rem;
+  --t-15: 0.9375rem;
+  --lh-15: 1.5rem;
+  --t-17: 1.0625rem;
+  --lh-17: 1.5rem;
+  --t-18: 1.125rem;
+  --lh-18: 1.5rem;
+  --t-hero: 2.5rem;
+  --lh-hero: 2.75rem;
+  --title-size: clamp(1.75rem, 1.1rem + 2.6vw, 2.75rem);
+
+  --wdth-wordmark: 125%;
+  --wdth-title: 90%;
+  --wdth-display: 100%;
+  --wdth-ui: 88%;              /* tabs, keys, group labels: semi-condensed */
+  --wdth-mono: 100%;
+  --wdth-mono-dense: 87.5%;    /* analytic, error, scale numerals, footer meta */
+  --tracking-display: -0.01em;
+  --measure: 62ch;
+  --num: tabular-nums lining-nums slashed-zero;
+
+  /* Spacing (4 px base at a 16 px root) */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-6: 1.5rem;
+  --s-8: 2rem;
+  --s-12: 3rem;
+  --gutter: 1.5rem;
+  --page-max: 100rem;
+  --rail-w: 20rem;
+  --rail-w-wide: 22.5rem;
+  --label-col: 8rem;
+
+  /* Component sizes */
+  --header-h: 3rem;
+  --tab-h: 2.75rem;
+  --key-h: 2.5rem;
+  --key-h-touch: 2.75rem;
+  --key-s: 2rem;               /* small key: stepper, seed */
+  --window-h: 1.375rem;
+  --input-h: 2rem;
+  --hero-h: 6rem;
+  --hero-max: 22rem;           /* ceiling on the hero column — max-content ran away */
+  --row-control: 2.75rem;
+  --deck-h: 3.5rem;
+
+  /* Fader geometry — machined, so px. The scale gradients are sized to the
+     thumb's real travel and every offset here is part of that arithmetic. */
+  --range-h: 40px;
+  --track-h: 2px;
+  --thumb: 22px;
+  --thumb-margin: calc(var(--track-h) / 2 - var(--thumb) / 2); /* −10px, WebKit only */
+  --index-w: 2px;
+  --index-h: 7px;
+  --major-h: 8px;
+  --minor-h: 5px;
+  --switch-w: 36px;
+  --switch-h: 18px;
+  --plate-pad: 16px;
+  --reg-mark: 10px;
+  --reg-inset: 6px;
+
+  /* Stage. 58dvh, not 72vh: at 1024x800 a 72vh plate pushed the readouts —
+     the design's declared subject — exactly to the fold. dvh, not vh, so
+     mobile Safari's shrinking toolbar is accounted for. */
+  --viz-max-h: min(58dvh, 720px);
+
+  /* Radii — by role, not global */
+  --radius-0: 0;
+  --radius-thumb: 50%;
+
+  --seam: 1px;
+
+  /* Motion. Two durations; there is no page-load choreography. */
+  --dur-1: 80ms;               /* hover, press, checked, the transport rule */
+  --dur-2: 160ms;              /* switch travel, the ball settling on a tab */
+  --ease-snap: cubic-bezier(0.2, 0, 0, 1);
+  --ease-flip: steps(1, start); /* instant inversion for keys */
+
+  /* Focus */
+  --focus-ring: 2px solid var(--accent);
+  --focus-ring-on-accent: 2px solid var(--ink);
+  --focus-offset: 2px;
+
+  color-scheme: light;
+  accent-color: var(--accent);
+}
+
+@media (min-width: 90rem) {
+  :root {
+    --rail-w: var(--rail-w-wide);
+  }
+}
+
+@media (max-width: 37.4375rem) {
+  :root {
+    --gutter: 1rem;
+    --plate-pad: 8px;
+    --reg-mark: 8px;
+    --reg-inset: 4px;
+    --header-h: 2.5rem;
+    --key-h: var(--key-h-touch);
+    --key-s: var(--key-h-touch);   /* SC 2.5.8: stepper keys reach 44 px on touch */
+    --viz-max-h: min(70dvh, 720px);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   2  Base and typography
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scrollbar-color: var(--stroke) var(--surface);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--t-15);
+  font-weight: 400;
+  line-height: var(--lh-15);
+  font-stretch: var(--wdth-display);
+  /* AFTER the font longhands, never before: any `font:` shorthand above this
+     line would reset it. This is the declaration the caption, the ledger and
+     every prose numeral inherit. */
+  font-variant-numeric: var(--num);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* Variables and Greek letters read as mathematics, not as spec-sheet labels. */
+var,
+.var {
+  font-family: var(--font-body);
+  font-style: italic;
+  font-weight: 400;
+}
+
+button,
+input,
+select,
+textarea,
+output {
+  font: inherit;
+  font-variant-numeric: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+button {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+img,
+svg,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--surface-raised);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Every digit that carries a measurement lives in Martian Mono. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: var(--num);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration-thickness: 2px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   3  Page layout
+   The page is a vertical lattice: masthead / tabs / bench / footer with 1 px
+   seams between rows. Every row paints its own ground.
+   -------------------------------------------------------------------------- */
+
+.page {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  row-gap: var(--seam);
+  min-height: 100dvh;
+  max-width: var(--page-max);
+  margin-inline: auto;
+  background: var(--line);
+}
+
+/* The faceplate edge, visible only once the page is narrower than the viewport. */
+@media (min-width: 100rem) {
+  .page {
+    padding-inline: var(--seam);
+  }
+}
+
+/* A row never widens the page: the tab strip in particular has a min-content
+   width of every tab in a line, and a grid item defaults to that minimum. */
+.page > * {
+  min-width: 0;
+}
+
+/* --------------------------------------------------------------------------
+   4  Masthead
+   -------------------------------------------------------------------------- */
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  min-height: var(--header-h);
+  padding: 0 var(--gutter);
+  background: var(--surface);
+}
+
+.masthead__wordmark {
+  font-family: var(--font-display);
+  font-size: var(--t-18);
+  font-weight: 800;
+  line-height: var(--lh-18);
+  font-stretch: var(--wdth-wordmark);
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.masthead__end {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.masthead__credit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 500;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-ui);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.masthead__author,
+.masthead__repo {
+  color: var(--ink);
+}
+
+.masthead__affil {
+  color: var(--ink-muted);
+}
+
+/* The scheme toggle. Two states, aria-pressed, one glyph that fills as the
+   scheme darkens — the only way the dark block below is ever reached. It is a
+   .key.key--icon and takes all of its geometry from there; this rule exists so
+   the masthead can find it. */
+.theme-toggle {
+  flex: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .masthead__wordmark:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   5  Tab bar
+   A peg row plus a pinned index. Every tab carries a peg on its bottom edge;
+   the vermilion ball rests on the active one. The strip scrolls with a VISIBLE
+   scrollbar, and the index — prev key, jump select, next key — is present at
+   every width, so nothing is ever undiscoverable. At 25 tabs the strip is
+   ~3300 px wide and the index still lists every one of them.
+   -------------------------------------------------------------------------- */
+
+.tabs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--seam);
+  background: var(--line);
+}
+
+.tabs > * {
+  background: var(--surface-raised);
+}
+
+.tabs__strip {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  padding-inline: var(--gutter);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-padding-inline: var(--gutter);
+  scroll-behavior: smooth;
+  /* Revision 1 hid this. Ten tabs already overflow a 1280 px viewport by
+     234 px, so the scrollbar is the affordance, not clutter. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke) var(--surface-raised);
+}
+
+.tabs__group {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+}
+
+.tabs__group + .tabs__group {
+  margin-inline-start: var(--s-2);
+  padding-inline-start: var(--s-2);
+  border-inline-start: var(--seam) solid var(--line);
+}
+
+/* Decoration only: role="presentation" on the run, aria-hidden on this label.
+   A tablist may own nothing but tabs, so the group is carried into assistive
+   technology through each tab's aria-label instead. */
+.tabs__group-label {
+  align-self: center;
+  padding: 0 var(--s-2) 0 var(--s-1);
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 600;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-ui);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: var(--tab-h);
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-0);
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 600;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-snap);
+}
+
+.tab__label {
+  pointer-events: none;
+}
+
+/* The peg. */
+.tab::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--tick);
+  transition:
+    transform var(--dur-2) var(--ease-snap),
+    background-color var(--dur-2) var(--ease-snap);
+}
+
+/* The ball: the only vermilion in the bar. State is read from ARIA alone —
+   there is no .tab--active class for the shell to desynchronize. */
+.tab[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"]::after {
+  background: var(--accent);
+  transform: scale(2);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tab:hover {
+    color: var(--ink);
+  }
+
+  .tab:hover::after {
+    background: var(--ink);
+  }
+}
+
+/* The index: prev · jump · next. Pinned outside the scroller at every width. */
+.tabs__index {
+  display: grid;
+  grid-template-columns: auto minmax(7rem, 14rem) auto;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--tab-h);
+  padding: 0 var(--gutter) 0 var(--s-3);
+}
+
+/* .tabs__prev / .tabs__next are .key.key--icon and take their 40 px (44 px on
+   touch, via --key-h) from there. These rules only keep them from stretching. */
+.tabs__prev,
+.tabs__next {
+  flex: none;
+}
+
+.tabs__select {
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 600;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+}
+
+/* --------------------------------------------------------------------------
+   6  Bench, figure column, plate
+   -------------------------------------------------------------------------- */
+
+.bench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--rail-w);
+  gap: var(--seam);
+  background: var(--line);
+  min-width: 0;
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--seam);
+  min-width: 0;
+  background: var(--line);
+}
+
+.figure > * {
+  background: var(--surface-raised);
+}
+
+.figure > :last-child {
+  flex: 1 0 auto;
+}
+
+.figure__head {
+  padding: var(--s-4) var(--gutter);
+}
+
+.figure__title {
+  font-family: var(--font-display);
+  font-size: var(--title-size);
+  font-weight: 700;
+  line-height: 1.1;
+  font-stretch: var(--wdth-title);
+  letter-spacing: var(--tracking-display);
+  color: var(--ink);
+  max-width: 26ch;
+  text-wrap: balance;
+}
+
+.figure__blurb {
+  margin-top: var(--s-2);
+  max-width: var(--measure);
+  font-size: var(--t-15);
+  line-height: var(--lh-15);
+  color: var(--ink-muted);
+}
+
+/* On a wide bench the blurb sits on the title's baseline row, which buys the
+   readouts 24 px of fold. */
+@media (min-width: 80rem) {
+  .figure__head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: var(--s-6);
+  }
+
+  .figure__blurb {
+    margin-top: 0;
+  }
+}
+
+/* The plate: white bed, plotter margin, four L-shaped registration marks
+   painted as background gradients so they are never canvas pixels. The marks
+   are --grid-soft: they frame the experiment, they are not part of it. */
+.plate {
+  padding: var(--plate-pad);
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft)),
+    linear-gradient(var(--grid-soft), var(--grid-soft));
+  background-size:
+    var(--reg-mark) 1px,
+    1px var(--reg-mark),
+    var(--reg-mark) 1px,
+    1px var(--reg-mark),
+    var(--reg-mark) 1px,
+    1px var(--reg-mark),
+    var(--reg-mark) 1px,
+    1px var(--reg-mark);
+  background-position:
+    var(--reg-inset) var(--reg-inset),
+    var(--reg-inset) var(--reg-inset),
+    calc(100% - var(--reg-inset)) var(--reg-inset),
+    calc(100% - var(--reg-inset)) var(--reg-inset),
+    var(--reg-inset) calc(100% - var(--reg-inset)),
+    var(--reg-inset) calc(100% - var(--reg-inset)),
+    calc(100% - var(--reg-inset)) calc(100% - var(--reg-inset)),
+    calc(100% - var(--reg-inset)) calc(100% - var(--reg-inset));
+  background-repeat: no-repeat;
+}
+
+/* The canvas host. core/canvas.ts adds .stage and positions the two canvases;
+   this rule only sizes the box. The width clamp keeps the declared aspect when
+   the height cap bites, so nothing is letterboxed or stretched. Narrow screens
+   take --viz-aspect-narrow when a visualization declares one — the real fix for
+   a portrait experiment, which a taller height cap never delivered because the
+   width binds first. */
+.stage {
+  --stage-aspect: var(--viz-aspect);
+  position: relative;
+  width: min(100%, calc(var(--viz-max-h) * var(--stage-aspect)));
+  aspect-ratio: var(--stage-aspect);
+  min-height: 10rem;
+  margin-inline: auto;
+  background: var(--canvas);
+}
+
+.stage__bg,
+.stage__fg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   7  Caption
+   -------------------------------------------------------------------------- */
+
+.caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-3);
+  padding: var(--s-2) var(--gutter);
+  font-size: var(--t-13);
+  line-height: var(--lh-13);
+  color: var(--ink-muted);
+}
+
+.caption__figure {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.caption__text {
+  flex: 1 1 24ch;
+  min-width: 0;
+}
+
+.caption__copy {
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 600;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.caption__copy[data-state="done"] {
+  color: var(--agree);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .caption__copy:hover {
+    text-decoration-thickness: 2px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8  Readouts
+   One white hero window with a null meter, and a booktabs ledger for the rest.
+   -------------------------------------------------------------------------- */
+
+.readouts {
+  display: grid;
+  /* The hero is capped. max-content ignored the hero's own flex-wrap and let a
+     long label claim 444 px, crushing the ledger at 1024–1280 px. */
+  grid-template-columns: minmax(15rem, var(--hero-max)) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s-4) var(--s-6);
+  padding: var(--s-4) var(--gutter) var(--s-6);
+}
+
+/* Hero window: measured at 500, analytic at 300, same size, one baseline. */
+.hero {
+  display: grid;
+  align-content: center;
+  gap: var(--s-1);
+  min-height: var(--hero-h);
+  max-width: var(--hero-max);
+  padding: var(--s-3) var(--s-4);
+  background: var(--canvas);
+  border: 1px solid var(--window-stroke);
+  border-radius: var(--radius-0);
+  color: var(--window-ink);
+}
+
+.hero__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-family: var(--font-mono);
+  font-stretch: var(--wdth-mono);
+  font-variant-numeric: var(--num);
+}
+
+.hero__value {
+  font-weight: 500;
+  font-size: var(--t-hero);
+  line-height: var(--lh-hero);
+  white-space: nowrap;
+}
+
+.hero__target {
+  font-weight: 300;
+  font-size: var(--t-hero);
+  line-height: var(--lh-hero);
+  white-space: nowrap;
+}
+
+.hero__unit {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: var(--t-15);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--window-ink-muted);
+  margin-inline-start: 0.25em;
+}
+
+/* The null meter. A galvanometer, not a KPI delta chip: the needle rests dead
+   centre when the reading agrees with theory and walks out as it diverges.
+   The shell writes --err in [0, 1]; 0.5 is agreement. */
+.hero__band {
+  position: relative;
+  height: 9px;
+  max-width: 12rem;
+  margin-top: var(--s-1);
+}
+
+.hero__band::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 4px;
+  height: 1px;
+  background: var(--window-stroke);
+}
+
+.hero__band::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 9px;
+  background: var(--window-stroke);
+}
+
+.hero__needle {
+  position: absolute;
+  top: 0;
+  left: clamp(0%, calc(var(--err) * 100%), 100%);
+  width: 2px;
+  height: 9px;
+  margin-left: -1px;
+  background: var(--window-ink);
+  transition: left var(--dur-2) var(--ease-snap);
+}
+
+.hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3);
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 500;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-display);
+  font-variant-numeric: var(--num);
+  color: var(--window-ink-muted);
+}
+
+.hero__label {
+  color: var(--window-ink);
+}
+
+.hero__error {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  white-space: nowrap;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.hero[data-state="agree"] .hero__error {
+  color: var(--window-agree);
+  text-decoration: none;
+}
+
+.hero[data-state="agree"] .hero__needle {
+  background: var(--window-agree);
+}
+
+/* The ledger, in its own scroller: three nowrap ch-reserved columns will not
+   fit a 220 px track, and the page body must never scroll sideways. */
+.ledger-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke) var(--surface-raised);
+}
+
+.ledger {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+}
+
+.ledger th,
+.ledger td {
+  padding: 6px var(--s-2);
+  text-align: right;
+  vertical-align: baseline;
+}
+
+.ledger th:first-child,
+.ledger td:first-child {
+  text-align: left;
+  padding-inline-start: 0;
+}
+
+.ledger th:last-child,
+.ledger td:last-child {
+  padding-inline-end: 0;
+}
+
+.ledger__head {
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 600;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-display);
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--ink);
+  white-space: nowrap;
+}
+
+.readout__label {
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 500;
+  line-height: var(--lh-13);
+  color: var(--ink);
+}
+
+.readout__value {
+  font-family: var(--font-mono);
+  font-size: var(--t-15);
+  font-weight: 500;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-mono);
+  font-variant-numeric: var(--num);
+  color: var(--ink);
+  min-width: 10ch;
+  white-space: nowrap;
+}
+
+.readout__unit {
+  font-weight: 400;
+  font-size: var(--t-12);
+  color: var(--ink-muted);
+  margin-inline-start: 0.25em;
+}
+
+.readout__target {
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  font-weight: 400;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--ink-muted);
+  min-width: 8ch;
+  white-space: nowrap;
+}
+
+.readout__error {
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  font-weight: 400;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--ink);
+  min-width: 12ch;
+  white-space: nowrap;
+}
+
+.readout__rel {
+  color: var(--ink-muted);
+  margin-inline-start: 0.5em;
+}
+
+/* Deviation is the resting state and is marked, not coloured; agreement is
+   printed in the drafting pen. Three redundant channels: ink, the dotted
+   underline, and the hollow/filled square with visually-hidden text. */
+.readout__abs {
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.readout[data-state="agree"] .readout__error {
+  color: var(--agree);
+}
+
+.readout[data-state="agree"] .readout__abs {
+  text-decoration: none;
+}
+
+.readout--none .readout__target,
+.readout--none .readout__error {
+  color: var(--ink-muted);
+}
+
+.readout__state {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-start: var(--s-2);
+  vertical-align: 1px;
+  border: 1px solid var(--stroke);
+  background: transparent;
+}
+
+.readout[data-state="agree"] .readout__state {
+  background: var(--agree);
+  border-color: var(--agree);
+}
+
+/* --------------------------------------------------------------------------
+   9  Story mode — a program tape
+   -------------------------------------------------------------------------- */
+
+.story {
+  padding: var(--s-4) var(--gutter) var(--s-6);
+}
+
+.story__tape {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.story__steps {
+  display: flex;
+  gap: var(--s-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.story__step {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-0);
+  background: var(--surface-raised);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-13);
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: var(--num);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-flip),
+    color var(--dur-1) var(--ease-flip),
+    border-color var(--dur-1) var(--ease-flip);
+}
+
+.story__step--visited {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.story__step[aria-current="step"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.story__step[aria-current="step"]:focus-visible {
+  outline-color: var(--ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .story__step:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+}
+
+.story__label {
+  font-family: var(--font-display);
+  font-size: var(--t-17);
+  font-weight: 600;
+  line-height: var(--lh-17);
+  color: var(--ink);
+  margin-bottom: var(--s-1);
+  text-wrap: balance;
+}
+
+.story__caption {
+  max-width: var(--measure);
+  font-size: var(--t-15);
+  line-height: var(--lh-15);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------------------
+   10  Fact card — a data plate. The fact is the heading; no label above it.
+   -------------------------------------------------------------------------- */
+
+.fact {
+  padding: var(--s-6) var(--gutter);
+}
+
+.fact__text {
+  max-width: var(--measure);
+  font-family: var(--font-display);
+  font-size: var(--t-17);
+  font-weight: 600;
+  line-height: var(--lh-17);
+  color: var(--ink);
+  text-wrap: pretty;
+  margin-bottom: var(--s-2);
+}
+
+.fact__source {
+  max-width: var(--measure);
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  font-weight: 400;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--ink-muted);
+  margin-bottom: var(--s-3);
+  overflow-wrap: anywhere;
+}
+
+.fact__source a {
+  color: var(--ink);
+}
+
+.fact__next {
+  margin-top: var(--s-1);
+}
+
+/* --------------------------------------------------------------------------
+   11  Rail, transport, controls
+   -------------------------------------------------------------------------- */
+
+.rail {
+  background: var(--surface-raised);
+  min-width: 0;
+}
+
+.rail__panel {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--seam);
+  max-height: 100dvh;
+  overflow-y: auto;
+  background: var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke) var(--surface-raised);
+}
+
+.rail__panel > * {
+  background: var(--surface-raised);
+}
+
+/* Transport cluster. The 2 px rule on top goes vermilion while running — the
+   only running indicator, read from data-running alone. */
+.transport {
+  display: flex;
+  align-items: center;
+  padding: var(--s-3) var(--s-4);
+  border-top: 2px solid var(--ink);
+  background: var(--surface-raised);
+  transition: border-top-color var(--dur-1) var(--ease-snap);
+}
+
+.transport[data-running="true"] {
+  border-top-color: var(--accent);
+}
+
+.transport .key + .key {
+  margin-inline-start: -1px;
+}
+
+.transport .key:focus-visible,
+.transport .key:active {
+  position: relative;
+  z-index: 1;
+}
+
+.transport__play {
+  min-width: 5.5rem;
+}
+
+/* Generated controls: one lattice row per ParamSpec. */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--seam);
+  margin: 0;
+  padding: 0;
+  background: var(--line);
+}
+
+.control {
+  display: grid;
+  grid-template-columns: var(--label-col) minmax(0, 1fr);
+  grid-template-areas:
+    "label value"
+    "input input"
+    "scale scale"
+    "help  help";
+  align-items: center;
+  column-gap: var(--s-3);
+  min-height: var(--row-control);
+  padding: var(--s-2) var(--s-4);
+  background: var(--surface-raised);
+}
+
+.control__label {
+  grid-area: label;
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 500;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-display);
+  color: var(--ink);
+}
+
+.control__value {
+  grid-area: value;
+  justify-self: end;
+}
+
+.control__help {
+  grid-area: help;
+  margin-top: var(--s-1);
+  font-size: var(--t-12);
+  line-height: var(--lh-12);
+  color: var(--ink-muted);
+}
+
+.control__scale {
+  grid-area: scale;
+  display: flex;
+  justify-content: space-between;
+  height: 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--t-11);
+  font-weight: 500;
+  line-height: var(--lh-11);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--ink-muted);
+}
+
+/* Centre the end numerals under the end majors. */
+.control__min {
+  margin-inline-start: calc(var(--thumb) / 2);
+  transform: translateX(-50%);
+}
+
+.control__max {
+  margin-inline-end: calc(var(--thumb) / 2);
+  transform: translateX(50%);
+}
+
+/* "The window being adjusted takes an accent border" — targeted at the window
+   primitive, so it is true for all five control kinds, not just the fader. */
+.control:focus-within :is(.window, .select) {
+  border-color: var(--accent);
+}
+
+.control--range .range {
+  grid-area: input;
+}
+
+.control--int .stepper,
+.control--toggle .switch-row,
+.control--choice .select,
+.control--seed .seed {
+  grid-area: value;
+}
+
+.control--int .stepper,
+.control--toggle .switch-row {
+  justify-self: end;
+}
+
+/* Disabled rows must be targeted, not inherited: every child below sets its
+   own colour, so an inherited muted colour never reached any of them. */
+.control:has(:disabled) :is(.control__label, .control__help, .control__scale, .control__value) {
+  color: var(--ink-muted);
+}
+
+/* Seed row: window + Randomize key sharing a seam. */
+.seed {
+  display: grid;
+  grid-template-columns: minmax(8ch, 1fr) max-content;
+}
+
+/* Both halves grow to 44 px on touch, where --key-s does. */
+input.seed__input {
+  height: max(var(--input-h), var(--key-s));
+  text-align: right;
+  min-width: 0;
+}
+
+.key.seed__random {
+  height: max(var(--input-h), var(--key-s));
+  margin-inline-start: -1px;
+  padding: 0 var(--s-3);
+}
+
+/* --------------------------------------------------------------------------
+   12  Windows and keys
+   -------------------------------------------------------------------------- */
+
+/* A display window: white, 1 px stroke, zero radius, tabular mono digits.
+   Its border and hover use the --window-* tokens, which stay dark in the dark
+   scheme because the window itself stays white. */
+.window {
+  display: inline-block;
+  min-width: 7ch;
+  height: var(--window-h);
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--t-13);
+  font-weight: 500;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-mono);
+  font-variant-numeric: var(--num);
+  text-align: right;
+  color: var(--window-ink);
+  background: var(--canvas);
+  border: 1px solid var(--window-stroke);
+  border-radius: var(--radius-0);
+  white-space: nowrap;
+  transition: border-color var(--dur-1) var(--ease-snap);
+}
+
+.window__unit {
+  font-weight: 400;
+  color: var(--window-ink-muted);
+  margin-inline-start: 0.25em;
+}
+
+/* An interactive window is a target, so it takes the 44 px touch height where
+   --key-s rises; a read-only window stays 22 px because nothing hits it. */
+input.window,
+.window--input {
+  height: max(var(--input-h), var(--key-s));
+  padding: 0 var(--s-2);
+  width: 100%;
+  outline-offset: 2px;
+}
+
+input.window:disabled {
+  background: var(--surface);
+  color: var(--ink-muted);
+  border-color: var(--stroke);
+  cursor: not-allowed;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  input.window:hover:not(:disabled) {
+    border-color: var(--window-stroke-hover);
+  }
+}
+
+/* Keys. The secondary key inverts on press; the primary key is the only
+   vermilion key on the page. Nothing lifts, scales, or glows. */
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--key-h);
+  padding: 0 var(--s-3);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-0);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 600;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease-flip),
+    color var(--dur-1) var(--ease-flip),
+    border-color var(--dur-1) var(--ease-flip);
+}
+
+.key:active,
+.key[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--surface-raised);
+}
+
+.key:disabled,
+.key[aria-disabled="true"] {
+  color: var(--ink-muted);
+  border-color: var(--line);
+  background: var(--surface-raised);
+  cursor: not-allowed;
+}
+
+.key--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.key--primary:active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--surface-raised);
+}
+
+.key--primary:focus-visible {
+  outline: var(--focus-ring-on-accent);
+}
+
+.key--icon {
+  width: var(--key-h);
+  padding: 0;
+}
+
+.key--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--t-12);
+  line-height: var(--lh-12);
+}
+
+/* Solid glyphs. A 1.5 px round-capped stroke at 16 px is the Feather/Lucide
+   house spec; a bench instrument silk-screens filled shapes. */
+.key__glyph {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: currentColor;
+  stroke: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .key:hover:not(:disabled) {
+    background: var(--ink);
+    color: var(--surface-raised);
+    border-color: var(--ink);
+  }
+
+  .key--primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    color: var(--accent-ink);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   13  Native controls
+   -------------------------------------------------------------------------- */
+
+/* 13.1  Range — the graduated fader.
+   A 2 px track with no fill, a 22 px ring thumb with a 2 x 7 px vermilion index
+   line pointing up at an engraved scale. The scale is drawn with background
+   gradients sized to the thumb's REAL travel (100% − thumb): three 8 px majors
+   at 0 / 50 / 100 % and 5 px minors every 1/--ticks of travel. The shell writes
+   --ticks when (max − min) / step <= 20 so the ruler never lies about a coarse
+   slider; the registered initial value is 10.
+   Every engine pseudo-element gets its own rule — never comma-joined. */
+.range {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: var(--range-h);
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+  background-image:
+    linear-gradient(var(--tick), var(--tick)),
+    linear-gradient(var(--tick), var(--tick)),
+    linear-gradient(var(--tick), var(--tick)),
+    repeating-linear-gradient(
+      to right,
+      var(--tick) 0 1px,
+      transparent 1px calc((100% - 1px) / var(--ticks))
+    );
+  background-size:
+    1px var(--major-h),
+    1px var(--major-h),
+    1px var(--major-h),
+    calc(100% - var(--thumb) + 1px) var(--minor-h);
+  background-position:
+    calc(var(--thumb) / 2 - 0.5px) 0,
+    50% 0,
+    calc(100% - var(--thumb) / 2 + 0.5px) 0,
+    calc(var(--thumb) / 2 - 0.5px) calc(var(--major-h) - var(--minor-h));
+  background-repeat: no-repeat;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+/* A log fader has no meaningful midpoint: majors at the ends only, minors at
+   the decades (the shell sets --ticks to log10(max / min)). */
+.control--log .range {
+  background-image:
+    linear-gradient(var(--tick), var(--tick)),
+    linear-gradient(var(--tick), var(--tick)),
+    repeating-linear-gradient(
+      to right,
+      var(--tick) 0 1px,
+      transparent 1px calc((100% - 1px) / var(--ticks))
+    );
+  background-size:
+    1px var(--major-h),
+    1px var(--major-h),
+    calc(100% - var(--thumb) + 1px) var(--minor-h);
+  background-position:
+    calc(var(--thumb) / 2 - 0.5px) 0,
+    calc(100% - var(--thumb) / 2 + 0.5px) 0,
+    calc(var(--thumb) / 2 - 0.5px) calc(var(--major-h) - var(--minor-h));
+}
+
+.range:focus {
+  outline: none;
+}
+
+.range:active {
+  cursor: grabbing;
+}
+
+.range:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Track */
+.range::-webkit-slider-runnable-track {
+  height: var(--track-h);
+  background: var(--stroke);
+  border: 0;
+  border-radius: var(--radius-0);
+}
+
+.range::-moz-range-track {
+  height: var(--track-h);
+  background: var(--stroke);
+  border: 0;
+  border-radius: var(--radius-0);
+}
+
+.range::-moz-range-progress {
+  height: var(--track-h);
+  background: var(--stroke);
+}
+
+/* Thumb */
+.range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: var(--thumb-margin);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-thumb);
+  background:
+    linear-gradient(var(--accent), var(--accent)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--surface-raised);
+  cursor: grab;
+}
+
+.range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-thumb);
+  background:
+    linear-gradient(var(--accent), var(--accent)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--surface-raised);
+  cursor: grab;
+}
+
+/* Dragging: the thumb inverts, the index line goes white. */
+.range:active::-webkit-slider-thumb {
+  background:
+    linear-gradient(var(--canvas), var(--canvas)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--ink);
+  cursor: grabbing;
+}
+
+.range:active::-moz-range-thumb {
+  background:
+    linear-gradient(var(--canvas), var(--canvas)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--ink);
+  cursor: grabbing;
+}
+
+/* Keyboard focus: a round ring on the thumb, identical in both engines. */
+.range:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px var(--surface-raised),
+    0 0 0 4px var(--accent);
+}
+
+.range:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 2px var(--surface-raised),
+    0 0 0 4px var(--accent);
+}
+
+.range:disabled::-webkit-slider-thumb {
+  background:
+    linear-gradient(var(--ink-muted), var(--ink-muted)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--surface-raised);
+  cursor: not-allowed;
+}
+
+.range:disabled::-moz-range-thumb {
+  background:
+    linear-gradient(var(--ink-muted), var(--ink-muted)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
+    var(--surface-raised);
+  cursor: not-allowed;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .range:hover:not(:disabled)::-webkit-slider-thumb {
+    box-shadow: inset 0 0 0 1px var(--ink);
+  }
+
+  .range:hover:not(:disabled)::-moz-range-thumb {
+    box-shadow: inset 0 0 0 1px var(--ink);
+  }
+}
+
+/* 13.2  Stepper — integer parameters: [−] window [+] sharing seams. */
+.stepper {
+  display: inline-grid;
+  grid-template-columns: var(--key-s) minmax(6ch, 1fr) var(--key-s);
+  width: 100%;
+  max-width: 12rem;
+}
+
+.stepper__key {
+  width: var(--key-s);
+  height: max(var(--input-h), var(--key-s));
+  padding: 0;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-0);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--t-15);
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: var(--num);
+  cursor: pointer;
+}
+
+.stepper__key:active {
+  background: var(--ink);
+  color: var(--surface-raised);
+}
+
+.stepper__key:disabled {
+  color: var(--ink-muted);
+  border-color: var(--line);
+  background: var(--surface-raised);
+  cursor: not-allowed;
+}
+
+.stepper__input {
+  height: max(var(--input-h), var(--key-s));
+  width: 100%;
+  min-width: 0;
+  margin-inline: -1px;
+  padding: 0 var(--s-1);
+  text-align: center;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.stepper__input::-webkit-inner-spin-button,
+.stepper__input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stepper__input:focus-visible,
+.stepper__key:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .stepper__key:hover:not(:disabled) {
+    background: var(--ink);
+    color: var(--surface-raised);
+  }
+}
+
+/* 13.3  Select — a display window with an engraved index mark. The mark is a
+   solid 9 x 5 triangle, not the 1.5 px round-capped chevron every component
+   library ships. */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-width: 0;
+  height: max(var(--input-h), var(--key-s));
+  padding: 0 28px 0 10px;
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: 500;
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-display);
+  color: var(--window-ink);
+  background-color: var(--canvas);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 5'%3E%3Cpath fill='%23171B1D' d='M0 0h9L4.5 5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 9px 5px;
+  border: 1px solid var(--window-stroke);
+  border-radius: var(--radius-0);
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-snap);
+}
+
+.select:disabled {
+  background-color: var(--surface);
+  color: var(--ink-muted);
+  border-color: var(--stroke);
+  cursor: not-allowed;
+}
+
+.select option,
+.select optgroup {
+  font-family: var(--font-display);
+  color: var(--window-ink);
+  background: var(--canvas);
+}
+
+.select optgroup {
+  font-weight: 600;
+  font-style: normal;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .select:hover:not(:disabled) {
+    border-color: var(--window-stroke-hover);
+  }
+}
+
+/* Where the engine themes the picker, it stays a white display window in both
+   schemes, like every other window on the bench. */
+@supports (appearance: base-select) {
+  .select,
+  .select::picker(select) {
+    appearance: base-select;
+  }
+
+  .select::picker-icon {
+    display: none;
+  }
+
+  .select::picker(select) {
+    margin: 0;
+    padding: 0;
+    background: var(--canvas);
+    border: 1px solid var(--window-stroke);
+    border-radius: var(--radius-0);
+    box-shadow: none;
+  }
+
+  .select:open {
+    border-color: var(--window-stroke-hover);
+  }
+
+  .select optgroup {
+    padding: 6px 10px 2px;
+    font-size: var(--t-12);
+    font-weight: 600;
+    font-stretch: var(--wdth-ui);
+    color: var(--window-ink-muted);
+    background: var(--canvas);
+  }
+
+  .select option {
+    padding: 6px 10px;
+    font-size: var(--t-13);
+    font-weight: 500;
+    line-height: var(--lh-13);
+    font-stretch: var(--wdth-display);
+    color: var(--window-ink);
+    background: var(--canvas);
+  }
+
+  .select option:checked {
+    background: var(--window-ink);
+    color: var(--canvas);
+  }
+
+  .select option:active {
+    background: var(--wash-2);
+  }
+
+  .select option::checkmark {
+    display: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .select option:hover {
+      background: var(--wash-1);
+    }
+  }
+}
+
+/* 13.4  Switch — <input type="checkbox" role="switch"> inside a <label>, so the
+   whole 44 px row is the hit target, which the design has always claimed. */
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  min-height: var(--row-control);
+  cursor: pointer;
+}
+
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: var(--switch-w);
+  height: var(--switch-h);
+  margin: 0;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-0);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: background-color var(--dur-2) var(--ease-snap);
+}
+
+.switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--ink);
+  transition:
+    transform var(--dur-2) var(--ease-snap),
+    background-color var(--dur-2) var(--ease-snap);
+}
+
+.switch:checked {
+  background: var(--ink);
+}
+
+.switch:checked::before {
+  transform: translateX(18px);
+  background: var(--surface-raised);
+}
+
+.switch:disabled {
+  border-color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.switch:disabled::before {
+  background: var(--ink-muted);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .switch:hover:not(:disabled) {
+    box-shadow: inset 0 0 0 1px var(--ink);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   14  Footer and utilities
+   -------------------------------------------------------------------------- */
+
+.footer {
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-6) var(--gutter) var(--s-8);
+  background: var(--surface);
+}
+
+.sources {
+  max-width: 80ch;
+}
+
+.sources__title {
+  font-family: var(--font-display);
+  font-size: var(--t-17);
+  font-weight: 600;
+  line-height: var(--lh-17);
+  color: var(--ink);
+  margin-bottom: var(--s-2);
+}
+
+.sources__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--seam);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: 80ch;
+  background: var(--line);
+}
+
+.sources__item {
+  padding: 6px 0;
+  background: var(--surface);
+  font-size: var(--t-13);
+  line-height: var(--lh-13);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.sources__viz {
+  color: var(--ink-muted);
+  margin-inline-end: var(--s-2);
+}
+
+.footer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-6);
+  font-family: var(--font-mono);
+  font-size: var(--t-12);
+  font-weight: 500;
+  line-height: var(--lh-12);
+  font-stretch: var(--wdth-mono-dense);
+  font-variant-numeric: var(--num);
+  color: var(--ink-muted);
+}
+
+/* SC 2.1.4: the single-character shortcuts can be turned off, here. */
+.footer__shortcuts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-display);
+  font-size: var(--t-12);
+  font-weight: 500;
+  font-stretch: var(--wdth-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --------------------------------------------------------------------------
+   15  Responsive
+   >= 1100px: bench (figure + sticky rail) with hero and ledger side by side.
+   1024–1099: bench, readouts stacked.  600–1023: one column, the rail's
+   sections interleave with the figure's.  <= 599: handheld meter — index-only
+   navigation, fixed transport deck, almanac readouts.
+   -------------------------------------------------------------------------- */
+
+/* The squeeze band where a 22rem hero and a 360 px ledger fought over a 688 px
+   track. They stack instead. */
+@media (max-width: 68.75rem) {
+  .readouts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero {
+    max-width: none;
+  }
+}
+
+@media (max-width: 63.9375rem) {
+  .bench {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .figure,
+  .rail,
+  .rail__panel {
+    display: contents;
+  }
+
+  .bench > * {
+    background: var(--surface-raised);
+  }
+
+  .figure__head {
+    order: 1;
+  }
+
+  .plate {
+    order: 2;
+  }
+
+  .caption {
+    order: 3;
+  }
+
+  .transport {
+    order: 4;
+  }
+
+  .readouts {
+    order: 5;
+  }
+
+  .controls {
+    order: 6;
+  }
+
+  .story {
+    order: 7;
+  }
+
+  .fact {
+    order: 8;
+    flex: 1 0 auto;
+  }
+}
+
+@media (max-width: 37.4375rem) {
+  .masthead__credit {
+    display: none;
+  }
+
+  .tabs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tabs__strip {
+    display: none;
+  }
+
+  .tabs__index {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding-inline: var(--gutter);
+  }
+
+  /* Transport becomes a fixed bottom deck. */
+  body {
+    padding-bottom: calc(var(--deck-h) + var(--s-2));
+  }
+
+  .transport {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 20;
+    order: 0;
+    height: var(--deck-h);
+    padding: 0 var(--gutter);
+    justify-content: center;
+  }
+
+  .transport .key {
+    height: var(--key-h-touch);
+  }
+
+  .transport .key--icon {
+    width: var(--key-h-touch);
+  }
+
+  /* Almanac readouts: label … value, then analytic | error beneath. */
+  .ledger-wrap {
+    overflow-x: visible;
+  }
+
+  .ledger {
+    display: block;
+  }
+
+  .ledger thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+  }
+
+  .ledger tbody {
+    display: block;
+  }
+
+  .readout {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-areas:
+      "label  leader value"
+      "target target error";
+    align-items: baseline;
+    column-gap: var(--s-2);
+    padding: var(--s-2) 0;
+  }
+
+  .readout + .readout {
+    border-top: 1px solid var(--line);
+  }
+
+  .readout::before {
+    content: "";
+    grid-area: leader;
+    align-self: end;
+    height: 1px;
+    margin-bottom: 6px;
+    border-bottom: 1px dotted var(--tick);
+  }
+
+  .ledger .readout td {
+    display: block;
+    padding: 0;
+    min-width: 0;
+  }
+
+  .readout__label {
+    grid-area: label;
+  }
+
+  .readout__value {
+    grid-area: value;
+    text-align: right;
+  }
+
+  .readout__target {
+    grid-area: target;
+    text-align: left;
+  }
+
+  /* Keyed on the row's state, never on :empty — templated markup with a
+     newline inside the cell is not empty and the label leaked. */
+  .readout:not(.readout--none) .readout__target::before {
+    content: "analytic ";
+    font-family: var(--font-display);
+    font-stretch: var(--wdth-display);
+  }
+
+  /* The analytic value and the signed error ran together as one string.
+     A ruled edge says where the reference stops and the deviation starts. */
+  .readout__error {
+    grid-area: error;
+    text-align: right;
+    padding-inline-start: var(--s-3);
+    border-inline-start: 1px solid var(--line);
+  }
+
+  /* A readout with no analytic target is one line: label … value. The shell
+     emits no target and no error cell content at all. */
+  .readout--none .readout__target,
+  .readout--none .readout__error {
+    display: none;
+  }
+
+  .hero {
+    min-width: 0;
+  }
+
+  .hero__value,
+  .hero__target {
+    font-size: 2rem;
+    line-height: 2.25rem;
+  }
+
+  .story__caption,
+  .fact__text,
+  .figure__blurb {
+    max-width: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   16a  Reduced motion
+   Durations collapse to zero and the strip stops smooth-scrolling. The shell
+   does the rest: every visualization opens on the completed state of its
+   default configuration and waits for Play; Fast-forward renders batches
+   without intermediate frames.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+  }
+
+  .tabs__strip {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   16b  Forced colors (Windows High Contrast)
+   Every state here is carried by a background colour or a background image,
+   and forced-colors drops both. The chrome is remapped to system keywords in
+   one block, because it is all token-driven; the plate opts out entirely so
+   the bed stays white and the pens keep the ratios §3 certifies. The canvas
+   contract tokens are re-stated as literals on .plate — readCanvasTheme()
+   hands them to ctx.fillStyle, which cannot be given a system keyword.
+   -------------------------------------------------------------------------- */
+
+@media (forced-colors: active) {
+  :root {
+    --surface: Canvas;
+    --surface-raised: Canvas;
+    --line: CanvasText;
+    --stroke: CanvasText;
+    --tick: CanvasText;
+    --ink: CanvasText;
+    --ink-muted: CanvasText;
+    --accent: Highlight;
+    --accent-ink: Canvas;
+    --accent-hover: Highlight;
+    --agree: LinkText;
+    --window-ink: CanvasText;
+    --window-ink-muted: CanvasText;
+    --window-stroke: CanvasText;
+    --window-stroke-hover: CanvasText;
+    --window-agree: LinkText;
+  }
+
+  .window,
+  .select,
+  .hero {
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  /* Marks that must survive: their backgrounds are the whole message. */
+  .tab::after,
+  .switch,
+  .switch::before,
+  .readout__state,
+  .hero__needle,
+  .range {
+    forced-color-adjust: none;
+  }
+
+  .tab::after {
+    background: ButtonText;
+  }
+
+  .tab[aria-selected="true"]::after {
+    background: Highlight;
+  }
+
+  .range {
+    --tick: ButtonText;
+    --stroke: ButtonText;
+    --ink: ButtonText;
+    --surface-raised: ButtonFace;
+    --accent: Highlight;
+    --canvas: ButtonFace;
+  }
+
+  .switch {
+    background: ButtonFace;
+    border-color: ButtonText;
+  }
+
+  .switch::before {
+    background: ButtonText;
+  }
+
+  .switch:checked {
+    background: Highlight;
+  }
+
+  .switch:checked::before {
+    background: ButtonFace;
+  }
+
+  .key:active,
+  .key[aria-pressed="true"],
+  .story__step[aria-current="step"] {
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+
+  .transport[data-running="true"] {
+    border-top-color: Highlight;
+  }
+
+  .readout__state {
+    border-color: CanvasText;
+    background: Canvas;
+  }
+
+  .readout[data-state="agree"] .readout__state {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .plate {
+    forced-color-adjust: none;
+    --canvas: #ffffff;
+    --ink: #171b1d;
+    --ink-muted: #4e5750;
+    --grid: #23292b;
+    --grid-soft: #8a938f;
+    --data-1: #d53619;
+    --data-2: #24467a;
+    --data-3: #7f8985;
+    --data-3-fill: #d2d6d4;
+    --accent: #d53619;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   16c  Print
+   The page is a titled figure, a numbered caption, a table of measurements
+   against analytic targets, and a sources list. That is a handout. Everything
+   a reader cannot operate on paper comes off, and the permalink is printed.
+   -------------------------------------------------------------------------- */
+
+@media print {
+  :root {
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --line: #000000;
+    --viz-max-h: 4in;
+  }
+
+  .tabs,
+  .transport,
+  .controls,
+  .story__tape,
+  .caption__copy,
+  .fact__next,
+  .theme-toggle,
+  .footer__shortcuts,
+  .masthead__repo {
+    display: none !important;
+  }
+
+  .page,
+  .bench,
+  .figure,
+  .rail,
+  .rail__panel {
+    display: block;
+    background: #ffffff;
+    max-height: none;
+    overflow: visible;
+    position: static;
+  }
+
+  .plate,
+  .readouts,
+  .fact,
+  .sources {
+    break-inside: avoid;
+  }
+
+  .caption::after {
+    content: " " attr(data-permalink);
+    font-family: var(--font-mono);
+    font-size: var(--t-11);
+  }
+
+  .ledger-wrap {
+    overflow: visible;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   16d  Dark scheme — opt-in, through the masthead toggle, which writes
+   data-theme on <html> and persists it. Never selected from
+   prefers-color-scheme: the light faceplate is the identity, and a toggle is
+   the recourse. data-theme="light" is honoured too, so the toggle wins in both
+   directions.
+
+   The plate, the pens, the grid and every display window do not change, so no
+   canvas ratio needs revalidating. Only the chrome inverts — and the chrome
+   never paints --ink or --stroke onto a white window, which is what made the
+   revision-1 hover states vanish here.
+   -------------------------------------------------------------------------- */
+
+:root[data-theme="dark"] {
+  --surface: #191d1f;
+  --surface-raised: #282e30;
+  --line: #4a5255;
+  --stroke: #8a948f;
+  --tick: #6e7873;
+  --ink: #ecefed;
+  --ink-muted: #aeb7b2;
+  --accent: #e8502f;
+  --accent-hover: #f2694a;
+  --accent-ink: #171b1d;
+  --agree: #8fb4e8;
+  /* --wash-1 / --wash-2 are NOT re-declared: they tint the select picker, which
+     stays a white window in both schemes, so the dark-on-white values still
+     apply. --window-* and every canvas token are likewise unchanged. */
+  color-scheme: dark;
+}
