@@ -17,7 +17,7 @@ Status: `planned` until built, then `done`.
 The spine of the app. Every tab here is a different route to the same
 destination, and the fifth one shows the destination is not guaranteed.
 
-### 1. Galton Board — `galton` *(planned, Phase 1)*
+### 1. Galton Board — `galton` *(done)*
 
 The hero. A ball falls through a triangular lattice of pegs, going left or right
 at each one. Where it lands is the sum of `n` coin flips.
@@ -46,7 +46,7 @@ Sum `N` samples from a distribution you choose, plot the standardized sum, repea
 - **Why it sits next to the Galton board:** the board is this machine with a
   fixed Bernoulli source. This tab is the general statement.
 
-### 3. Buffon's Needle — `buffon` *(planned)*
+### 3. Buffon's Needle — `buffon` *(done)*
 
 Drop needles on ruled lines. Count crossings. Recover π.
 
@@ -65,7 +65,10 @@ Drop needles on ruled lines. Count crossings. Recover π.
 Throw darts at a square, count the ones inside the inscribed circle.
 
 - **Parameters:** dart count, show error curve, show `1/√n` reference, seed.
-- **Analytic target:** `π ≈ 4 · inside / total`; absolute error shrinks as `1/√n`.
+- **Analytic target:** `π ≈ 4 · inside / total`. The estimator's standard error is
+  `4·√(p(1−p)/n)` with `p = π/4`, which is **1.64218/√n** — verified: 0.0519 at
+  n = 1e3, 0.00519 at n = 1e5, 0.00164 at n = 1e6. The running error must sit
+  inside that envelope.
 - **The moment:** the error plot with the `1/√n` envelope drawn over it. Getting
   one more decimal place costs a hundred times the darts. This is the honest
   reason Monte Carlo integration is not how anyone computes π.
@@ -118,9 +121,10 @@ Two perpendicular oscillations.
 Iterate `xₙ₊₁ = r·xₙ·(1 − xₙ)` and plot the attractor against `r`.
 
 - **Parameters:** `r` range, iterations per column, transient skip, zoom region.
-- **Analytic target:** period doubling at `r ≈ 3, 3.449, 3.544, …`, accumulating
-  at `r ≈ 3.5699`. The ratio of successive interval lengths approaches the
-  **Feigenbaum constant δ ≈ 4.6692**.
+- **Analytic target:** period doubling at `r = 3`, `1+√6 = 3.449490`, `3.544090`,
+  `3.564407`, accumulating at `r∞ ≈ 3.5699456`. Successive interval ratios go
+  **4.7514 → 4.6563 → 4.6682** — verified — approaching the **Feigenbaum constant
+  δ = 4.669201609**. The readout shows the running ratio against it.
 - **Facts:** δ is universal. Every smooth map with a single quadratic maximum
   period-doubles at the same rate, which is why the constant shows up in dripping
   taps and convecting fluids.
@@ -152,6 +156,103 @@ Halve if even, `3n + 1` if odd. Draw the tree of paths back to 1.
   tree is beautiful.
 
 ---
+
+---
+
+## Group 5 — Iteration and Convergence
+
+The thesis of this group in one line: **run a simple rule an absurd number of
+times and an exact, beautiful object appears.** Each tab is a loop you can watch
+converge, and each converges to something with a closed-form description — a
+dimension, a constant, a rate.
+
+These are the tabs to reach for when someone asks what is fun about mathematics.
+
+### 11. Chaos Game — `chaos-game` *(planned)*
+
+Pick a random vertex of a polygon. Jump a fraction of the way toward it. Plot the
+point. Repeat a million times. A fractal appears — the same one every time,
+from any starting point.
+
+- **Parameters:** system (Sierpiński triangle / Sierpiński pentagon / square /
+  Barnsley fern / dragon curve / custom n-gon), vertices `n` (3–8), jump ratio
+  `r` (0.1–0.9), restriction rule (none / no repeat / not a neighbour / not the
+  opposite), points (1e3–2e6, log), points per frame, colour by vertex, seed.
+- **Analytic target:** for `n` similarities of ratio `r` satisfying the open set
+  condition, the attractor has Hausdorff dimension `log n / log(1/r)`. Verified:
+  `n = 3, r = 0.5` gives **1.5850** (Sierpiński triangle); `n = 5,
+  r = 1/(1+2cos(π/5)) = 0.381966` gives **1.6723**. A box-counting estimate over
+  the rendered points must converge to that value.
+- **The moment:** `n = 4, r = 0.5` fills the square solid — dimension exactly 2,
+  because the four half-squares tile it with no gaps. Then switch the restriction
+  rule to "no repeat" and a fractal snaps out of the noise. The restriction, not
+  the randomness, is what creates the structure.
+- **Why it earns its place:** it is the cleanest demonstration in mathematics
+  that a random process can have a completely deterministic outcome. Every point
+  after the first few lands *on* the attractor, and the picture is exact.
+- **Facts:** Barnsley named it in *Fractals Everywhere* (1988); the attractor is
+  independent of the starting point, which is why the first ~20 points are
+  discarded; the Barnsley fern uses four affine maps chosen with probabilities
+  0.01 / 0.85 / 0.07 / 0.07, and the 1% map draws the stem.
+
+### 12. Diffusion-Limited Aggregation — `dla` *(planned)*
+
+Release a particle far away. Let it random-walk until it touches the cluster.
+Freeze it. Repeat. Coral, frost, lightning and copper deposits all grow this way.
+
+- **Parameters:** particles (100–50 000, log), stickiness (0.05–1), launch radius
+  margin, lattice (off-lattice / square / hexagonal), colour by arrival order,
+  seed.
+- **Analytic target:** the cluster is a fractal of dimension **D ≈ 1.71** in two
+  dimensions (Witten and Sander, 1981). Measured by radius-of-gyration scaling
+  `N ~ R_g^D`, the running estimate of `D` must approach 1.71 — at N = 10 000,
+  expect `R_g` of order 218 particle radii.
+- **The moment:** lower the stickiness to 0.05. Walkers now bounce off the tips
+  many times before sticking, so they penetrate the fjords, and the cluster grows
+  visibly *denser*. Screening is the whole mechanism, and one slider exposes it.
+- **Facts:** the tips grow fastest because a wandering particle is overwhelmingly
+  likely to hit an exposed branch before it reaches an interior gap — the same
+  screening that makes lightning branch.
+
+### 13. Lorenz Attractor — `lorenz` *(planned)*
+
+Three simple differential equations, no randomness at all, and a trajectory that
+never repeats and never escapes.
+
+- **Parameters:** σ (default 10), ρ (default 28), β (default 8/3), integration
+  step, trail length, twin trajectory with an adjustable initial gap
+  (1e-12–1e-3), projection (xz / xy / yz / 3-D rotation), seed.
+- **Analytic target:** for the classic parameters the non-trivial fixed points sit
+  at `(±√(β(ρ−1)), ±√(β(ρ−1)), ρ−1)` = **(±8.4853, ±8.4853, 27)** — verified —
+  and the largest Lyapunov exponent is **≈ 0.9056**, so any initial separation
+  doubles every **0.765** time units. A 1e-9 gap therefore reaches order 1 in
+  about **22.9** time units, and the readout must show that.
+- **The moment:** the twin trajectory. Two paths starting 1e-9 apart trace each
+  other exactly, for a while, and then diverge completely — on screen, in about
+  twenty seconds. That is the butterfly effect as an event rather than a slogan.
+- **Facts:** Lorenz found it in 1963 after restarting a weather simulation from a
+  printout rounded to three decimals instead of six; ρ = 28 is chaotic but
+  ρ = 14 is not, and the slider crosses that boundary.
+
+---
+
+## Status
+
+| Tab | id | Group | State |
+|---|---|---|---|
+| Galton Board | `galton` | randomness | **done** |
+| Buffon's Needle | `buffon` | randomness | **done** |
+| Chaos Game | `chaos-game` | chaos | planned |
+| Monte Carlo π | `montecarlo-pi` | randomness | planned |
+| Diffusion-Limited Aggregation | `dla` | randomness | planned |
+| Logistic Bifurcation | `bifurcation` | chaos | planned |
+| Lorenz Attractor | `lorenz` | chaos | planned |
+| Central Limit Machine | `clt` | randomness | planned |
+| Random Walks | `random-walk` | randomness | planned |
+| Fourier Epicycles | `fourier` | waves | planned |
+| Lissajous Figures | `lissajous` | waves | planned |
+| Mandelbrot and Julia | `mandelbrot` | chaos | planned |
+| Collatz Orbits | `collatz` | numbers | planned |
 
 ## Backlog
 
