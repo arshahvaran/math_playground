@@ -32,7 +32,22 @@ export function createEngine(getInstance: () => VizInstance | null): EngineHandl
   let speed = 1;
   let running = false;
 
+  /**
+   * Queue the next frame, but only while the engine is still running.
+   *
+   * `step()` or `draw()` may stop the engine mid-frame — a run that has just
+   * finished, or a teardown triggered during a paint. `stop()` cancels the id it
+   * knows about, which is the frame already executing, so re-queueing
+   * unconditionally here would hand back a loop that nothing can stop and that
+   * keeps stepping a torn-down instance.
+   */
+  function schedule(): void {
+    if (running) raf = requestAnimationFrame(frame);
+  }
+
   function frame(now: number): void {
+    if (!running) return;
+
     const inst = getInstance();
     if (!inst) {
       // Nothing to drive yet: the shell may start the loop before the first
@@ -41,7 +56,7 @@ export function createEngine(getInstance: () => VizInstance | null): EngineHandl
       // true, and no later start() can revive it. Resetting `last` keeps the
       // idle time from being banked and replayed onto the instance that arrives.
       last = now;
-      raf = requestAnimationFrame(frame);
+      schedule();
       return;
     }
 
@@ -55,7 +70,7 @@ export function createEngine(getInstance: () => VizInstance | null): EngineHandl
     }
 
     inst.draw();
-    raf = requestAnimationFrame(frame);
+    schedule();
   }
 
   return {

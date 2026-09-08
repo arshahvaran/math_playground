@@ -125,8 +125,8 @@
   --agree: #24467a;
 
   /* Pens, in declared order for every tab; never re-rolled per visualization.
-     Read by core/canvas.ts (CANVAS_THEME_VARS). Must stay 6-digit hex
-     literals — visualizations parse them. */
+     Read by core/canvas.ts (CANVAS_THEME_VARS) and handed to ctx.fillStyle
+     verbatim — nothing parses them, so any CSS colour syntax is valid here. */
   --data-1: #d53619;           /* signal pen: particles, walkers, the live estimate */
   --data-2: #24467a;           /* drafting pen: fitted / theoretical overlay, thin marks */
   --data-3: #7f8985;           /* graphite pen: area SILHOUETTES at full opacity (3.61:1) */
@@ -2323,11 +2323,28 @@ input.window:disabled {
     --window-agree: LinkText;
   }
 
+  /* `background` is a SHORTHAND: it resets background-image to none, and on
+     .select that image is the only dropdown indicator there is, because
+     `appearance: none` already took the native one away. Longhand here, and the
+     select hands its indicator back to the engine below. */
   .window,
   .select,
   .hero {
-    background: Canvas;
+    background-color: Canvas;
     color: CanvasText;
+  }
+
+  /* The triangle is a data URI, so its fill is a literal — near-black on a black
+     Canvas in a dark high-contrast theme, and unreachable by a system keyword.
+     The honest answer at this width is the platform control: `appearance: auto`
+     restores the native select, whose arrow the engine paints in the user's own
+     colours. It also wins over the @supports (appearance: base-select) branch
+     above, which hides ::picker-icon and relies on the same image. */
+  .select {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none;
+    padding-inline-end: 10px;
   }
 
   /* Marks that must survive: their backgrounds are the whole message. */
@@ -2495,6 +2512,89 @@ input.window:disabled {
   --agree: #8fb4e8;
   /* --wash-1 / --wash-2 are NOT re-declared: they tint the select picker, which
      stays a white window in both schemes, so the dark-on-white values still
-     apply. --window-* and every canvas token are likewise unchanged. */
+     apply. Neither is --window-*, for the same reason.
+
+     Three tokens above ARE canvas-contract tokens — --ink, --ink-muted and
+     --accent are all entries in CANVAS_THEME_VARS — so the plate restates them
+     below. Inverting the chrome must not reach the bed. */
   color-scheme: dark;
+}
+
+/* The plate does not invert (§10), so the canvas contract must not either.
+   readCanvasTheme() reads these off .plate and hands them to ctx.fillStyle: with
+   the chrome's dark --ink inherited, Buffon's live π window painted #ecefed on a
+   #ffffff bed — 1.16:1, invisible — and Galton's bin numerals dropped from
+   5.11:1 to 2.06:1. Restated here exactly as the forced-colors block restates
+   them, and for the same reason: the pens are certified against a white plate in
+   both schemes, so no ratio in §3 needs revalidating and nothing has to re-read
+   the theme on the toggle. */
+:root[data-theme="dark"] .plate {
+  --ink: #171b1d;
+  --ink-muted: #4e5750;
+  --accent: #d53619;
+}
+
+/* --------------------------------------------------------------------------
+   17  Component layer additions
+   Appended, not woven in: the two transport-adjacent elements §5 describes in
+   prose rather than in its markup blocks — the int row's fader and the speed
+   picker — and the end-of-range and no-reading states, and nothing above
+   changes.
+   -------------------------------------------------------------------------- */
+
+/* An int row carries both halves of §5's stepper story: the graduated fader —
+   §1, "every quantity a person can turn is a fader with an engraved scale" — in
+   the input row, and the stepper as its numeric mirror in the value column,
+   which already has its grid-area. This gives the fader the other one. */
+.control--int .range {
+  grid-area: input;
+}
+
+/* The transport's speed picker. `.select` is a full-width form control; in the
+   transport's flex row it has to be intrinsic, and it sits apart from the key
+   cluster rather than sharing its seams — it selects a rate, it does not
+   transport anything. */
+.transport__speed {
+  flex: none;
+  width: auto;
+  min-width: 5rem;
+  height: var(--key-h);
+  margin-inline-start: auto;
+}
+
+/* On the fixed deck the cluster is centred, and an auto margin would shove the
+   keys off to the left to make room for it. */
+@media (max-width: 37.4375rem) {
+  .transport__speed {
+    margin-inline-start: var(--s-3);
+  }
+}
+
+/* A key at the end of its range — the tab index's Previous / Next, the story
+   tape's Prev / Next — is inoperable, not removed from the tab order. `disabled`
+   on the key that just fired the move drops focus to <body> under the reader's
+   own keypress and the next Tab restarts from the top of the document, which
+   below 600 px means past the whole tab index. `.key[aria-disabled="true"]`
+   already carries the resting look; these two rules stop the hover and pressed
+   inversions from claiming the key still does something. */
+@media (hover: hover) and (pointer: fine) {
+  .key[aria-disabled="true"]:hover {
+    background: var(--surface-raised);
+    color: var(--ink-muted);
+    border-color: var(--line);
+  }
+}
+
+.key[aria-disabled="true"]:active {
+  background: var(--surface-raised);
+  color: var(--ink-muted);
+  border-color: var(--line);
+}
+
+/* No reading yet — a mean over zero samples. The needle is hidden rather than
+   parked, because dead centre on the null meter is the one position that means
+   "the reading agrees with theory". The UA's [hidden] rule loses to
+   .hero__needle's own `position`, so it is restated here. */
+.hero__needle[hidden] {
+  display: none;
 }

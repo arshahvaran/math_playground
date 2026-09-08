@@ -5,6 +5,7 @@ import {
   DEFAULT_CANVAS_THEME,
   computeBackingSize,
 } from '../src/core/canvas';
+import { ensureCanvasFont, strokeWithHalo } from '../src/core/paint';
 
 /** WCAG 2.x relative luminance of a `#rrggbb` colour, in [0, 1]. */
 function luminance(hex: string): number {
@@ -85,9 +86,11 @@ const COLOR_FIELDS = [
   'ink',
   'inkMuted',
   'grid',
+  'gridSoft',
   'data1',
   'data2',
   'data3',
+  'data3Fill',
   'accent',
 ] as const satisfies readonly (keyof CanvasTheme)[];
 
@@ -127,7 +130,28 @@ describe('DEFAULT_CANVAS_THEME', () => {
   it('uses three distinct data colours, none of them a neutral', () => {
     const data = [t.data1, t.data2, t.data3];
     expect(new Set(data).size).toBe(3);
-    for (const c of data) expect([t.canvas, t.ink, t.inkMuted, t.grid]).not.toContain(c);
+    const neutrals = [t.canvas, t.ink, t.inkMuted, t.grid, t.gridSoft];
+    for (const c of data) expect(neutrals).not.toContain(c);
+  });
+
+  it('keeps container structure at the 3:1 non-text minimum, and distinct from the experiment’s own', () => {
+    // Bin dividers, axes, floors and frames are recessive but still graphical
+    // objects: a reader has to be able to see where the bins are.
+    expect(contrast(t.gridSoft, t.canvas)).toBeGreaterThanOrEqual(3);
+    expect(t.gridSoft).not.toBe(t.grid);
+  });
+
+  it('makes the area a wash a particle can sit on plus a silhouette that carries the shape', () => {
+    // The two-mark rule. No single colour is both 3:1 on the plate and 3:1
+    // under the particles, so `data3Fill` is deliberately exempt from the 3:1
+    // loop above — it is never the sole encoding — while the dots that land on
+    // it and the silhouette that outlines it both have to clear the bar.
+    expect(contrast(t.data1, t.data3Fill)).toBeGreaterThanOrEqual(3);
+    expect(contrast(t.data3, t.canvas)).toBeGreaterThanOrEqual(3);
+    // A wash sits between the plate and its own pen: lighter than the
+    // silhouette, darker than the ground it is painted on.
+    expect(luminance(t.canvas)).toBeGreaterThan(luminance(t.data3Fill));
+    expect(luminance(t.data3Fill)).toBeGreaterThan(luminance(t.data3));
   });
 });
 
@@ -150,13 +174,136 @@ describe('CANVAS_THEME_VARS', () => {
       ink: '--ink',
       inkMuted: '--ink-muted',
       grid: '--grid',
+      gridSoft: '--grid-soft',
       data1: '--data-1',
       data2: '--data-2',
       data3: '--data-3',
+      data3Fill: '--data-3-fill',
       accent: '--accent',
       labelFont: '--canvas-label-font',
       lineWidth: '--canvas-line-width',
       particleRadius: '--canvas-particle-radius',
     });
+  });
+});
+
+/**
+ * A context that records what each `stroke()` saw. `strokeWithHalo` is one of
+ * the few pieces of canvas code that is worth a unit test: it is not "draw the
+ * thing twice", it is "draw the thing twice *in this order, at these widths*",
+ * and getting the order backwards paints the mark and then buries it.
+ */
+interface Recorder {
+  strokeStyle: string;
+  lineWidth: number;
+  /** Positive while inside a save()/restore() pair; must end at zero. */
+  depth: number;
+  strokes: { path: Path2D | undefined; pen: string; width: number }[];
+  save(): void;
+  restore(): void;
+  stroke(path?: Path2D): void;
+}
+
+function recorder(): Recorder {
+  const r: Recorder = {
+    strokeStyle: '',
+    lineWidth: 0,
+    depth: 0,
+    strokes: [],
+    save() {
+      r.depth++;
+    },
+    restore() {
+      r.depth--;
+    },
+    stroke(path?: Path2D) {
+      r.strokes.push({ path, pen: r.strokeStyle, width: r.lineWidth });
+    },
+  };
+  return r;
+}
+
+function asContext(r: Recorder): CanvasRenderingContext2D {
+  return r as unknown as CanvasRenderingContext2D;
+}
+
+describe('strokeWithHalo', () => {
+  const PLATE = '#ffffff';
+  const PEN = '#24467a';
+
+  it('lays the plate colour down first, wider, then the pen on top', () => {
+    const r = recorder();
+    strokeWithHalo(asContext(r), undefined, PEN, PLATE, 2);
+    expect(r.strokes).toEqual([
+      { path: undefined, pen: PLATE, width: 6 },
+      { path: undefined, pen: PEN, width: 2 },
+    ]);
+  });
+
+  it('takes the narrower halo a thin mark asks for', () => {
+    const r = recorder();
+    strokeWithHalo(asContext(r), undefined, PEN, PLATE, 2, 2);
+    expect(r.strokes.map((s) => s.width)).toEqual([4, 2]);
+  });
+
+  it('strokes one and the same path twice, so the halo cannot drift off register', () => {
+    const r = recorder();
+    // Path2D is a DOM class and does not exist here; identity is what matters.
+    const path = { id: 'curve' } as unknown as Path2D;
+    strokeWithHalo(asContext(r), path, PEN, PLATE, 2);
+    expect(r.strokes).toHaveLength(2);
+    expect(r.strokes[0]?.path).toBe(path);
+    expect(r.strokes[1]?.path).toBe(path);
+  });
+
+  it('leaves the context state as it found it', () => {
+    const r = recorder();
+    r.strokeStyle = '#d53619';
+    r.lineWidth = 1;
+    strokeWithHalo(asContext(r), undefined, PEN, PLATE, 2);
+    // save()/restore() balance is what puts the caller's pen back; a leaked
+    // strokeStyle would silently repaint whatever the caller drew next.
+    expect(r.depth).toBe(0);
+  });
+});
+
+describe('ensureCanvasFont', () => {
+  const g = globalThis as unknown as { document?: unknown };
+
+  it('resolves where the font API is absent, rather than blocking the first paint', async () => {
+    await expect(ensureCanvasFont('500 11px "Martian Mono"')).resolves.toBeUndefined();
+  });
+
+  it('asks for exactly the shorthand the canvas will use', async () => {
+    const asked: string[] = [];
+    g.document = {
+      fonts: {
+        load(font: string) {
+          asked.push(font);
+          return Promise.resolve([]);
+        },
+      },
+    };
+    try {
+      await ensureCanvasFont('500 11px "Martian Mono", monospace');
+    } finally {
+      delete g.document;
+    }
+    // Verbatim: `ctx.font` and `fonts.load()` parse the same shorthand, and a
+    // face requested at the wrong weight is a face that never arrives.
+    expect(asked).toEqual(['500 11px "Martian Mono", monospace']);
+  });
+
+  it('resolves when the face never loads: a fallback family is still legible', async () => {
+    g.document = {
+      fonts: {
+        load: () => Promise.reject(new SyntaxError('unparseable font shorthand')),
+      },
+    };
+    try {
+      await expect(ensureCanvasFont('nonsense')).resolves.toBeUndefined();
+    } finally {
+      delete g.document;
+    }
   });
 });

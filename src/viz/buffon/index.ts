@@ -37,7 +37,10 @@ const params: readonly ParamSpec[] = [
     max: 1,
     step: 0.01,
     default: 0.8,
-    help: 'Needle length as a fraction of the line spacing. The formula 2L/(πd) needs L ≤ d.',
+    help: [
+      'Needle length as a fraction of the line spacing. The formula 2', { v: 'L' }, '/(', { v: 'π' }, { v: 'd' }, ') ',
+      'needs ', { v: 'L' }, ' ≤ ', { v: 'd' }, '.',
+    ],
   },
   {
     kind: 'int',
@@ -47,7 +50,7 @@ const params: readonly ParamSpec[] = [
     max: 160,
     default: 64,
     unit: 'px',
-    help: 'Distance d between the ruled lines.',
+    help: ['Distance ', { v: 'd' }, ' between the ruled lines.'],
   },
   {
     kind: 'range',
@@ -77,7 +80,9 @@ const params: readonly ParamSpec[] = [
     key: 'showAngle',
     label: 'Fade by angle',
     default: false,
-    help: 'Crossing depends only on |sin θ|: needles fade toward horizontal and stay solid near vertical.',
+    help: [
+      'Crossing depends only on |sin ', { v: 'θ' }, '|: needles fade toward horizontal and stay solid near vertical.',
+    ],
   },
   {
     kind: 'seed',
@@ -92,7 +97,10 @@ const presets: readonly Preset[] = [
   {
     id: 'slow-motion',
     label: 'Slow motion',
-    caption: 'Two needles a second: each one either crosses a line or misses, and the π estimate lurches after every drop.',
+    caption: [
+      'Two needles a second: each one either crosses a line or misses, and the ', { v: 'π' },
+      ' estimate lurches after every drop.',
+    ],
     values: { dropRate: 2, maxDrops: 200 },
   },
   {
@@ -104,13 +112,19 @@ const presets: readonly Preset[] = [
   {
     id: 'full-length',
     label: 'Full length',
-    caption: 'L = d gives the largest crossing probability, 2/π, and the most information per drop — the fastest route to π.',
+    caption: [
+      { v: 'L' }, ' = ', { v: 'd' }, ' gives the largest crossing probability, 2/', { v: 'π' },
+      ', and the most information per drop — the fastest route to ', { v: 'π' }, '.',
+    ],
     values: { ratio: 1 },
   },
   {
     id: 'two-hundred-thousand',
     label: 'Two hundred thousand',
-    caption: 'Even 200,000 drops pin π to about two decimals: the error shrinks as 1/√N, and that slowness is the lesson.',
+    caption: [
+      'Even 200,000 drops pin ', { v: 'π' }, ' to about two decimals: the error shrinks as 1/√', { v: 'N' },
+      ', and that slowness is the lesson.',
+    ],
     values: { dropRate: 2000, maxDrops: 200_000 },
   },
 ];
@@ -127,10 +141,12 @@ const facts: readonly Fact[] = [
     },
   },
   {
-    text:
-      'In 1901 Mario Lazzarini reported 3,408 throws giving π ≈ 3.1415929 — exactly 355/113, correct to six decimals. ' +
-      'With L/d = 5/6 the estimate hits 355/113 whenever the throw count is a multiple of 213 and the crossings cooperate; ' +
-      '3,408 = 16 × 213, and stopping there was almost certainly a choice made after the fact.',
+    text: [
+      'In 1901 Mario Lazzarini reported 3,408 throws giving ', { v: 'π' },
+      ' ≈ 3.1415929 — exactly 355/113, correct to six decimals. With ', { v: 'L' }, '/', { v: 'd' },
+      ' = 5/6 the estimate hits 355/113 whenever the throw count is a multiple of 213 and the crossings ',
+      'cooperate; 3,408 = 16 × 213, and stopping there was almost certainly a choice made after the fact.',
+    ],
     source: {
       label: "Badger, 'Lazzarini's Lucky Approximation of π', Mathematics Magazine 67(2), 1994; Gridgeman, Scripta Mathematica 25, 1960",
       url: 'https://doi.org/10.2307/2690682',
@@ -211,11 +227,14 @@ function create(ctx: VizContext): VizInstance {
     return [
       { key: 'drops', label: 'Drops', value: drops, digits: 6 },
       { key: 'crossings', label: 'Crossings', value: crossings, digits: 6 },
+      // §5: the hero prints "analytic" and the closed form behind the target.
+      // L is the needle length, d the line spacing.
       {
         key: 'fraction',
         label: 'Crossing fraction',
         value: crossings / drops,
         target: crossingProbability(length, spacing),
+        formula: ['2', { v: 'L' }, '/(', { v: 'π' }, { v: 'd' }, ')'],
       },
       {
         key: 'pi',
@@ -255,6 +274,9 @@ function create(ctx: VizContext): VizInstance {
       const bg = ctx.layers.background;
       const { width, height, theme } = ctx;
       bg.clearRect(0, 0, width, height);
+      // The ruled floorboards are the experiment, not the frame around it: the
+      // crossings being counted are crossings of these lines, so they keep the
+      // apparatus pen. Nothing else on this plate does.
       bg.strokeStyle = theme.grid;
       bg.lineWidth = theme.lineWidth;
       // An odd-width line centred on a half-pixel covers whole device pixels at
@@ -290,7 +312,10 @@ function create(ctx: VizContext): VizInstance {
         path.lineTo(x + half * cos, cy + half * sin);
       });
 
-      fg.lineWidth = 1.5 * theme.lineWidth;
+      // 2 px, not a hairline: the signal pen is 4.80:1 on the plate as a solid
+      // 2 px mark and 2.20:1 once anti-aliasing smears it across a thinner one,
+      // which is why nothing in this system draws a 1 px line in it.
+      fg.lineWidth = 2 * theme.lineWidth;
       fg.lineCap = 'butt';
       for (let b = 0; b < 2 * ALPHA_LEVELS; b++) {
         const path = paths[b];
@@ -302,8 +327,12 @@ function create(ctx: VizContext): VizInstance {
       }
       fg.globalAlpha = 1;
 
-      // Live π in the top-right corner, on a plate of the canvas colour so it
-      // stays legible over a dense field. Published below via emit() as well.
+      // Live π in the top-right corner as a display window: an opaque plate of
+      // the canvas colour with a 1 px frame, right-aligned mono, ink text. The
+      // plate is opaque because 20,000 needles read straight through a
+      // translucent one, and the frame takes the container pen — a window holds
+      // the experiment's number, it is not part of the experiment. Published
+      // below through emit() as well; the canvas itself is aria-hidden.
       const pi = estimatePi(field.drops, field.crossings, length, spacing);
       const label = `π ≈ ${Number.isNaN(pi) ? '—' : pi.toFixed(4)}`;
       const margin = 10;
@@ -313,10 +342,17 @@ function create(ctx: VizContext): VizInstance {
       fg.textBaseline = 'top';
       const textW = fg.measureText(label).width;
       const textH = fontPx(theme.labelFont);
-      fg.globalAlpha = 0.85;
+      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
+      const plateX = Math.round(width - margin - textW - pad);
+      const plateY = Math.round(margin - pad);
+      const plateW = Math.round(textW + 2 * pad);
+      const plateH = Math.round(textH + 2 * pad);
       fg.fillStyle = theme.canvas;
-      fg.fillRect(width - margin - textW - pad, margin - pad, textW + 2 * pad, textH + 2 * pad);
-      fg.globalAlpha = 1;
+      fg.fillRect(plateX, plateY, plateW, plateH);
+      fg.strokeStyle = theme.gridSoft;
+      fg.lineWidth = theme.lineWidth;
+      // Inset by half a line width so the frame lands inside the plate it draws.
+      fg.strokeRect(plateX + snap, plateY + snap, plateW - 2 * snap, plateH - 2 * snap);
       fg.fillStyle = theme.ink;
       fg.fillText(label, width - margin, margin);
 
@@ -362,7 +398,12 @@ export const buffon: Viz = {
   id: 'buffon',
   title: "Buffon's Needle",
   group: 'randomness',
-  blurb: 'Drops needles on ruled lines and recovers π from the fraction that cross one.',
+  blurb: ['Drops needles on ruled lines and recovers ', { v: 'π' }, ' from the fraction that cross one.'],
+  // Landscape, like the floor it models: whole strips are what the estimator
+  // samples, and the field is centred on them. Square on a phone, where a 1.6
+  // bed fits three floorboards and a square fits five.
+  aspect: 1.6,
+  aspectNarrow: 1,
   params,
   presets,
   facts,

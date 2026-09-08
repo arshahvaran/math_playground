@@ -241,9 +241,11 @@ export const CANVAS_THEME_VARS = {
   ink: '--ink',
   inkMuted: '--ink-muted',
   grid: '--grid',
+  gridSoft: '--grid-soft',
   data1: '--data-1',
   data2: '--data-2',
   data3: '--data-3',
+  data3Fill: '--data-3-fill',
   accent: '--accent',
   labelFont: '--canvas-label-font',
   lineWidth: '--canvas-line-width',
@@ -255,15 +257,23 @@ export const CANVAS_THEME_VARS = {
  * triple from the Okabe–Ito palette. Used by the tests and by any host with no
  * theme applied. This is the one place outside theme.css where a colour literal
  * may live; everything under src/viz/ reads colours from `VizContext.theme`.
+ *
+ * `gridSoft` and `data3Fill` are the two greys the design system fixes by role
+ * rather than by palette, so they are the shipped values: a container line that
+ * still clears 3:1 on white, and a wash light enough that a particle drawn on
+ * top of it clears 3:1 in turn. The wash itself is deliberately *below* 3:1
+ * against the plate — that is what the silhouette in `data3` is for.
  */
 export const DEFAULT_CANVAS_THEME: Readonly<CanvasTheme> = Object.freeze({
   canvas: '#ffffff',
   ink: '#1a1a1a',
   inkMuted: '#6b6b6b',
   grid: '#bdbdbd',
+  gridSoft: '#8a938f',
   data1: '#0072b2',
   data2: '#d55e00',
   data3: '#009e73',
+  data3Fill: '#d2d6d4',
   accent: '#8e44ad',
   labelFont: '12px system-ui, sans-serif',
   lineWidth: 1,
@@ -299,9 +309,11 @@ export function readCanvasTheme(el: Element): CanvasTheme {
     ink: text('ink'),
     inkMuted: text('inkMuted'),
     grid: text('grid'),
+    gridSoft: text('gridSoft'),
     data1: text('data1'),
     data2: text('data2'),
     data3: text('data3'),
+    data3Fill: text('data3Fill'),
     accent: text('accent'),
     labelFont: text('labelFont'),
     lineWidth: px('lineWidth'),

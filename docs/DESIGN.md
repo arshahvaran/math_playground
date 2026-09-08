@@ -181,8 +181,12 @@ Measure ≤ 62ch.
 ## 3. Color
 
 All neutrals carry a green-blue bias strong enough to see (surface
-`hsl(146 12% 85%)`, ink `hsl(197 12% 10%)`). Canvas-contract tokens are 6-digit
-hex literals — visualizations parse them.
+`hsl(146 12% 85%)`, ink `hsl(197 12% 10%)`). Canvas-contract tokens are written
+as 6-digit hex below for legibility in this table, but that is a convention and
+not a constraint: `readCanvasTheme()` passes the value through verbatim and
+nothing parses it, so any CSS colour syntax — `oklch()` included — is valid.
+(Revision 1 required hex because `withAlpha()` parsed it; that helper was
+deleted, and with it the requirement.)
 
 ### Tokens
 
@@ -306,6 +310,23 @@ never selected from `prefers-color-scheme` — the light faceplate is the identi
 Revision 1 shipped forty lines of dark tokens with nothing anywhere that could
 set the attribute; a reader in an OS dark mode had no recourse at all.
 
+**Three of the inverted tokens are canvas-contract tokens, so the plate restates
+them.** `--ink`, `--ink-muted` and `--accent` are all entries in
+`CANVAS_THEME_VARS`, and `readCanvasTheme()` reads them **off `.plate`** (§7) —
+so with the chrome's dark values inherited, Buffon's live π window painted
+`#ECEFED` on a `#FFFFFF` bed (**1.16:1**, invisible, and precisely the failure
+the `--window-*` tokens were invented to prevent) and Galton's bin numerals fell
+from 5.11:1 to 2.06:1. The dark block is therefore followed by
+
+```css
+:root[data-theme="dark"] .plate { --ink: #171b1d; --ink-muted: #4e5750; --accent: #d53619; }
+```
+
+which mirrors what the `forced-colors` block already does, for the same reason.
+The fix belongs in CSS and not in a re-read on the toggle: `readCanvasTheme()`
+runs once per route by design, and keeping the contract scheme-independent is
+what makes that safe.
+
 | Dark token | Hex | Check |
 |---|---|---|
 | `--surface` / `--surface-raised` | `#191D1F` / `#282E30` | ground step 1.23:1 |
@@ -338,7 +359,7 @@ set the attribute; a reader in an OS dark mode had no recourse at all.
       section.fact            fact as heading + source + Another fact
     div.rail                  --surface-raised column
       div.rail__panel         sticky, max-height 100dvh, own scroll, 1 px lattice
-        div.transport         Play/Pause · Step · Fast-forward · Reset, 2 px ink rule on top
+        div.transport         Play/Pause · Step · Fast-forward · Reset · speed, 2 px ink rule on top
         form.controls         one .control row per ParamSpec, seed last
   footer.footer               Sources list + meta + shortcuts switch, on --surface
 ```
@@ -453,6 +474,16 @@ whose options are every visualization in registry order, and a Next key. It is
 outside the tablist, so it does not violate tablist ownership, and it is the
 complete index at 10 tabs or 25.
 
+**At the ends of the run those two keys are `aria-disabled`, never `disabled`.**
+Below 600 px the peg strip is `display: none` and they are the only tab
+navigation there is, so a keyboard reader walks to the last tab with Next and
+presses Enter — and a `disabled` button is removed from focus, under the reader's
+own keypress. `document.activeElement` falls back to `<body>` and the next Tab
+restarts at the wordmark, past the entire index. `aria-disabled` announces the
+same state, keeps the key focusable, and takes the same
+`.key[aria-disabled="true"]` styling; the shell's click handler refuses the
+activation. The same rule governs the story tape's Prev / Next.
+
 Tabs are 44 px `<button role="tab">`s, `padding 0 14px`, Archivo 600 / 13 px at
 wdth 88, sentence case. Each `.tabs__group` is a flex run preceded by a 1 px
 vertical seam and a 12 px Archivo 600 group label in the same row.
@@ -518,7 +549,8 @@ and render a 1 × 1 canvas with no error anywhere.
 
 ```html
 <div class="tabs__index">
-  <button class="key key--icon tabs__prev" type="button" aria-label="Previous visualization">
+  <button class="key key--icon tabs__prev" type="button" aria-label="Previous visualization"
+          aria-disabled="true">
     <svg class="key__glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2 4.5 8l6 6z"/></svg>
   </button>
   <label class="visually-hidden" for="viz-index">Jump to visualization</label>
@@ -689,11 +721,32 @@ where `--key-s` rises); last row of the rail.
   <button class="key key--icon transport__step" aria-label="Step" aria-keyshortcuts=".">…</button>
   <button class="key key--icon transport__ff" aria-label="Fast-forward" aria-keyshortcuts="Shift+.">…</button>
   <button class="key key--icon transport__reset" aria-label="Reset">…</button>
+  <label class="visually-hidden" for="transport-speed-1">Speed</label>
+  <select class="select transport__speed" id="transport-speed-1">
+    <option value="0.5">0.5×</option><option value="1" selected>1×</option>…
+  </select>
 </div>
 ```
 Keys 40 × 40 (44 on the deck) sharing 1 px seams. `.transport__play`, `__step`,
 `__ff` and `__reset` are **JS hooks only** — `.key`, `.key--icon` and
 `.key--primary` carry all the styling except `.transport__play`'s `min-width`.
+
+**The speed picker.** A `.select` — the same white display window as every other
+select on the bench, 40 px tall to match the keys, `width: auto` with a 5 rem
+floor — pushed to the far right of the row by `margin-inline-start: auto`, so it
+does **not** share the key cluster's seams. That gap is the point: it is not a
+transport key. Play/Pause, Step, Fast-forward and Reset act on the run; this sets
+the *rate* the run advances at, 0.5× to 8× of real time, and it is the only
+control on the cluster that reads as a value rather than an action — hence a
+window rather than a key. It is not a substitute for Fast-forward, which skips
+ahead in batches with no intermediate frames and leaves the rate alone. On the
+handheld deck the auto margin is dropped to a fixed gap, so the keys stay centred.
+
+The multiplier is engine state and the picker is per-route DOM, so **the shell
+resets the engine to 1× when it tears a route down** — otherwise a tab left at 8×
+hands the next visualization eight times the rate its own picker displays, and
+selecting 1× on a picker that already reads 1× fires no `change` event to correct
+it.
 
 Glyphs are inline `<svg class="key__glyph" aria-hidden="true">` at 16 px, **solid
 `fill: currentColor`, no stroke**: Play (filled triangle), Pause (two filled
@@ -728,12 +781,12 @@ Disabled keys: muted text, `--line` border, opacity 1.
   </div>
 
   <div class="ledger-wrap">
-    <table class="ledger">
-      <thead><tr>
-        <th class="ledger__head" scope="col"><span class="visually-hidden">Quantity</span></th>
-        <th class="ledger__head" scope="col">Measured</th>
-        <th class="ledger__head" scope="col">Analytic</th>
-        <th class="ledger__head" scope="col">Error</th>
+    <table class="ledger" role="table">
+      <thead role="rowgroup"><tr role="row">
+        <th class="ledger__head" role="columnheader" scope="col"><span class="visually-hidden">Quantity</span></th>
+        <th class="ledger__head" role="columnheader" scope="col">Measured</th>
+        <th class="ledger__head" role="columnheader" scope="col">Analytic</th>
+        <th class="ledger__head" role="columnheader" scope="col">Error</th>
       </tr></thead>
       <tbody role="rowgroup">
         <tr class="readout" role="row" data-state="off">
@@ -751,10 +804,15 @@ Disabled keys: muted text, `--line` border, opacity 1.
 </section>
 ```
 
-The explicit `role="row"` / `"cell"` / `"rowgroup"` and `scope="col"` are not
-decoration: `.ledger`, `tbody`, `tr` and `td` all take a new `display` at
-≤ 599 px, which strips table semantics in Chrome and Firefox at exactly the width
-where revision 1 promised them.
+**The whole role chain is explicit, `role="table"` included.** `.ledger`,
+`tbody`, `tr` and `td` all take a new `display` at ≤ 599 px, and Chrome and
+Firefox drop the implicit `table` role from an element whose display is not a
+table display. `role="rowgroup"` has a *required context role* of
+table/grid/treegrid, so a `<tbody role="rowgroup">` under a table that has lost
+its own role is an orphan and the browser exposes a generic div full of dangling
+roles — which is what revision 2 shipped, with every role present except the one
+that anchors them. At that width `thead` is clipped visually-hidden, so the
+column headers reach a reader only through this chain.
 
 **Hero**: 96 px white window, 1 px `--window-stroke`, `max-width: 22rem`. The
 measured value at Martian Mono 500 / 40 px and its analytic target at 300 / 40 px
@@ -762,9 +820,22 @@ on one baseline — observed against theory carried by weight, not by a label.
 Beneath it the **null meter**: a 12 rem band with a centre major and a 2 × 9 px
 needle at `left: clamp(0%, calc(var(--err) * 100%), 100%)`. Beneath that at
 12 px: the label, the word "analytic" with the target's formula if the viz gives
-one, and the signed error. `[data-state="agree"]` colours the error and the
-needle `--window-agree` and drops the dotted underline. If the hero readout has
-no target, `.hero__target` and `.hero__band` are omitted (not "—" at 40 px).
+one (`Readout.formula`, marked-up prose, so `n·p` and `2L/(πd)` arrive with their
+variables italic), and the signed error. `[data-state="agree"]` colours the error
+and the needle `--window-agree` and drops the dotted underline. If the hero
+readout has no target, `.hero__target` and `.hero__band` are omitted (not "—" at
+40 px).
+
+**No reading yet is not a reading.** A mean over zero samples is `NaN` — the
+honest value, and the worst possible thing to set at 40 px. Where
+`Number.isFinite(value)` is false the hero prints an em dash in place of the
+numeral, empties the error, and **hides the needle** (`.hero__needle[hidden]`)
+rather than parking it: dead centre on the null meter is the one position that
+means "the reading agrees with theory", and a needle resting there under a `NaN`
+claims a convergence nothing has been tested for. The analytic target still
+prints — it is known whether or not anything has been measured against it. This
+is the same degradation the live region already makes ("Mean bin not measured
+yet"), which is why §6 also requires the tab to *open* on a completed run.
 `.hero__unit` is a Martian Mono 15 px muted suffix after the measured value, for
 readouts that carry one.
 
@@ -791,7 +862,7 @@ cannot reflow the ledger.
 <section class="story">
   <h2 class="visually-hidden">Story mode</h2>
   <div class="story__tape">
-    <button class="key key--small" type="button">Prev</button>
+    <button class="key key--small" type="button" aria-disabled="true">Prev</button>
     <ol class="story__steps">
       <li><button class="story__step story__step--visited" type="button">1</button></li>
       <li><button class="story__step" type="button" aria-current="step">2</button></li>
@@ -806,7 +877,9 @@ Steps are 28 × 28 px keys numbered 1…n in Martian Mono 500 / 13 px. Unvisited
 muted numeral, 1 px `--stroke` border. Visited: ink numeral and border
 (`.story__step--visited` is genuine state the DOM cannot otherwise express).
 Current is `aria-current="step"` **only** — there is no `.story__step--current`.
-Selecting a step writes its values to the controls and the URL.
+Selecting a step writes its values to the controls and the URL. Prev and Next at
+the ends of the tape are `aria-disabled`, for the reason §4 gives: a key must not
+take itself out of the tab order under the keypress that operated it.
 
 ### Fact card (a data plate)
 
@@ -898,6 +971,17 @@ its default configuration** — histogram filled, curve fitted, readouts real �
 waits for Play; a user-triggered run is permitted. Fast-forward renders batches
 without intermediate frames. Focus and pressed states remain fully visible.
 
+"Opens on the completed state" is work the shell has to do, not a property a
+visualization has: `create()` plus one `reset()` is an empty bed, and a
+reduced-motion reader gets no autoplay, so that empty bed is their *resting*
+state — a lone Gaussian over nothing and a 40 px `NaN` against its analytic
+target. Before the first paint the shell therefore advances the instance in
+Fast-forward batches until the emitted readouts stop changing, under a tick
+ceiling and a wall-clock budget. It cannot ask a visualization whether it is
+finished — the contract has no such question, and some experiments never are — so
+"the numbers have stopped moving" is the test, and a run that hits the budget
+stops on a real partial measurement rather than a `NaN`.
+
 ---
 
 ## 7. Canvas conventions
@@ -921,9 +1005,32 @@ No visualization hardcodes a colour.
 - **`--data-3` / `--data-3-fill` (graphite)** — areas, as two marks:
   `ctx.fillStyle = theme.data3Fill` at `globalAlpha = 1` for the wash, then
   `ctx.strokeStyle = theme.data3` at `2 × lineWidth` for the silhouette. **Never
-  `withAlpha(theme.data3, …)` and never a `globalAlpha` on an area.** A 1 px mark
+  a translucent `--data-3` and never a `globalAlpha` on an area.** A 1 px mark
   is never `--data-3` — it is the worst pen in the rack for the thinnest mark,
   1.77:1 at 50 % coverage on the plate and 1.51:1 over the wash.
+
+### The pens are roles, not categories
+
+The three pens were validated as a **hierarchy of salience** — signal, analytic,
+area — and not as a categorical palette. Run against a categorical validator
+they pass CVD separation (ΔE 18.7 protan, target ≥ 8), the normal-vision floor
+(ΔE 24.4, floor 15) and contrast against the plate (all ≥ 3:1), and they fail
+the lightness band and the chroma floor. Those two failures are correct and are
+ignored here: they are rules for palettes in which every hue is a peer of equal
+salience, and the graphite pen reading nearly grey is the whole point.
+
+**So a visualization that needs several *peer* series must not spend the three
+pens as categories.** Three random walks, or five distributions in the CLT
+mixer, are peers; `--data-1` for the first, `--data-2` for the second and
+`--data-3` for the third would rank them, and would put the least visible pen on
+a series with no claim to be quietest. Use **one pen plus a second encoding**
+instead: direct labels at the end of each trace, dash patterns, small multiples,
+or opacity steps of `--data-1` over the plate.
+
+Adding a fourth and fifth hue is not the escape hatch. It breaks the instrument
+— a bench plotter has a pen carousel, not a highlighter set — and neither hue
+has been checked for contrast against the plate or for CVD separation from the
+three that exist.
 
 ### Structure: `--grid` versus `--grid-soft`
 
@@ -963,7 +1070,7 @@ nothing at 1× or 2×. Curves are 2 px, particles ≥ 2 px, pegs are filled disc
 
 Wherever a `--data-2` curve or any thin mark crosses the pile, stroke it first in
 `--canvas` at `lineWidth + 4` (curves) or `+ 2` (marks), then in its own pen.
-This is `strokeWithHalo()` in `core/canvas.ts` (§8) — a shared helper, not a
+This is `strokeWithHalo()` in `core/paint.ts` (§8) — a shared helper, not a
 per-visualization habit. It is what makes `--data-1` vs `--data-2` at 1.96:1
 safe: the two pens never touch, because the plate colour is always between them.
 Revision 1 declared the halo normative here, filed it under "recommended" in §8,
@@ -1005,10 +1112,29 @@ export interface Readout {
   …
   /** Relative error inside which this reading counts as converged. Default 0.01. */
   tolerance?: number;
+  /** The closed form the target comes from — `n·p`, `2L/(πd)`. Shown in the hero. */
+  formula?: Prose;
 }
 
 export const GROUPS = ['randomness', 'waves', 'chaos', 'numbers'] as const;
 export type VizGroup = (typeof GROUPS)[number];   // a new group is one array entry
+
+/** §2's variables rule, made a type. A plain string is upright; a `{ v }`
+ *  segment is rendered as `<var>` — Archivo italic 400. */
+export type ProseSegment = string | { readonly v: string };
+export type Prose = string | readonly ProseSegment[];
+
+// Every field the shell renders as a sentence takes Prose: Viz.blurb,
+// Fact.text, Preset.caption and ParamSpec.help. Labels do not —
+// ParamSpec.label, Readout.label, Preset.label and Viz.title stay upright (§2).
+
+export interface Viz {
+  …
+  /** Plate shape, width ÷ height, unitless. Omitted takes the registered 1.6. */
+  aspect?: number;
+  /** Plate shape below 600 px, when the experiment is better portrait there. */
+  aspectNarrow?: number;
+}
 ```
 
 ```ts
@@ -1020,27 +1146,34 @@ export const CANVAS_THEME_VARS = {
 } as const satisfies Record<keyof CanvasTheme, `--${string}`>;
 
 // DEFAULT_CANVAS_THEME gains gridSoft: '#8a938f', data3Fill: '#d2d6d4'.
+```
 
-/** Stroke `path` in the plate colour first, then in `pen`, so a thin mark never
- *  lands directly on a data area. §7 requires this wherever a curve or a mark
- *  crosses the pile. */
+```ts
+// src/core/paint.ts — the painting rules that belong to the design system
+// rather than to any one visualization. They live here and not in canvas.ts
+// because the shell needs them too: it paints the first frame of every tab and
+// it owns font loading.
+
+/** Stroke in the plate colour first, then in `pen`, so a thin mark never lands
+ *  directly on a data area. §7 requires this wherever a curve or a mark crosses
+ *  the pile. `path` may be `undefined`, in which case the context's CURRENT path
+ *  is stroked twice — the shape a visualization already has after batching
+ *  hundreds of segments through `beginPath()` / `lineTo()`, with no `Path2D` to
+ *  allocate per frame. Both strokes take the same path, so the halo can never be
+ *  a pixel out of register with the mark it sits under. */
 export function strokeWithHalo(
   ctx: CanvasRenderingContext2D,
-  path: Path2D,
+  path: Path2D | undefined,
   pen: string,
-  width: number,
-  plate: string,
-  halo = 4,
-): void {
-  ctx.save();
-  ctx.lineWidth = width + halo;
-  ctx.strokeStyle = plate;
-  ctx.stroke(path);
-  ctx.lineWidth = width;
-  ctx.strokeStyle = pen;
-  ctx.stroke(path);
-  ctx.restore();
-}
+  haloColor: string,
+  lineWidth: number,
+  haloWidth = 4,
+): void;
+
+/** Await the in-canvas label face before the first `drawBackground()`. Resolves
+ *  immediately, and never rejects, where the API is missing or the shorthand is
+ *  one the font parser refuses. */
+export function ensureCanvasFont(labelFont: string): Promise<void>;
 ```
 
 Galton's `drawBackground()` moves its bin dividers and floor from `theme.grid` to
@@ -1052,7 +1185,7 @@ expectation marks move from 1 px `theme.data3` to 2 px `theme.data2` through
 
 ### Fonts
 
-- `await document.fonts.load('500 11px "Martian Mono"')` **before the first
+- `await ensureCanvasFont(theme.labelFont)` **before the first
   `drawBackground()`**, and re-run `drawBackground()` once on
   `document.fonts.ready`. Canvas silently falls back when a webfont has not
   loaded, and a background layer is repainted only on init, resize and parameter
@@ -1062,8 +1195,15 @@ expectation marks move from 1 px `theme.data3` to 2 px `theme.data2` through
 
 ### Layout and controls
 
-- Set `--viz-aspect` (a **unitless number**) inline on `.plate`, and
-  `--viz-aspect-narrow` when the visualization is better portrait on a phone.
+- Set `--viz-aspect` (a **unitless number**) inline on `.plate` from `Viz.aspect`,
+  and `--viz-aspect-narrow` from `Viz.aspectNarrow`. Both come off the contract,
+  not off a structural cast: read through `viz as Viz & { aspect?: unknown }` the
+  compiler cannot tell that no visualization declares either, and the shipped
+  `.plate` carried no inline value at all — every tab rendered 1.6 at every
+  width, and the portrait-handheld fix above was inert.
+- Render `Prose` with `<var>` for every marked segment, through the shared
+  `prose()` / `setProse()` helpers in `ui/dom.ts` — never `innerHTML`. §2's rule
+  is unimplemented and `theme.css`'s `var, .var` rule is dead code without it.
 - On each `.range`, set `--ticks` when `(max − min) / step ≤ 20`; for `log: true`
   add `.control--log` and set `--ticks: log10(max / min)`; fill `.control__min` /
   `.control__max` with the formatted ends.
@@ -1086,6 +1226,9 @@ expectation marks move from 1 px `theme.data3` to 2 px `theme.data2` through
   tolerance · |target|), 1)` so the needle saturates at three tolerances.
 - Emit **no content at all** in `.readout__target` / `.readout__error` for a
   readout with no target.
+- Where the hero's value is not finite, write an em dash instead of the numeral,
+  empty the error, and hide `.hero__needle` — never park it at 0.5, which reads
+  as agreement.
 - Format with `Readout.digits` (default 4 significant), an explicit `+` in the
   error column, thousands separators on counts.
 
@@ -1135,7 +1278,8 @@ announced every intermediate value and a run announced every throttled update.
 | 1.4.12 Text spacing | No fixed heights on text blocks; `ch`-reserved ledger columns |
 | 2.1.4 Character key shortcuts | Target-filtered, no Space binding, and switchable off in the footer |
 | 2.5.8 Target size | 44 px keys, tab buttons and stepper keys on touch; the switch row is a 44 px `<label>` |
-| 4.1.2 Name, role, value | `role="tablist"` owns only tabs; groups are `role="presentation"`; the ledger carries explicit row/cell roles that survive the ≤ 599 px `display` change |
+| 4.1.2 Name, role, value | `role="tablist"` owns only tabs; groups are `role="presentation"`; the ledger carries the complete `table` / `rowgroup` / `row` / `columnheader` / `cell` chain, so its semantics survive the ≤ 599 px `display` change |
+| 2.4.3 Focus order | No control removes itself from the tab order under the keypress that operated it: a key at the end of its range (tab index Previous / Next, story tape Prev / Next) is `aria-disabled`, not `disabled`, so focus stays where the reader put it |
 | 2.3.3 Animation from interactions | `prefers-reduced-motion` zeroes durations, delays and iteration counts; visualizations open on the completed state |
 | Forced colors | A `@media (forced-colors: active)` block remaps every chrome token to system keywords, keeps `forced-color-adjust: none` on the marks whose backgrounds are the message (tab peg, switch, convergence square, hero needle, fader), and opts `.plate` out entirely with its canvas tokens restated as literals — `readCanvasTheme()` hands them to `ctx.fillStyle`, which cannot take a system keyword |
 

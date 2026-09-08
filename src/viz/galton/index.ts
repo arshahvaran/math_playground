@@ -9,6 +9,7 @@ import type {
   VizContext,
   VizInstance,
 } from '../../core/types';
+import { strokeWithHalo } from '../../core/paint';
 import { binomialPmf, normalPdf } from '../../core/stats';
 import {
   MAX_ROWS,
@@ -39,8 +40,18 @@ const DEFAULT_SEED = 42;
  */
 const TRAIL_FADE = 0.1;
 
-/** Histogram bars sit under the pile; translucent so the dots stay the data. */
-const BAR_ALPHA = 0.35;
+/**
+ * Length of the floor tick under each bin edge, CSS px.
+ *
+ * A histogram needs a baseline and a scale, not a grid of cells: full-height
+ * dividers boxed every bin and cut the distribution into strips. The ticks hang
+ * below the floor, where the pile can never cover them and where they read as
+ * the axis furniture they are.
+ */
+const BIN_TICK = 4;
+
+/** Gap between the floor ticks and the bin index numerals, CSS px. */
+const LABEL_GAP = 3;
 
 /**
  * Most resting balls drawn as individual dots per frame, across all bins. A
@@ -107,14 +118,20 @@ const params: readonly ParamSpec[] = [
     key: 'showNormal',
     label: 'Normal overlay',
     default: true,
-    help: 'Draw N(n·p, n·p·(1−p)) — the curve de Moivre found as the limit of this pile — at the scale of the finished pile.',
+    help: [
+      'Draw N(', { v: 'n' }, '·', { v: 'p' }, ', ', { v: 'n' }, '·', { v: 'p' }, '·(1−', { v: 'p' }, ')) ',
+      '— the curve de Moivre found as the limit of this pile — at the scale of the finished pile.',
+    ],
   },
   {
     kind: 'toggle',
     key: 'showBinomial',
     label: 'Binomial bars',
     default: false,
-    help: 'Mark the exact expected count in each bin, balls · C(n,k) · pᵏ(1−p)ⁿ⁻ᵏ.',
+    help: [
+      'Mark the exact expected count in each bin, balls · C(', { v: 'n' }, ',', { v: 'k' }, ') · ',
+      { v: 'p' }, 'ᵏ(1−', { v: 'p' }, ')ⁿ⁻ᵏ.',
+    ],
   },
   {
     kind: 'toggle',
@@ -148,7 +165,10 @@ const presets: readonly Preset[] = [
   {
     id: 'ten-thousand',
     label: 'Ten thousand',
-    caption: 'Ten thousand balls fill in the bell, and a normal curve drawn from nothing but n·p and n·p·(1−p) sits on the pile.',
+    caption: [
+      'Ten thousand balls fill in the bell, and a normal curve drawn from nothing but ',
+      { v: 'n' }, '·', { v: 'p' }, ' and ', { v: 'n' }, '·', { v: 'p' }, '·(1−', { v: 'p' }, ') sits on the pile.',
+    ],
     values: { rows: 12, p: 0.5, balls: 10_000, dropRate: 400, showNormal: true, showBinomial: false },
   },
   {
@@ -192,9 +212,11 @@ const facts: readonly Fact[] = [
     },
   },
   {
-    text:
-      'The number of routes to bin k is the binomial coefficient C(n, k): the board is Pascal’s triangle with a ball ' +
-      'rolling down it, and at p = ½ each pile is that coefficient out of 2ⁿ.',
+    text: [
+      'The number of routes to bin ', { v: 'k' }, ' is the binomial coefficient C(', { v: 'n' }, ', ', { v: 'k' }, '): ',
+      'the board is Pascal’s triangle with a ball rolling down it, and at ', { v: 'p' }, ' = ½ each pile is ',
+      'that coefficient out of 2ⁿ.',
+    ],
     source: {
       label: 'Wikipedia, Galton board',
       url: 'https://en.wikipedia.org/wiki/Galton_board',
@@ -290,6 +312,10 @@ function create(ctx: VizContext): VizInstance {
   let geometry = layoutBoard(ctx.width, ctx.height, sim.rows);
   let pile = pileMetrics(geometry, DEFAULT_P, DEFAULT_BALLS, ctx.theme.particleRadius);
 
+  // This frame's bar heights, so the wash and its silhouette cannot disagree by
+  // a pixel. Allocated once at the row ceiling rather than per frame.
+  const barH = new Float64Array(MAX_ROWS + 1);
+
   // Cosmetic parameters, absorbed live.
   let showNormal = true;
   let showBinomial = false;
@@ -326,7 +352,15 @@ function create(ctx: VizContext): VizInstance {
     const p = num(ctx.params, 'p', DEFAULT_P);
     return [
       { key: 'landed', label: 'Balls landed', value: sim.landed, digits: 6 },
-      { key: 'mean', label: 'Mean bin', value: mean, target: rows * p },
+      // §5: the hero prints "analytic" and the closed form the target came
+      // from. n is the row count, p the bias — both italic, both variables.
+      {
+        key: 'mean',
+        label: 'Mean bin',
+        value: mean,
+        target: rows * p,
+        formula: [{ v: 'n' }, '·', { v: 'p' }],
+      },
       { key: 'variance', label: 'Variance', value: variance, target: rows * p * (1 - p) },
       { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6 },
       { key: 'mode', label: 'Tallest bin index', value: mode, digits: 2 },
@@ -360,21 +394,24 @@ function create(ctx: VizContext): VizInstance {
       }
       bg.fill();
 
-      // Bin dividers and floor. An odd-width line centred on a half-pixel
-      // covers whole device pixels at DPR 1; on an integer it smears across two.
+      // Floor and bin ticks. These contain the experiment rather than being part
+      // of it, so they take the container pen, not the peg pen — the pegs are
+      // the only near-black geometry on the plate. An odd-width line centred on
+      // a half-pixel covers whole device pixels at DPR 1; on an integer it
+      // smears across two.
       const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
       const half = g.pegSpacing / 2;
       const left = binCentreX(g, 0) - half;
       const right = binCentreX(g, rows) + half;
-      bg.strokeStyle = theme.grid;
+      const floor = Math.round(g.binBottom) + snap;
+      bg.strokeStyle = theme.gridSoft;
       bg.lineWidth = theme.lineWidth;
       bg.beginPath();
       for (let k = 0; k <= rows + 1; k++) {
         const x = Math.round(left + k * g.pegSpacing) + snap;
-        bg.moveTo(x, g.binTop);
-        bg.lineTo(x, g.binBottom);
+        bg.moveTo(x, floor);
+        bg.lineTo(x, floor + BIN_TICK);
       }
-      const floor = Math.round(g.binBottom) + snap;
       bg.moveTo(left, floor);
       bg.lineTo(right, floor);
       bg.stroke();
@@ -386,7 +423,7 @@ function create(ctx: VizContext): VizInstance {
       bg.textAlign = 'center';
       bg.textBaseline = 'top';
       for (let k = 0; k <= rows; k += every) {
-        bg.fillText(String(k), binCentreX(g, k), g.binBottom + 5);
+        bg.fillText(String(k), binCentreX(g, k), g.binBottom + BIN_TICK + LABEL_GAP);
       }
     },
 
@@ -415,23 +452,27 @@ function create(ctx: VizContext): VizInstance {
       const bandLeft = binCentreX(g, 0) - half;
       const bandRight = binCentreX(g, rows) + half;
 
-      // The bins are redrawn in full every frame — bars, pile, marks, curve are
-      // all clamped to `depth` — so clear the band rather than fade it. Fading
-      // it would composite each translucent bar onto its own residue: with
-      // BAR_ALPHA 0.35 and TRAIL_FADE 0.1 the fixed point of
-      // a ← 0.35 + 0.65·0.9·a is 0.84, so within a quarter second the bars
-      // would read as solid and a toggled-off overlay would leave a ghost the
-      // fade never removes. Trails still live in the peg region above.
-      const pad = 2 * theme.lineWidth;
+      // The bins are redrawn in full every frame — wash, silhouette, pile, marks
+      // and curve are all clamped to `depth` — so clear the band rather than
+      // fade it. Under a fade every one of those marks would still be on the
+      // layer from the frame before: a toggled-off overlay would ghost for a few
+      // dozen frames, and the curve would smear a band as wide as its own
+      // travel. Trails still live in the peg region above.
+      // Three line widths of margin: the widest thing painted in the band is the
+      // curve's halo at lineWidth + 4, which reaches three CSS px either side of
+      // a path that runs along the band's own edge when the peak is clamped.
+      const pad = 3 * theme.lineWidth;
       fg.clearRect(bandLeft - pad, g.binTop - pad, bandRight - bandLeft + 2 * pad, depth + 2 * pad);
 
-      // Histogram bars under the pile, on the same `unit` as the dots so a bar
-      // backs the pile it sits behind and carries the count on above the dot
-      // cap. The alpha goes on the context, not into the colour: theme values
-      // are whatever the stylesheet wrote — oklch(), a named colour — and
-      // parsing them here would silently give an opaque bar.
-      fg.globalAlpha = BAR_ALPHA;
-      fg.fillStyle = theme.data3;
+      // The histogram is two marks, not one. An opaque graphite wash — never a
+      // globalAlpha, which composites to a 1.47:1 ghost and leaves the whole
+      // point of tab one as the least visible object on the page — that the
+      // vermilion dots read against at 3.27:1, and then a full-opacity 2 px
+      // silhouette that is the conformant graphical object carrying the bell's
+      // shape, including above the dot cap where the dots stop and only the
+      // wash used to be. Both sit on the same `unit` as the dots, so the bar
+      // backs the pile it stands behind.
+      fg.fillStyle = theme.data3Fill;
       let tallest = 0;
       let mode = 0;
       for (let k = 0; k <= rows; k++) {
@@ -440,11 +481,10 @@ function create(ctx: VizContext): VizInstance {
           tallest = c;
           mode = k;
         }
-        if (c === 0) continue;
-        const h = Math.min(depth, c * pile.unit);
-        fg.fillRect(binCentreX(g, k) - half, g.binBottom - h, g.pegSpacing, h);
+        const h = c === 0 ? 0 : Math.min(depth, c * pile.unit);
+        barH[k] = h;
+        if (h > 0) fg.fillRect(binCentreX(g, k) - half, g.binBottom - h, g.pegSpacing, h);
       }
-      fg.globalAlpha = 1;
 
       // Resting dots and moving balls share one colour, so one path and one fill.
       fg.fillStyle = theme.data1;
@@ -479,9 +519,33 @@ function create(ctx: VizContext): VizInstance {
       });
       fg.fill();
 
-      if (showBinomial) {
+      if (tallest > 0) {
+        // The silhouette goes on last, over the wash and the dots both: it is
+        // the mark that carries the shape, so nothing may paint over it. One
+        // stepped outline across the whole band, where fourteen full-height
+        // dividers used to be a cage — the risers between bins belong to the
+        // outline. Its ends drop to the floor, which the floor line already
+        // draws, so the base needs no stroke of its own.
         fg.strokeStyle = theme.data3;
-        fg.lineWidth = theme.lineWidth;
+        fg.lineWidth = 2 * theme.lineWidth;
+        fg.lineJoin = 'miter';
+        fg.beginPath();
+        fg.moveTo(bandLeft, g.binBottom);
+        for (let k = 0; k <= rows; k++) {
+          const y = g.binBottom - (barH[k] ?? 0);
+          const cx = binCentreX(g, k);
+          fg.lineTo(cx - half, y);
+          fg.lineTo(cx + half, y);
+        }
+        fg.lineTo(bandRight, g.binBottom);
+        fg.stroke();
+      }
+
+      // Expectation marks are thin marks, so they take the drafting pen at 2 px
+      // — the graphite pen is the worst in the rack for the thinnest mark,
+      // 1.51:1 where these land, on the wash. Each one sits on the pile it
+      // measures, so each one takes the halo: +2 for a mark, +4 for a curve.
+      if (showBinomial) {
         fg.beginPath();
         for (let k = 0; k <= rows; k++) {
           const h = Math.min(depth, (pile.expected[k] ?? 0) * pile.unit);
@@ -490,14 +554,12 @@ function create(ctx: VizContext): VizInstance {
           fg.moveTo(cx - 0.35 * g.pegSpacing, y);
           fg.lineTo(cx + 0.35 * g.pegSpacing, y);
         }
-        fg.stroke();
+        strokeWithHalo(fg, undefined, theme.data2, theme.canvas, 2 * theme.lineWidth, 2);
       }
 
       // p = 0 or 1 is a point mass; there is no curve to draw.
       if (showNormal && pile.sigma > 0) {
         const balls = num(ctx.params, 'balls', DEFAULT_BALLS);
-        fg.strokeStyle = theme.data2;
-        fg.lineWidth = 2 * theme.lineWidth;
         fg.lineJoin = 'round';
         fg.beginPath();
         for (let px = bandLeft; px <= bandRight; px += 2) {
@@ -506,7 +568,10 @@ function create(ctx: VizContext): VizInstance {
           const h = Math.min(depth, balls * normalPdf(u, pile.mu, pile.sigma) * pile.unit);
           fg.lineTo(px, g.binBottom - h);
         }
-        fg.stroke();
+        // The curve crosses its own histogram by construction, and the two pens
+        // are 1.96:1 apart where it crosses the dots, so the plate colour goes
+        // down first and they never touch.
+        strokeWithHalo(fg, undefined, theme.data2, theme.canvas, 2 * theme.lineWidth);
       }
 
       ctx.emit(readouts(tallest, mode));
@@ -558,6 +623,12 @@ export const galton: Viz = {
   title: 'Galton Board',
   group: 'randomness',
   blurb: 'Drops balls through a staggered lattice of pegs, one coin flip per row, and piles up the binomial distribution.',
+  // The board is taller than it is wide: layoutBoard() takes the smaller of the
+  // width- and height-derived peg spacings, so on the default 1.6 bed the height
+  // binds and half the plate is blank. Portrait again on a phone, where a
+  // landscape bed leaves the lattice a strip with no room for the bins.
+  aspect: 0.8,
+  aspectNarrow: 0.75,
   params,
   presets,
   facts,

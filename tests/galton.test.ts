@@ -3,6 +3,7 @@ import { createRng } from '../src/core/rng';
 import type { Readout, VizContext } from '../src/core/types';
 import { galton, pileMetrics } from '../src/viz/galton/index';
 import { binomialPmf } from '../src/core/stats';
+import { proseText } from '../src/ui/dom';
 import {
   MAX_ROWS,
   binCentreX,
@@ -318,7 +319,10 @@ describe('galton viz metadata', () => {
       'twenty-rows',
     ]);
     for (const preset of galton.presets ?? []) {
-      expect(preset.caption.length).toBeGreaterThan(20);
+      // A caption is Prose now — a bare string, or the segments of a sentence
+      // whose variables are marked for <var>. Measure the sentence, not the
+      // segment count.
+      expect(proseText(preset.caption).length).toBeGreaterThan(20);
       for (const key of Object.keys(preset.values)) {
         expect(galton.params.some((p) => p.key === key), `preset ${preset.id} sets unknown param ${key}`).toBe(true);
       }
@@ -363,9 +367,11 @@ function stubViz(params: Record<string, number | string | boolean>) {
       ink: '#111111',
       inkMuted: '#666666',
       grid: '#cccccc',
+      gridSoft: '#8a938f',
       data1: '#e34234',
       data2: '#1f77b4',
       data3: '#999999',
+      data3Fill: '#d2d6d4',
       accent: '#ff9900',
       labelFont: '12px monospace',
       lineWidth: 1,

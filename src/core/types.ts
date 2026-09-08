@@ -11,6 +11,31 @@
  */
 
 // ---------------------------------------------------------------------------
+// Prose
+// ---------------------------------------------------------------------------
+
+/**
+ * One span of a sentence the shell composes.
+ *
+ * A plain string is set upright in the body face. A `{ v }` segment is a
+ * variable or a Greek letter and is rendered as `<var>` — Archivo italic 400 —
+ * which is the one typographic signal DESIGN §2 uses to separate mathematics
+ * from the prose around it. Without it `N(n·p, n·p·(1−p))` reads as ordinary
+ * roman words in the middle of an English sentence.
+ */
+export type ProseSegment = string | { readonly v: string };
+
+/**
+ * A sentence, plain or marked up. Every field a visualization writes for a
+ * human to read takes this: a bare string where nothing is a variable, an array
+ * where something is.
+ *
+ * `ParamSpec.label`, `Readout.label`, `Preset.label` and `Viz.title` are
+ * deliberately *not* prose — §2 keeps them upright.
+ */
+export type Prose = string | readonly ProseSegment[];
+
+// ---------------------------------------------------------------------------
 // Parameters
 // ---------------------------------------------------------------------------
 
@@ -34,8 +59,8 @@ export type ParamSpec =
       unit?: string;
       /** Distribute slider positions logarithmically. For wide ranges (1 → 1e6). */
       log?: boolean;
-      /** Shown as a tooltip / help row. One sentence. */
-      help?: string;
+      /** Shown as a visible help row under the row. One sentence. */
+      help?: Prose;
     }
   | {
       kind: 'int';
@@ -45,14 +70,14 @@ export type ParamSpec =
       max: number;
       default: number;
       unit?: string;
-      help?: string;
+      help?: Prose;
     }
   | {
       kind: 'toggle';
       key: string;
       label: string;
       default: boolean;
-      help?: string;
+      help?: Prose;
     }
   | {
       kind: 'choice';
@@ -60,14 +85,14 @@ export type ParamSpec =
       label: string;
       options: ReadonlyArray<{ value: string; label: string }>;
       default: string;
-      help?: string;
+      help?: Prose;
     }
   | {
       kind: 'seed';
       key: string;
       label: string;
       default: number;
-      help?: string;
+      help?: Prose;
     };
 
 export type ParamValue = number | string | boolean;
@@ -94,6 +119,21 @@ export interface Readout {
   unit?: string;
   /** Analytic value this should converge to, if known. */
   target?: number;
+  /**
+   * Relative error inside which this reading counts as converged. Default 0.01.
+   *
+   * A target of exactly zero has no relative error, so there it is read as an
+   * absolute tolerance instead. Estimators converge at different rates — a mean
+   * over n samples and a π recovered from a crossing fraction are not the same
+   * bet — so the threshold belongs to the readout, not to the ledger.
+   */
+  tolerance?: number;
+  /**
+   * The closed-form the target comes from, shown in the hero after the word
+   * "analytic" (DESIGN §5): `n·p`, `2L/(πd)`, `1/e`. Marked-up prose, so the
+   * variables in it are set in italic like every other variable on the page.
+   */
+  formula?: Prose;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,13 +148,13 @@ export interface Preset {
   id: string;
   label: string;
   /** What this configuration is meant to reveal. One sentence. */
-  caption: string;
+  caption: Prose;
   values: Readonly<Record<string, ParamValue>>;
 }
 
 /** A surprising, checkable claim. Every fact carries a source. */
 export interface Fact {
-  text: string;
+  text: Prose;
   source: { label: string; url?: string };
 }
 
@@ -167,14 +207,39 @@ export interface CanvasTheme {
   canvas: string;
   ink: string;
   inkMuted: string;
-  /** Recessive structure: pegs, ruled lines, grid, axes. */
+  /**
+   * The experiment's own geometry, and only that: the pegs a ball bounces off,
+   * Buffon's ruled floorboards, a needle. It is near-black and deliberately as
+   * loud as the apparatus in the video this is modelled on.
+   */
   grid: string;
+  /**
+   * The furniture around the experiment: bin dividers, axes, floors, frames,
+   * registration marks. Recessive but still a conformant graphical object.
+   *
+   * The split matters because it is easy to get backwards. Painting a container
+   * in `grid` puts a cage of apparatus-black rules around the data — fourteen
+   * full-height bin dividers slicing a distribution into strips — and painting
+   * the apparatus in `gridSoft` hides the experiment itself.
+   */
+  gridSoft: string;
   /** Primary data mark — particles, the live estimate. */
   data1: string;
-  /** Secondary data mark — the theoretical or fitted overlay. */
+  /** Secondary data mark — the analytic overlay, and every thin mark. */
   data2: string;
-  /** Tertiary data mark — histogram bars, envelopes. */
+  /** Tertiary data mark — the full-opacity *silhouette* of an area. */
   data3: string;
+  /**
+   * The opaque wash an area is filled with, under its `data3` silhouette.
+   *
+   * No single colour is both 3:1 against the white plate and 3:1 under
+   * vermilion particles — the first needs L ≤ 0.30, the second L ≥ 0.61 — so an
+   * area is two marks: this wash, which particles read against, and the
+   * silhouette, which is the conformant graphical object carrying the shape.
+   * **Never applied through `globalAlpha`.** A translucent `data3` composites to
+   * roughly this colour and then nothing in the figure carries 3:1.
+   */
+  data3Fill: string;
   accent: string;
   /** CSS font shorthand for in-canvas labels, e.g. `12px "IBM Plex Mono"`. */
   labelFont: string;
@@ -234,7 +299,17 @@ export interface VizInstance {
   destroy(): void;
 }
 
-export type VizGroup = 'randomness' | 'waves' | 'chaos' | 'numbers';
+/**
+ * The tab-strip runs, in the order they may appear.
+ *
+ * The array is the source of truth and the union is derived from it, so adding
+ * a group is one entry here: the shell derives its run label from the group
+ * name rather than looking it up in a table, and the compiler lists every site
+ * that must handle the new member.
+ */
+export const GROUPS = ['randomness', 'waves', 'chaos', 'numbers'] as const;
+
+export type VizGroup = (typeof GROUPS)[number];
 
 export interface Viz {
   /** URL slug. Stable forever — it appears in shared permalinks. */
@@ -242,7 +317,23 @@ export interface Viz {
   title: string;
   group: VizGroup;
   /** One sentence, present tense, shown under the title. */
-  blurb: string;
+  blurb: Prose;
+  /**
+   * Plate shape, as a unitless width ÷ height (DESIGN §4). The shell writes it
+   * to `--viz-aspect` on `.plate`; omitting it takes the registered 1.6.
+   *
+   * It is the experiment that decides: a Galton board is a portrait lattice
+   * (0.8) and rendering it on a 1.6 bed leaves half the plate blank, because
+   * `layoutBoard()` takes the smaller of the width- and height-derived peg
+   * spacings and the height then binds.
+   */
+  aspect?: number;
+  /**
+   * Plate shape below 600 px, when one is better portrait on a phone. A 1.6 bed
+   * on a 375 px screen is a 224 px letterbox — this is the number that fixes it,
+   * and `--viz-max-h` cannot, because the width clamp binds first.
+   */
+  aspectNarrow?: number;
   params: readonly ParamSpec[];
   presets?: readonly Preset[];
   facts: readonly Fact[];
