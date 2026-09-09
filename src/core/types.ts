@@ -119,6 +119,18 @@ export interface Readout {
   unit?: string;
   /** Analytic value this should converge to, if known. */
   target?: number;
+
+  /**
+   * Plain-language label for the simple view, lower case: "average landing
+   * spot", not "Mean bin". `label` stays the precise name for the expert table.
+   */
+  plain?: string;
+  /** The one number a newcomer should read first. Mark exactly one per visualization. */
+  headline?: boolean;
+  /** One short sentence of context, shown only in the simple view. */
+  hint?: string;
+  /** Internals — bin counts, index of the mode — that only the expert table shows. */
+  expertOnly?: boolean;
   /**
    * Relative error inside which this reading counts as converged. Default 0.01.
    *
