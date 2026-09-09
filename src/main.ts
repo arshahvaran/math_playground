@@ -39,9 +39,11 @@ import { findViz, registry } from './viz/registry';
  * The lifecycle for one route is: tear the previous instance down in order
  * (engine, instance, stage, then every component handle), create the stage,
  * read the theme off the plate, coerce the URL parameters against the specs,
- * build a mutable `VizContext`, create the instance, wait for the canvas label
- * face, paint both layers once, and start the loop unless the reader has asked
- * for reduced motion.
+ * build a mutable `VizContext`, create the instance, paint both layers once,
+ * and start the loop unless the reader has asked for reduced motion. It is
+ * synchronous end to end: the canvas label face is asked for alongside the
+ * first paint and repaints it when it lands, so nothing on screen — and nothing
+ * the transport claims — waits on the network.
  */
 
 /**
@@ -106,7 +108,7 @@ let unResize: (() => void) | null = null;
 let latest: readonly Readout[] = [];
 
 /**
- * Bumped on every route change. Anything resumed after an `await` compares it
+ * Bumped on every route change. Anything that resumes on a promise compares it
  * before touching the canvas: a fast tab switch would otherwise let a font
  * promise from the previous visualization repaint the new one's background.
  */
@@ -216,22 +218,62 @@ function syncUrl(): void {
   shell.setPermalink(buildHash(viz.id, serialized));
 }
 
-/** The preset whose every value is currently in force, if any. */
+/**
+ * Is `preset` exactly the configuration in force?
+ *
+ * Every value it declares has to be in force *and* every parameter it does not
+ * declare has to be at its default — the state applying it to a fresh route
+ * would produce. A plain subset test ("is every declared value in force?") is
+ * not enough, because presets declare partial, overlapping key sets: Buffon's
+ * "Short needle" sets only `ratio`, on top of the two values "Slow motion"
+ * already set, so a subset scan answers with the earlier step for a state that
+ * is really the later one — and the tape then captions the plate with the wrong
+ * experiment.
+ *
+ * A seed a preset does not declare is exempt: a seed names the run, not the
+ * configuration, and "the same preset with another draw" is what Randomize is
+ * for.
+ */
+function presetInForce(
+  viz: Viz,
+  preset: Preset,
+  params: Readonly<Record<string, ParamValue>>,
+): boolean {
+  for (const spec of viz.params) {
+    const declared = preset.values[spec.key];
+    if (declared === undefined && spec.kind === 'seed') continue;
+    if (params[spec.key] !== (declared === undefined ? spec.default : declared)) return false;
+  }
+  return true;
+}
+
+/** The preset the parameters in force are exactly, if any. */
 function matchingPresetId(): string | null {
   const viz = activeViz;
   const ctx = vizCtx;
   if (!viz || !ctx) return null;
+  let best: Preset | null = null;
   for (const preset of viz.presets ?? []) {
-    const entries = Object.entries(preset.values);
-    if (entries.every(([key, value]) => ctx.params[key] === value)) return preset.id;
+    if (!presetInForce(viz, preset, ctx.params)) continue;
+    // Two presets can both be in force when one of them declares a value that
+    // is also the default; the more specific one is the one that says more
+    // about the state on screen.
+    const keys = Object.keys(preset.values).length;
+    if (best === null || keys > Object.keys(best.values).length) best = preset;
   }
-  return null;
+  return best?.id ?? null;
 }
 
 function onControlChange(key: string, value: ParamValue): void {
   const ctx = vizCtx;
   const inst = instance;
   if (!ctx || !inst) return;
+  // A control can report a change that is not one: a stepper key at its own
+  // limit clamps back to the value already in force, and a log fader has
+  // positions that decode to the same integer. Restarting the experiment for
+  // one of those throws a finished run away for a keypress that changed
+  // nothing, so the comparison happens before the reset, not inside it.
+  if (ctx.params[key] === value) return;
 
   ctx.params = { ...ctx.params, [key]: value };
   // Cosmetic parameters absorb; structural ones restart the experiment. A
@@ -326,8 +368,32 @@ function seedFor(viz: Viz, params: Readonly<Record<string, ParamValue>>): number
   return FALLBACK_SEED;
 }
 
-async function activate(viz: Viz, route: Route): Promise<void> {
+/**
+ * Is the focus inside something `teardown()` is about to destroy?
+ *
+ * A removed element takes the focus with it: `document.activeElement` falls
+ * back to `<body>` and the next Tab restarts from the masthead, twenty controls
+ * above where the reader was. It is the same failure shell.ts and story.ts
+ * refuse `disabled` to avoid, and a hash change — the Back button, a pasted
+ * link — reaches it with the focus still in the rail.
+ */
+function focusInsideRoute(): boolean {
+  const active = document.activeElement;
+  if (!active || active === document.body) return false;
+  const hosts = [
+    regions.stage,
+    regions.controls,
+    regions.transport,
+    regions.readouts,
+    regions.story,
+    regions.facts,
+  ];
+  return hosts.some((host) => host.contains(active));
+}
+
+function activate(viz: Viz, route: Route): void {
   const token = ++generation;
+  const refocus = focusInsideRoute();
   teardown();
 
   activeViz = viz;
@@ -383,21 +449,26 @@ async function activate(viz: Viz, route: Route): Promise<void> {
     inst.draw();
   });
 
-  // §7: the background layer is repainted only on init, resize and parameter
-  // change, so with `display=swap` a cold load would otherwise leave every axis
-  // numeral in the fallback face for the life of the tab.
-  await ensureCanvasFont(theme.labelFont);
-  if (token !== generation) return;
-
+  // The plate and the ledger before anything asynchronous: a webfont request
+  // that is blackholed rather than refused is a promise that never settles, so
+  // painting behind one leaves both canvases blank and the ledger empty for the
+  // life of the tab, with the transport claiming a run is going. Whatever face
+  // is available is legible; the network is not allowed to gate the first paint.
   inst.drawBackground?.();
   inst.draw();
 
-  // A face can still arrive after the first paint on a cold load.
-  void document.fonts?.ready.then(() => {
+  // §7: the background layer is repainted only on init, resize and parameter
+  // change, so with `display=swap` the axis numerals would otherwise stay in the
+  // fallback face for the life of the tab. `fonts.load()` is also what *asks*
+  // for the face — canvas text never triggers a load — and `fonts.ready` covers
+  // a face that arrives after it.
+  const repaint = (): void => {
     if (token !== generation) return;
     inst.drawBackground?.();
     if (!engine.running) inst.draw();
-  });
+  };
+  void ensureCanvasFont(theme.labelFont).then(repaint);
+  void document.fonts?.ready.then(repaint);
 
   // Reduced motion opens on the completed state of the default configuration
   // and waits for Play; a run the reader starts is still permitted.
@@ -414,6 +485,11 @@ async function activate(viz: Viz, route: Route): Promise<void> {
   // After the settle, so the opening sentence carries the numbers that are on
   // screen rather than the zeros the first reset() emitted.
   announce(`${viz.title}.`);
+
+  // The control the reader was in has just been destroyed with the old route.
+  // The tab for the route that replaced it is where a tab widget puts focus
+  // anyway, and it is one Tab away from the rail rather than twenty.
+  if (refocus) shell.focusActiveTab();
 }
 
 /**
@@ -448,16 +524,33 @@ function now(): number {
   return typeof performance === 'object' ? performance.now() : Date.now();
 }
 
+/**
+ * Swap the current history entry for `id`'s default route.
+ *
+ * `location.replace()` on a fragment is a same-document navigation: it replaces
+ * the entry in place and still queues the `hashchange` the router listens for.
+ * `router.navigate()` cannot be used here because it pushes — history would
+ * read […, #/clt, #/galton], Back would land on the unknown id, and this branch
+ * would answer with another push, trapping the reader for the rest of the
+ * session and restarting the simulation on every attempt.
+ */
+function replaceRoute(id: string): void {
+  const base = window.location.href.split('#')[0] ?? '';
+  window.location.replace(`${base}${buildHash(id, {})}`);
+}
+
 function onRoute(route: Route): void {
   const viz = route.id === null ? undefined : findViz(route.id);
   if (!viz) {
     // An unknown or absent id resolves to the first tab, and the URL is
-    // rewritten so the fragment always names the visualization on screen.
+    // rewritten so the fragment always names the visualization on screen. A
+    // stale link for an id that does not exist yet — registry.ts reserves
+    // `clt` — is the ordinary way in.
     const fallback = registry[0];
-    if (fallback) router.navigate(fallback.id);
+    if (fallback) replaceRoute(fallback.id);
     return;
   }
-  void activate(viz, route);
+  activate(viz, route);
 }
 
 router.subscribe(onRoute);

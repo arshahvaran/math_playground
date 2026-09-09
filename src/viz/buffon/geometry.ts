@@ -16,9 +16,21 @@ import type { Rng } from '../../core/types';
  * is a function of those two counters.
  */
 
+/**
+ * One needle, stored in the units it was drawn in rather than in pixels.
+ *
+ * `u`, `v` and `t` are the three uniform draws themselves, so a needle is
+ * independent of the plate it happens to be painted on: the painter turns them
+ * into pixels every frame, and a resize re-lays-out the needles already down
+ * instead of stranding them at coordinates the plate no longer has.
+ */
 export interface Needle {
-  x: number;
-  y: number;
+  /** Centre x as a fraction of the plate width, in [0, 1). */
+  u: number;
+  /** Which whole strip the centre lands in, as a fraction of the count: strip = ⌊v·rows⌋. */
+  v: number;
+  /** Centre height above the line below it, as a fraction of the spacing, in [0, 1). */
+  t: number;
   /** Radians from the horizontal, in [0, π). */
   angle: number;
   crosses: boolean;
@@ -42,35 +54,30 @@ export function needleCrosses(y: number, angle: number, length: number, spacing:
  * One drop. Four draws from `rng`, always in the same order, so a seed
  * reproduces the needle sequence exactly:
  *
- *   1. y₀, the centre's height above the line below it, uniform in [0, spacing)
+ *   1. t, the centre's height above the line below it, as a fraction of d
  *   2. θ, uniform in [0, π)
- *   3. x, uniform across `width`
- *   4. the strip the needle is painted in, uniform over the whole strips in `height`
+ *   3. u, the centre's x as a fraction of the plate width
+ *   4. v, which whole strip the needle lands in, as a fraction of the count
  *
- * Crossing is decided by y₀ and θ alone, before the layout is consulted, so
- * the crossing sequence for a seed — and every readout with it — is the same
- * at any canvas size, which is what lets a permalink reproduce a run on
- * someone else's window. The field only decides where the needle is painted.
- * Sampling y over the whole field height and reducing mod d would give the
+ * No plate size is consulted at all: crossing is decided by t and θ, and the
+ * other two draws are the fractions a painter scales by whatever plate it has
+ * in front of it. So the crossing sequence for a seed — and every readout with
+ * it — is the same at any canvas size, which is what lets a permalink
+ * reproduce a run on someone else's window, and a mid-run resize re-lays-out
+ * the needles already down rather than forking the run.
+ *
+ * Sampling the height over the whole field and reducing mod d would give the
  * same distribution but tie each outcome to how many strips fit the screen:
- * frac(u · rows) flips with rows, and a resize mid-run would fork the run.
- *
- * Centres land only in whole strips, so every painted needle lies between two
- * ruled lines; a `height` under one strip still gets one.
+ * frac(u · rows) flips with rows. Quantising to a whole strip instead keeps
+ * y mod d exactly uniform, so every painted needle lies between two ruled
+ * lines and the crossing fraction is unbiased.
  */
-export function dropNeedle(
-  rng: Rng,
-  width: number,
-  height: number,
-  length: number,
-  spacing: number,
-): Needle {
-  const y0 = rng.range(0, spacing);
+export function dropNeedle(rng: Rng, length: number, spacing: number): Needle {
+  const t = rng.next();
   const angle = rng.range(0, Math.PI);
-  const x = rng.range(0, width);
-  const strips = Math.max(1, Math.floor(height / spacing));
-  const strip = rng.int(0, strips - 1);
-  return { x, y: strip * spacing + y0, angle, crosses: needleCrosses(y0, angle, length, spacing) };
+  const u = rng.next();
+  const v = rng.next();
+  return { u, v, t, angle, crosses: needleCrosses(t * spacing, angle, length, spacing) };
 }
 
 /**
@@ -124,12 +131,14 @@ export function piStandardError(drops: number, length: number, spacing: number):
 export class NeedleField {
   readonly capacity: number;
 
-  private readonly xs: Float32Array;
-  private readonly ys: Float32Array;
+  /** The three uniform draws, kept unscaled so a resize can re-place the needle. */
+  private readonly us: Float32Array;
+  private readonly vs: Float32Array;
+  private readonly ts: Float32Array;
   /**
    * Direction as (cos θ, sin θ), taken once at push. A needle never moves, so
-   * the painter wants its half-vector, not its angle — and 20,000 sin/cos
-   * pairs per frame were a measurable slice of the budget at full capacity.
+   * the painter wants its half-vector, not its angle — and a sin/cos pair per
+   * needle per frame was a measurable slice of the budget at full capacity.
    */
   private readonly cosines: Float32Array;
   private readonly sines: Float32Array;
@@ -144,8 +153,9 @@ export class NeedleField {
 
   constructor(budget: number) {
     this.capacity = Math.max(1, Math.floor(budget));
-    this.xs = new Float32Array(this.capacity);
-    this.ys = new Float32Array(this.capacity);
+    this.us = new Float32Array(this.capacity);
+    this.vs = new Float32Array(this.capacity);
+    this.ts = new Float32Array(this.capacity);
     this.cosines = new Float32Array(this.capacity);
     this.sines = new Float32Array(this.capacity);
     this.crossFlags = new Uint8Array(this.capacity);
@@ -168,8 +178,9 @@ export class NeedleField {
 
   push(n: Needle): void {
     const i = this.head;
-    this.xs[i] = n.x;
-    this.ys[i] = n.y;
+    this.us[i] = n.u;
+    this.vs[i] = n.v;
+    this.ts[i] = n.t;
     this.cosines[i] = Math.cos(n.angle);
     this.sines[i] = Math.sin(n.angle);
     this.crossFlags[i] = n.crosses ? 1 : 0;
@@ -186,7 +197,15 @@ export class NeedleField {
    * so a painter that already has them on screen can pick up where it left off.
    */
   forEach(
-    cb: (x: number, y: number, cos: number, sin: number, crosses: boolean, index: number) => void,
+    cb: (
+      u: number,
+      v: number,
+      t: number,
+      cos: number,
+      sin: number,
+      crosses: boolean,
+      index: number,
+    ) => void,
     from = 0,
   ): void {
     // Until the buffer wraps the oldest entry is slot 0; afterwards it is the
@@ -196,8 +215,9 @@ export class NeedleField {
       let slot = start + i;
       if (slot >= this.capacity) slot -= this.capacity;
       cb(
-        this.xs[slot] ?? 0,
-        this.ys[slot] ?? 0,
+        this.us[slot] ?? 0,
+        this.vs[slot] ?? 0,
+        this.ts[slot] ?? 0,
         this.cosines[slot] ?? 1,
         this.sines[slot] ?? 0,
         this.crossFlags[slot] === 1,

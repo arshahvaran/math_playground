@@ -114,6 +114,10 @@ function decode(s: string): string {
  * present in the result; a missing, empty or unparsable value falls back to the
  * spec default, and out-of-range numbers are clamped rather than rejected.
  * Keys with no spec are dropped — the URL cannot introduce parameters.
+ *
+ * The result is always a fixed point of `serializeParams()`: a range value is
+ * rounded to the slider's resolution here, on the way in, so the run and the
+ * permalink the page advertises for it are the same experiment.
  */
 export function coerceParams(specs: readonly ParamSpec[], raw: Record<string, string>): ParamValues {
   const values: Record<string, ParamValue> = {};
@@ -128,7 +132,10 @@ function coerceOne(spec: ParamSpec, text: string | undefined): ParamValue {
   switch (spec.kind) {
     case 'range': {
       const n = Number(s);
-      return Number.isFinite(n) ? clamp(n, spec.min, spec.max) : spec.default;
+      // Same rounding `serializeOne()` applies, so an off-step permalink is
+      // reproducible: without it p=0.3333 would run while the address bar, the
+      // caption and the copied link all said 0.33 — a different distribution.
+      return Number.isFinite(n) ? clamp(roundToStep(n, spec.step), spec.min, spec.max) : spec.default;
     }
     case 'int': {
       const n = Number(s);
@@ -288,6 +295,12 @@ export function createRouter(): Router {
   const subscribers = new Set<(r: Route) => void>();
 
   let pending: string | null = null;
+  // The address bar as it stood when the pending write was armed — the fragment
+  // that write means to amend. A hash navigation updates the bar synchronously
+  // but is delivered as a queued task, so without this a debounce firing inside
+  // that window would replace the new fragment with the old one's parameters and
+  // then mark it seen, reverting the navigation with nobody notified.
+  let pendingBase: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let replacing = false;
 
@@ -295,6 +308,7 @@ export function createRouter(): Router {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     pending = null;
+    pendingBase = null;
   }
 
   function flush(): void {
@@ -303,7 +317,13 @@ export function createRouter(): Router {
     timer = null;
     if (pending === null) return;
     const hash = pending;
+    const base = pendingBase;
     pending = null;
+    pendingBase = null;
+    // The bar is no longer the one this write was composed against: a hash
+    // navigation landed and its `hashchange` is still queued. Abandon the write
+    // and leave the new fragment alone — `sync()` adopts it when the event runs.
+    if (base !== null && source.read() !== base) return;
     replacing = true;
     try {
       source.replace(hash);
@@ -348,7 +368,11 @@ export function createRouter(): Router {
     },
 
     navigate(id, params = {}) {
-      cancelPending();
+      // Land the pending write on the entry we are about to leave rather than
+      // drop it, so a control moved in the last 150 ms is still there when Back
+      // returns here. Safe against the race above: `flush()` abandons the write
+      // itself if the bar has already moved under it.
+      flush();
       source.push(buildHash(id, params));
       // The browser updates location.hash synchronously but queues the event;
       // syncing here keeps `route` current for the caller's next line. The
@@ -363,8 +387,13 @@ export function createRouter(): Router {
       // The route reflects the shell's state immediately; only the URL write waits.
       seen = hash;
       current = parseHash(hash);
+      // The bar stays untouched for the whole debounce window, so the fragment
+      // this write amends is whatever it held when the window opened.
+      if (timer === null) {
+        pendingBase = source.read();
+        timer = setTimeout(flush, REPLACE_DEBOUNCE_MS);
+      }
       pending = hash;
-      if (timer === null) timer = setTimeout(flush, REPLACE_DEBOUNCE_MS);
     },
 
     destroy() {

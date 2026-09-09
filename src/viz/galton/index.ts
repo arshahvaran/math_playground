@@ -237,6 +237,11 @@ function flag(values: ParamValues, key: string, fallback: boolean): boolean {
   return typeof v === 'boolean' ? v : fallback;
 }
 
+/** Balls this run will drop, clamped the way the sim clamps its own target. */
+function ballTarget(values: ParamValues): number {
+  return Math.max(1, Math.min(MAX_BALLS, Math.floor(num(values, 'balls', DEFAULT_BALLS))));
+}
+
 function simParams(values: ParamValues): GaltonParams {
   return {
     rows: num(values, 'rows', DEFAULT_ROWS),
@@ -250,15 +255,15 @@ function simParams(values: ParamValues): GaltonParams {
  * How the pile is drawn, fixed for a run so bars, dots and overlays share one
  * vertical scale.
  *
- * Resting balls sit in a grid of `cols` per row at a pitch of 2·radius, so a
- * pile of c balls is about c·(2·radius/cols) px tall. `unit` is that height per
- * ball, and it is also the height of the histogram bar and the scale of the
- * theoretical overlays. The radius is chosen so the expected tallest pile fills
- * the bin depth with HEADROOM to spare, and never exceeds the in-flight ball
- * size; where the radius is clamped rather than derived, `unit` falls back to
- * the bin depth so the bar and the overlays still fit.
+ * `unit` is that scale: pixels of pile height per ball, and equally the height
+ * of the histogram bar, the binomial mark and the normal curve. Resting balls
+ * sit in a grid of `cols` per row, so a row of dots stands cols·unit tall and
+ * the dot is drawn at half of that — a pile of c balls is c·unit tall however
+ * it is drawn. The scale is the smaller of what dots of the derived radius
+ * occupy and what the bin depth allows the expected tallest pile.
  */
 interface Pile {
+  /** Drawn radius of a resting dot, cols·unit/2. Never exceeds an in-flight ball. */
   radius: number;
   cols: number;
   /** Pixels of pile height per ball. */
@@ -280,29 +285,44 @@ export function pileMetrics(g: BoardGeometry, p: number, balls: number, particle
     expected[k] = balls * q;
     if (q > pmax) pmax = q;
   }
-  const tallest = Math.max(1, balls * pmax * HEADROOM);
+  const mu = rows * p;
+  const sigma = Math.sqrt(rows * p * (1 - p));
+  // Reserve the headroom against the tallest mark that is actually painted, not
+  // against the binomial mode alone. The overlay peaks at balls·pdf(μ) =
+  // balls/(σ√2π), and below about five rows that density is the larger of the
+  // two — 0.4606 against a mode of 0.375 at three rows — so headroom bought for
+  // the bars sawed the top off the curve. Not conditioned on `showNormal`: that
+  // toggle is absorbed live, and a scale that moved with it would rescale the
+  // whole histogram under a cosmetic switch.
+  const peak = sigma > 0 ? Math.max(pmax, normalPdf(mu, mu, sigma)) : pmax;
+  const tallest = Math.max(1, balls * peak * HEADROOM);
   const depth = Math.max(1, g.binBottom - g.binTop);
   const area = Math.max(1, g.pegSpacing * depth);
   // A c-ball pile occupies c·(2r)² of bin area, so r = ½·√(area / tallest) fills it exactly.
   let radius = 0.5 * Math.sqrt(area / tallest);
   radius = Math.min(particleRadius, Math.max(0.5, radius));
   const cols = Math.max(1, Math.floor(g.pegSpacing / (2 * radius)));
+  // The dot pitch 2r/cols is the area derivation only while the radius is the
+  // one it produced. Clamping r — up to the 0.5 px floor at twenty rows and
+  // twenty thousand balls, down to the in-flight ball size on a large plate —
+  // makes that pitch disagree with depth/tallest, which is the scale that puts
+  // the expected tallest pile at depth/HEADROOM by construction. Take the
+  // smaller of the two and then lay the dot grid out from it rather than the
+  // other way round: a row of `cols` dots is cols·unit tall, so the dot is half
+  // that. Drawing the dots at their own pitch instead stood a tail pile at up
+  // to 2.5× the height of the bar, the silhouette and the marks that measure
+  // the same balls, and sent an arriving ball to a resting place tens of pixels
+  // above its own bar. The seam where the bar takes over from the dots is now
+  // the partial top row, at most one dot high.
+  const unit = Math.min((2 * radius) / cols, depth / tallest);
   return {
-    radius,
+    radius: (cols * unit) / 2,
     cols,
-    // The dot pitch 2r/cols is the area derivation only while the radius is the
-    // one it produced. Clamping r up to the 0.5 px floor — twenty rows and
-    // twenty thousand balls on an ordinary canvas — makes the pitch larger than
-    // the area allows, and the bar, the binomial marks and the normal peak all
-    // clip against the bin mouth. depth/tallest is the scale that puts the
-    // expected tallest pile at depth/HEADROOM by construction, so take the
-    // smaller of the two: the dots keep their own pitch, and the seam where the
-    // bar takes over from them is under a pixel at the dot cap.
-    unit: Math.min((2 * radius) / cols, depth / tallest),
+    unit,
     cap: Math.max(1, Math.floor(DOT_BUDGET / (rows + 1))),
     expected,
-    mu: rows * p,
-    sigma: Math.sqrt(rows * p * (1 - p)),
+    mu,
+    sigma,
   };
 }
 
@@ -334,13 +354,14 @@ function create(ctx: VizContext): VizInstance {
     // the sim does, so the two agree once reset() has run either way.
     const sp = simParams(ctx.params);
     geometry = layoutBoard(ctx.width, ctx.height, sp.rows);
-    pile = pileMetrics(geometry, sp.p, Math.min(MAX_BALLS, sp.balls), ctx.theme.particleRadius);
+    pile = pileMetrics(geometry, sp.p, ballTarget(ctx.params), ctx.theme.particleRadius);
   }
 
   /** Resting place of the ball that arrived `stack`-th in bin `k`. */
   function restX(k: number, stack: number): number {
     return binCentreX(geometry, k) + (2 * (stack % pile.cols) + 1 - pile.cols) * pile.radius;
   }
+  /** Rows of dots are 2·radius apart, which is cols·unit: the pile stands on the same scale as its bar. */
   function restY(stack: number): number {
     const r = pile.radius;
     return Math.max(geometry.binTop + r, geometry.binBottom - r - Math.floor(stack / pile.cols) * 2 * r);
@@ -361,7 +382,22 @@ function create(ctx: VizContext): VizInstance {
         target: rows * p,
         formula: [{ v: 'n' }, '·', { v: 'p' }],
       },
-      { key: 'variance', label: 'Variance', value: variance, target: rows * p * (1 - p) },
+      {
+        key: 'variance',
+        label: 'Variance',
+        value: variance,
+        target: rows * p * (1 - p),
+        // A variance is a noisier estimator than a mean, and the ledger's 1%
+        // default is the wrong bet for it: the sample variance of n bin indices
+        // has standard error √((μ₄ − σ⁴)/n), which for a distribution close to
+        // normal is σ²·√(2/n) — a relative error of √(2/n), 3.2% at the
+        // 2,000-ball default, so a finished and statistically perfect run read
+        // "not yet converged" for most seeds. Three of those standard errors,
+        // measured at the ball count the run is going to reach rather than at
+        // the count so far, so the row still starts off and arrives at agreement
+        // as the balls come down instead of being true from the first landing.
+        tolerance: 3 * Math.sqrt(2 / ballTarget(ctx.params)),
+      },
       { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6 },
       { key: 'mode', label: 'Tallest bin index', value: mode, digits: 2 },
       { key: 'bins', label: 'Bins', value: rows + 1, digits: 2 },
@@ -559,7 +595,9 @@ function create(ctx: VizContext): VizInstance {
 
       // p = 0 or 1 is a point mass; there is no curve to draw.
       if (showNormal && pile.sigma > 0) {
-        const balls = num(ctx.params, 'balls', DEFAULT_BALLS);
+        // The count the run will reach, which is what `pile.unit` reserved its
+        // headroom for; the raw parameter can be an off-step permalink value.
+        const balls = ballTarget(ctx.params);
         fg.lineJoin = 'round';
         fg.beginPath();
         for (let px = bandLeft; px <= bandRight; px += 2) {

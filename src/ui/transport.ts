@@ -55,6 +55,44 @@ export const SHORTCUTS_EVENT = 'mp:shortcuts-change';
 /** Holding Fast-forward keeps skipping — one burst per press would be a stutter. */
 const HOLD_REPEAT_MS = 100;
 
+export interface PressGuard {
+  /** A press has begun and has already fired its burst. */
+  arm(): void;
+  /** The press has ended. `clickFollows` is false when no click can reach the key. */
+  end(clickFollows: boolean): void;
+  /** True when this click is the press's own echo and must not fire a second burst. */
+  swallows(): boolean;
+}
+
+/**
+ * Whether the `click` now arriving at a key is a press's own echo.
+ *
+ * A held key fires its burst on `pointerdown` (or `keydown`), and the browser
+ * synthesises a `click` at the end of that press which must not fire a second.
+ * The state is one bit — but the bit has to be *dropped* whenever the press ends
+ * somewhere the click cannot follow: released away from the key, cancelled by a
+ * scroll, or blurred. Left armed, it swallows the next bare click instead, and a
+ * bare click is exactly how assistive technology activates a button — NVDA on
+ * the virtual cursor, VO-Space, Dragon, switch access — so the key would look
+ * pressed and do nothing.
+ */
+export function createPressGuard(): PressGuard {
+  let armed = false;
+  return {
+    arm() {
+      armed = true;
+    },
+    end(clickFollows) {
+      if (!clickFollows) armed = false;
+    },
+    swallows() {
+      const echo = armed;
+      armed = false;
+      return echo;
+    },
+  };
+}
+
 /** Are the single-character shortcuts on? Default yes; the footer switch turns them off. */
 export function shortcutsEnabled(): boolean {
   try {
@@ -91,7 +129,7 @@ export function createTransport(
   let playing = !opts.reducedMotion;
   let holding = false;
   let holdTimer: ReturnType<typeof setInterval> | null = null;
-  let heldPress = false;
+  const heldPress = createPressGuard();
 
   const play = h('button', {
     class: 'key key--primary transport__play',
@@ -161,7 +199,7 @@ export function createTransport(
   function beginHold(): void {
     if (holding) return;
     holding = true;
-    heldPress = true;
+    heldPress.arm();
     ff.setAttribute('aria-pressed', 'true');
     cb.onFastForward();
     holdTimer = setInterval(() => cb.onFastForward(), HOLD_REPEAT_MS);
@@ -177,11 +215,29 @@ export function createTransport(
     ff.setAttribute('aria-pressed', 'false');
   }
 
+  /**
+   * A release is watched on the document because a press does not have to end on
+   * the key it started on: drag off and let go, and `click` is dispatched to the
+   * common ancestor of the two pointer targets, not to the key. Only the ending
+   * that does produce a click keeps the guard armed.
+   */
+  function onPointerRelease(event: Event): void {
+    endHold();
+    const target = event.target;
+    heldPress.end(
+      event.type !== 'pointercancel' && target instanceof Node && ff.contains(target),
+    );
+  }
+
   ff.addEventListener('pointerdown', beginHold);
-  ff.addEventListener('pointerup', endHold);
   ff.addEventListener('pointerleave', endHold);
-  ff.addEventListener('pointercancel', endHold);
-  ff.addEventListener('blur', endHold);
+  ff.addEventListener('blur', () => {
+    // A key that has lost focus is not going to receive the pending click.
+    endHold();
+    heldPress.end(false);
+  });
+  document.addEventListener('pointerup', onPointerRelease);
+  document.addEventListener('pointercancel', onPointerRelease);
   ff.addEventListener('keydown', (event) => {
     if (event.key !== ' ' && event.key !== 'Enter') return;
     // Swallowing the default also swallows the click the browser would
@@ -192,17 +248,13 @@ export function createTransport(
   ff.addEventListener('keyup', (event) => {
     if (event.key !== ' ' && event.key !== 'Enter') return;
     endHold();
-    // No click follows a prevented keydown, so the guard has to be cleared here
-    // or the next synthetic click would be swallowed.
-    heldPress = false;
+    // The keydown was prevented, so no click follows this press either.
+    heldPress.end(false);
   });
   ff.addEventListener('click', () => {
     // Only a click with no press behind it — an assistive technology activating
     // the key directly — still needs its single burst.
-    if (heldPress) {
-      heldPress = false;
-      return;
-    }
+    if (heldPress.swallows()) return;
     cb.onFastForward();
   });
 
@@ -288,6 +340,9 @@ export function createTransport(
     },
     destroy() {
       endHold();
+      heldPress.end(false);
+      document.removeEventListener('pointerup', onPointerRelease);
+      document.removeEventListener('pointercancel', onPointerRelease);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener(SHORTCUTS_EVENT, onShortcutsChange);
       window.removeEventListener('storage', onStorage);

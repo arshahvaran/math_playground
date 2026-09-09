@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
-import type { Readout, VizContext } from '../src/core/types';
+import type { Readout, VizContext, VizInstance } from '../src/core/types';
 import { galton, pileMetrics } from '../src/viz/galton/index';
-import { binomialPmf } from '../src/core/stats';
+import { binomialPmf, normalPdf } from '../src/core/stats';
 import { proseText } from '../src/ui/dom';
 import {
   MAX_ROWS,
@@ -385,6 +385,19 @@ function stubViz(params: Record<string, number | string | boolean>) {
   return { ctx, emitted, instance: galton.create(ctx) };
 }
 
+/** Run until every ball has landed, then return the last published ledger by key. */
+function runViz(instance: VizInstance, emitted: Readout[][], balls: number): Record<string, Readout> {
+  for (let i = 0; i < 100_000; i++) {
+    instance.step(TICK);
+    if (i % 60 !== 59) continue;
+    instance.draw();
+    const last = emitted.at(-1)!;
+    const by = Object.fromEntries(last.map((r) => [r.key, r]));
+    if ((by['landed']?.value ?? 0) >= balls) return by;
+  }
+  throw new Error(`no ${balls} landings after 100,000 ticks`);
+}
+
 describe('galton viz instance', () => {
   const defaults = { rows: 12, p: 0.5, balls: 500, dropRate: 400, showNormal: true, showBinomial: true, showTrails: true, seed: 42 };
 
@@ -434,6 +447,41 @@ describe('galton viz instance', () => {
     expect(by['landed']).toBe(0);
     expect(by['tallest']).toBe(0);
     instance.destroy();
+  });
+
+  it('judges Variance against the sampling error of a variance, so a finished run agrees at any seed', () => {
+    // The shipped default ball count. A variance estimated from n samples has
+    // standard error √((μ₄ − σ⁴)/n) ≈ σ²·√(2/n), i.e. a relative error of
+    // √(2/n) — 3.2% here, three times the ledger's 1% default, which is why a
+    // completed and statistically perfect run used to read "not yet converged".
+    const balls = 2_000;
+    const expected = 3 * Math.sqrt(2 / balls);
+    let worst = 0;
+    for (const seed of [1, 2, 3, 7, 42, 99]) {
+      const { instance, emitted } = stubViz({ ...defaults, balls, dropRate: 2_000, seed });
+      const variance = runViz(instance, emitted, balls)['variance']!;
+      expect(variance.target).toBe(3);
+      expect(variance.tolerance).toBeCloseTo(expected, 12);
+      const relative = Math.abs(variance.value - variance.target!) / variance.target!;
+      expect(relative, `seed ${seed}`).toBeLessThanOrEqual(variance.tolerance!);
+      worst = Math.max(worst, relative);
+    }
+    // Not a threshold wide enough to pass anything: it is under a tenth, and
+    // most of these correct runs miss the 1% default it replaces.
+    expect(expected).toBeLessThan(0.1);
+    expect(worst).toBeGreaterThan(0.01);
+  });
+
+  it('scales the variance threshold with the run, not with a constant', () => {
+    // Three standard errors of the finished run, so ten times the balls is a
+    // threshold √10 tighter — and the row is judged against the count the run
+    // will reach, so it still starts out disagreeing and arrives.
+    const read = (balls: number): Readout => {
+      const { instance, emitted } = stubViz({ ...defaults, balls });
+      instance.draw();
+      return emitted.at(-1)!.find((r) => r.key === 'variance')!;
+    };
+    expect(read(20_000).tolerance!).toBeCloseTo(read(2_000).tolerance! / Math.sqrt(10), 12);
   });
 });
 
@@ -491,6 +539,73 @@ describe('pileMetrics', () => {
         );
         // `cols` dots at a pitch of 2·radius must fit between the bin dividers.
         expect(pile.cols * 2 * pile.radius).toBeLessThanOrEqual(g.pegSpacing + 1e-12);
+      }
+    }
+  });
+
+  it('gives the bin band one scale: a row of dots is exactly `cols` balls of bar', () => {
+    for (const [rows, p, balls] of configs) {
+      for (const [width, height] of sizes) {
+        const g = layoutBoard(width, height, rows);
+        const pile = pileMetrics(g, p, balls, 3);
+        const where = `rows ${rows}, p ${p}, balls ${balls} at ${width}x${height}`;
+        // The dot pitch is derived from `unit`, so the dots cannot run at a
+        // scale of their own while the bar, the silhouette, the binomial marks
+        // and the normal curve run at another.
+        expect(2 * pile.radius, where).toBeCloseTo(pile.cols * pile.unit, 12);
+        expect(pile.radius, where).toBeGreaterThan(0);
+        // A resting dot is never larger than a ball still in flight.
+        expect(pile.radius, where).toBeLessThanOrEqual(3);
+      }
+    }
+  });
+
+  it('tops a pile out where its own bar does, and settles an arriving ball onto it', () => {
+    // Twenty rows and twenty thousand balls on plates the live stage actually
+    // gets: this is where the 0.5 px radius floor binds, and where the dot
+    // pitch and the bin depth were a factor of 1.67 apart — piles standing at
+    // 2.5× their bar, and balls animating to a rest tens of pixels in mid-air.
+    const stages: ReadonlyArray<[number, number]> = [
+      [418, 522],
+      [360, 640],
+      [800, 600],
+      [1280, 720],
+    ];
+    for (const [width, height] of stages) {
+      const g = layoutBoard(width, height, MAX_ROWS);
+      const pile = pileMetrics(g, 0.5, 20_000, 3);
+      const counts = [1, pile.cols, 4 * pile.cols, 1_271, pile.cap];
+      for (const c of counts) {
+        // restY() for the c-th arrival, which carries stack index c − 1.
+        const rest = g.binBottom - pile.radius - Math.floor((c - 1) / pile.cols) * 2 * pile.radius;
+        const barTop = g.binBottom - c * pile.unit;
+        const where = `${c} balls at ${width}x${height}`;
+        // It comes to rest on the bar those c balls raise: the top row of the
+        // grid straddles the bar top, so the centre is within one radius of it.
+        expect(Math.abs(rest - barTop), where).toBeLessThanOrEqual(pile.radius + 1e-9);
+        expect(rest, where).toBeGreaterThan(g.binTop);
+        // A full grid of dots tops out on the bar exactly.
+        if (c % pile.cols === 0) expect(rest - pile.radius, where).toBeCloseTo(barTop, 9);
+      }
+    }
+  });
+
+  it('leaves the normal overlay room for its peak, which outgrows the binomial mode below five rows', () => {
+    // 1/(σ√2π) is 0.4606 at three rows against a mode of 0.375: headroom
+    // reserved against the mode alone clipped the top of the bell into a flat
+    // plateau, at the one row count where the pile is visibly not yet a bell.
+    for (const rows of [3, 4, 5, 12, MAX_ROWS]) {
+      for (const balls of [2_000, 5_000]) {
+        for (const [width, height] of sizes) {
+          const g = layoutBoard(width, height, rows);
+          const pile = pileMetrics(g, 0.5, balls, 3);
+          const peak = balls * normalPdf(pile.mu, pile.mu, pile.sigma) * pile.unit;
+          // draw() clamps the curve to the bin depth, so a peak that reaches
+          // the clamp is a curve drawn with its top sawn off.
+          expect(peak, `rows ${rows}, balls ${balls} at ${width}x${height}`).toBeLessThan(
+            g.binBottom - g.binTop,
+          );
+        }
       }
     }
   });

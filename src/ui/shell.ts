@@ -44,6 +44,15 @@ const SCHEME_KEY = 'mp:scheme';
 /** How long the Copy key shows its confirmation before returning to its label. */
 const COPY_FEEDBACK_MS = 2000;
 
+/**
+ * The two-column breakpoint, mirroring theme.css §15. Below it the bench is a
+ * single stack and the rail's keys are painted between the caption and the
+ * readouts, so the DOM has to be restacked to match — see `restack()`. The
+ * number lives in both files because a media query cannot be read back out of a
+ * stylesheet; theme.css is the one that decides.
+ */
+const BENCH_STACK_QUERY = '(max-width: 63.9375rem)';
+
 /** Thousands separators for counts in the caption sentence; prose, not a cell. */
 const COUNT_FORMAT = new Intl.NumberFormat('en-US');
 
@@ -69,6 +78,11 @@ export interface ShellHandle {
   regions: ShellRegions;
   /** Move the ball, the roving tabindex, the index select and the figure number. */
   setActiveTab(id: string): void;
+  /**
+   * Put the focus on the selected tab. For a route change that destroyed the
+   * element the reader was in — otherwise the focus falls to `<body>`.
+   */
+  focusActiveTab(): void;
   /** Publish the current permalink: the Copy key, `data-permalink`, and the caption sentence. */
   setPermalink(hash: string): void;
   destroy(): void;
@@ -216,10 +230,16 @@ export function createShell(
     ),
   );
 
+  const wordmark = h(
+    'a',
+    { class: 'masthead__wordmark', href: `#/${defaultId}` },
+    'Math Playground',
+  );
+
   const masthead = h(
     'header',
     { class: 'masthead' },
-    h('a', { class: 'masthead__wordmark', href: `#/${defaultId}` }, 'Math Playground'),
+    wordmark,
     h(
       'div',
       { class: 'masthead__end' },
@@ -235,6 +255,40 @@ export function createShell(
       themeToggle,
     ),
   );
+
+  // -- selection ------------------------------------------------------------
+
+  /** The visualization on screen, as `setActiveTab()` last reported it. */
+  let activeViz: Viz | null = null;
+
+  /**
+   * Ask for a visualization. Every path into the app — a peg, the index select,
+   * the Prev/Next keys, the wordmark — comes through here.
+   *
+   * Re-selecting the visualization already on screen is a **no-op**. It is a
+   * no-op in every tab widget, and here it would be the most destructive control
+   * on the page: the shell answers a selection with `router.navigate(id)`, which
+   * builds a bare `#/<id>` from an empty parameter map, and a route with no
+   * query coerces every parameter back to its default — the run, the reader's
+   * rows and bias and seed, and the permalink they were about to copy, all gone.
+   * The roving tabindex puts the *selected* tab first in the tab order, so
+   * Enter on it is the natural gesture after tabbing into the strip.
+   */
+  function select(id: string): void {
+    if (id === activeViz?.id) return;
+    onSelect(id);
+  }
+
+  // The wordmark is a link so it reads and behaves as one, but a plain click on
+  // it is the same selection as the first peg — including the no-op when that
+  // visualization is already on screen. A modified click is left to the browser:
+  // opening the link in a new tab is a request for the default route.
+  on(wordmark, 'click', (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    select(defaultId);
+  });
 
   // -- tab strip ------------------------------------------------------------
 
@@ -280,7 +334,7 @@ export function createShell(
       },
       h('span', { class: 'tab__label' }, viz.title),
     );
-    on(tab, 'click', () => onSelect(viz.id));
+    on(tab, 'click', () => select(viz.id));
     tabs.push(tab);
     run.append(tab);
   }
@@ -312,7 +366,7 @@ export function createShell(
     }
     optgroup.append(h('option', { value: viz.id }, viz.title));
   }
-  on(indexSelect, 'change', () => onSelect(indexSelect.value));
+  on(indexSelect, 'change', () => select(indexSelect.value));
 
   const tabsNav = h(
     'nav',
@@ -369,7 +423,8 @@ export function createShell(
   // otherwise reload the page and lose the run.
   on(controls, 'submit', (event) => event.preventDefault());
 
-  const rail = h('div', { class: 'rail' }, h('div', { class: 'rail__panel' }, transport, controls));
+  const railPanel = h('div', { class: 'rail__panel' }, transport, controls);
+  const rail = h('div', { class: 'rail' }, railPanel);
 
   // The tab widget's panel is the whole bench: the plate, the readouts and the
   // controls are all the selected visualization. Carrying `role="tabpanel"`
@@ -478,8 +533,18 @@ export function createShell(
   });
 
   // Another tab of the same page, or any other caller, can flip the preference.
-  const onShortcutsChanged = (): void => {
-    shortcutsSwitch.checked = shortcutsEnabled();
+  //
+  // The event's own `detail` is the state, not the store: `setShortcutsEnabled()`
+  // swallows a failed write — blocked site data, a private window — and turns the
+  // bindings off anyway, so re-reading storage here would re-check the switch
+  // while `.` and `Shift+.` stayed disabled. That is a switch reporting the
+  // opposite of the state it controls, with no way back on, and this switch is
+  // the SC 2.1.4 escape hatch itself. A cross-tab `storage` event carries no
+  // detail and the store is then the only answer there is.
+  const onShortcutsChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<{ enabled?: unknown }>).detail;
+    shortcutsSwitch.checked =
+      typeof detail?.enabled === 'boolean' ? detail.enabled : shortcutsEnabled();
   };
   window.addEventListener(SHORTCUTS_EVENT, onShortcutsChanged);
   window.addEventListener('storage', onShortcutsChanged);
@@ -531,30 +596,33 @@ export function createShell(
   on(prevKey, 'click', () => {
     if (prevKey.getAttribute('aria-disabled') === 'true') return;
     const target = vizList[activeIndex - 1];
-    if (target) onSelect(target.id);
+    if (target) select(target.id);
   });
   on(nextKey, 'click', () => {
     if (nextKey.getAttribute('aria-disabled') === 'true') return;
     const target = vizList[activeIndex + 1];
-    if (target) onSelect(target.id);
+    if (target) select(target.id);
   });
 
   // -- permalink ------------------------------------------------------------
 
-  let activeViz: Viz | null = null;
   let permalink = '';
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Back to the key's own label, with any pending restore cancelled. */
+  function restoreCopy(): void {
+    if (copyTimer !== null) clearTimeout(copyTimer);
+    copyTimer = null;
+    copyKey.textContent = 'Copy permalink';
+    delete copyKey.dataset.state;
+  }
 
   function flashCopy(message: string, done: boolean): void {
     if (copyTimer !== null) clearTimeout(copyTimer);
     copyKey.textContent = message;
     if (done) copyKey.dataset.state = 'done';
     else delete copyKey.dataset.state;
-    copyTimer = setTimeout(() => {
-      copyKey.textContent = 'Copy permalink';
-      delete copyKey.dataset.state;
-      copyTimer = null;
-    }, COPY_FEEDBACK_MS);
+    copyTimer = setTimeout(restoreCopy, COPY_FEEDBACK_MS);
   }
 
   on(copyKey, 'click', () => {
@@ -595,6 +663,44 @@ export function createShell(
     }
   }
 
+  // -- bench order ----------------------------------------------------------
+
+  /**
+   * Put the rail's keys where the layout paints them.
+   *
+   * Below the breakpoint the figure and the rail are `display: contents` and the
+   * bench is one column, with the transport between the caption and the readouts
+   * and the controls between the readouts and the story tape. CSS `order` moves
+   * the paint and *not* the tab sequence, and a mismatch between the two is WCAG
+   * 2.4.3: with the rail last in the DOM, Tab off "Copy permalink" skips the
+   * transport and all ten controls, lands on the story tape a page and a half
+   * further down, and comes back up to Play nine stops later. So the stack is
+   * restacked in the DOM as well.
+   *
+   * Re-parenting an element blurs it, so the focus is carried across the move —
+   * which is the whole point of the exercise.
+   */
+  function restack(stacked: boolean): void {
+    const active = document.activeElement;
+    const held = active !== null && (transport.contains(active) || controls.contains(active));
+    if (stacked) {
+      figure.insertBefore(transport, readouts);
+      figure.insertBefore(controls, story);
+    } else {
+      railPanel.append(transport, controls);
+    }
+    if (held && active instanceof HTMLElement) active.focus();
+  }
+
+  const stackQuery =
+    typeof window.matchMedia === 'function' ? window.matchMedia(BENCH_STACK_QUERY) : null;
+  restack(stackQuery?.matches ?? false);
+  if (stackQuery) {
+    const onStackChange = (event: MediaQueryListEvent): void => restack(event.matches);
+    stackQuery.addEventListener('change', onStackChange);
+    cleanups.push(() => stackQuery.removeEventListener('change', onStackChange));
+  }
+
   return {
     regions: {
       stage: stageHost,
@@ -612,6 +718,12 @@ export function createShell(
       if (index < 0) return;
       const viz = vizList[index];
       if (!viz) return;
+
+      // The confirmation is a 2 s timer on a shell that is never destroyed, and
+      // the permalink under it is about to be rewritten. Left running it would
+      // read "Copied" beside the new route's link while the old one is on the
+      // clipboard — vouching for a link that sends the reader somewhere else.
+      restoreCopy();
 
       activeIndex = index;
       activeViz = viz;
@@ -645,6 +757,11 @@ export function createShell(
       if (tab && typeof tab.scrollIntoView === 'function') {
         tab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
       }
+    },
+
+    focusActiveTab() {
+      const tab = tabs[activeIndex];
+      if (tab && typeof tab.focus === 'function') tab.focus();
     },
 
     setPermalink(hash) {

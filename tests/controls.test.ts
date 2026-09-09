@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mapLogPosition, unmapLogPosition } from '../src/ui/controls';
+import {
+  intEntry,
+  logPositionFor,
+  logPositions,
+  logValueFor,
+  mapLogPosition,
+  nudgeLogValue,
+  snapToStep,
+  unmapLogPosition,
+} from '../src/ui/controls';
 
 /**
  * The log fader's mapping. It is the only part of the control rail that is
@@ -18,6 +27,13 @@ const RANGES: ReadonlyArray<readonly [number, number]> = [
   [1, 2000], // drop rate
   [0.5, 8], // a speed-like span under 2 decades
   [1e-3, 1e3], // a symmetric six-decade span
+];
+
+/** Every log fader in the registry, as `[label, min, max, step]`. */
+const LOG_SPECS: ReadonlyArray<readonly [string, number, number, number]> = [
+  ['galton balls', 1, 20_000, 1],
+  ['buffon dropRate', 1, 2000, 1],
+  ['buffon maxDrops', 100, 200_000, 100],
 ];
 
 describe('mapLogPosition', () => {
@@ -132,5 +148,202 @@ describe('linear fallback', () => {
     expect(mapLogPosition(0.5, 4, 4)).toBe(4);
     expect(unmapLogPosition(4, 4, 4)).toBe(0);
     expect(Number.isFinite(unmapLogPosition(9, 4, 4))).toBe(true);
+  });
+});
+
+/**
+ * The position grid, and the reason it is not the value grid.
+ *
+ * A fader mounted at 2,000 whose thumb decodes to 1,990 is a trap: grabbing it
+ * and letting go where it was, or pressing an arrow and pressing it back, spends
+ * a parameter change and — on a structural parameter — the reader's whole run.
+ * So every value the parameter can take has to be a position the thumb can hold.
+ */
+describe('logPositions', () => {
+  it('never goes below the notch count, whatever the range', () => {
+    for (const [min, max] of RANGES) expect(logPositions(min, max, 1)).toBeGreaterThanOrEqual(1000);
+    expect(logPositions(0, 10, 1)).toBe(1000);
+    expect(logPositions(5, 5, 1)).toBe(1000);
+    expect(logPositions(1, 10, 0)).toBe(1000);
+  });
+
+  it('is finer for a range whose values are finer', () => {
+    // Same span, a hundredth of the step: a hundred times the positions.
+    const coarse = logPositions(1, 20_000, 100);
+    expect(logPositions(1, 20_000, 1) / coarse).toBeCloseTo(100, 0);
+  });
+});
+
+describe('mount round trip', () => {
+  it('decodes every representable value back to itself', () => {
+    for (const [label, min, max, step] of LOG_SPECS) {
+      const off: number[] = [];
+      for (let v = min; v <= max; v += step) {
+        if (logValueFor(logPositionFor(v, min, max, step), min, max, step) !== v) off.push(v);
+      }
+      expect({ [label]: off.slice(0, 8) }).toEqual({ [label]: [] });
+    }
+  });
+
+  it('holds at the shipped defaults and Story presets', () => {
+    // These are the values a cold load and every preset chip mount at; 2,000 was
+    // the one that decoded to 1,990 and rewrote the URL on the first touch.
+    const mounted = (v: number, min: number, max: number, step: number): number =>
+      logValueFor(logPositionFor(v, min, max, step), min, max, step);
+    for (const v of [2000, 5000, 10_000, 20_000]) expect(mounted(v, 1, 20_000, 1)).toBe(v);
+    expect(mounted(120, 1, 2000, 1)).toBe(120);
+    for (const v of [200, 20_000, 200_000]) expect(mounted(v, 100, 200_000, 100)).toBe(v);
+  });
+
+  it('keeps the ends on the ends', () => {
+    for (const [, min, max, step] of LOG_SPECS) {
+      expect(logPositionFor(min, min, max, step)).toBe(0);
+      expect(logPositionFor(max, min, max, step)).toBe(logPositions(min, max, step));
+      expect(logValueFor(0, min, max, step)).toBe(min);
+      expect(logValueFor(logPositions(min, max, step), min, max, step)).toBe(max);
+    }
+  });
+
+  it('decodes positions in order', () => {
+    for (const [, min, max, step] of LOG_SPECS) {
+      const positions = logPositions(min, max, step);
+      let previous = min;
+      for (let p = 0; p <= positions; p += Math.ceil(positions / 5000)) {
+        const value = logValueFor(p, min, max, step);
+        expect(value).toBeGreaterThanOrEqual(previous);
+        expect(value).toBeLessThanOrEqual(max);
+        previous = value;
+      }
+    }
+  });
+});
+
+describe('nudgeLogValue', () => {
+  it('moves on every press, all the way up and all the way down', () => {
+    // The bug this replaces: the first 41 ArrowRight presses on Galton's ball
+    // count all decoded back to 1, so the fader looked broken and each dead
+    // press still reset the simulation.
+    for (const [, min, max, step] of LOG_SPECS) {
+      let value = min;
+      let presses = 0;
+      while (value < max) {
+        const next = nudgeLogValue(value, min, max, step, 1);
+        expect(next).toBeGreaterThanOrEqual(value + step);
+        expect(next).toBeLessThanOrEqual(max);
+        value = next;
+        presses += 1;
+        expect(presses).toBeLessThan(2000);
+      }
+      while (value > min) {
+        const next = nudgeLogValue(value, min, max, step, -1);
+        expect(next).toBeLessThanOrEqual(value - step);
+        expect(next).toBeGreaterThanOrEqual(min);
+        value = next;
+        presses += 1;
+        expect(presses).toBeLessThan(4000);
+      }
+    }
+  });
+
+  it('steps by one where a notch is finer than the step', () => {
+    expect(nudgeLogValue(1, 1, 20_000, 1, 1)).toBe(2);
+    expect(nudgeLogValue(2, 1, 20_000, 1, -1)).toBe(1);
+    expect(nudgeLogValue(100, 100, 200_000, 100, 1)).toBe(200);
+  });
+
+  it('moves by a ratio where the notch is the coarser of the two', () => {
+    // A notch is (max/min)^(1/1000) — a shade under 1% over Galton's range.
+    const up = nudgeLogValue(10_000, 1, 20_000, 1, 1);
+    expect(up / 10_000).toBeCloseTo((20_000 / 1) ** (1 / 1000), 3);
+  });
+
+  it('comes back to where it started', () => {
+    for (const [, min, max, step] of LOG_SPECS) {
+      for (let v = min; v <= max; v += step * Math.ceil((max - min) / step / 500)) {
+        const there = nudgeLogValue(v, min, max, step, 1);
+        if (there === max) continue; // pushed against the stop, which does not move
+        expect(nudgeLogValue(there, min, max, step, -1)).toBe(v);
+      }
+    }
+  });
+
+  it('holds still at the ends', () => {
+    for (const [, min, max, step] of LOG_SPECS) {
+      expect(nudgeLogValue(max, min, max, step, 1)).toBe(max);
+      expect(nudgeLogValue(min, min, max, step, -1)).toBe(min);
+    }
+  });
+
+  it('pages by a tenth of the travel without ever standing still', () => {
+    // Page keys are handled here too: the browser's own big step is a fraction
+    // of the position range, and the position range is now far finer than the
+    // value range, so at the bottom of a fader it would move nothing.
+    for (const [, min, max, step] of LOG_SPECS) {
+      let value = min;
+      let presses = 0;
+      while (value < max) {
+        const next = nudgeLogValue(value, min, max, step, 100);
+        expect(next).toBeGreaterThan(value);
+        value = next;
+        presses += 1;
+        expect(presses).toBeLessThanOrEqual(15);
+      }
+      expect(presses).toBeGreaterThanOrEqual(10);
+    }
+  });
+});
+
+describe('snapToStep', () => {
+  it('clamps to the ends and lands on the step', () => {
+    expect(snapToStep(1234.7, 1, 20_000, 1)).toBe(1235);
+    expect(snapToStep(-5, 1, 20_000, 1)).toBe(1);
+    expect(snapToStep(1e9, 1, 20_000, 1)).toBe(20_000);
+    expect(snapToStep(20_050, 100, 200_000, 100)).toBe(20_100);
+  });
+
+  it('rounds the binary noise back out of a fractional step', () => {
+    expect(snapToStep(0.1 + 0.2, 0, 1, 0.01)).toBe(0.3);
+    expect(snapToStep(0.3333, 0, 1, 0.01)).toBe(0.33);
+  });
+
+  it('passes a non-finite reading through as the minimum', () => {
+    expect(snapToStep(Number.NaN, 3, 20, 1)).toBe(3);
+  });
+});
+
+/**
+ * The int row's entry rules. Both of these cost the reader a finished run: the
+ * stepper keys stay enabled at the ends by design, and a cleared field is the
+ * middle of select-all-then-retype, not a request for the minimum.
+ */
+describe('intEntry', () => {
+  it('reports nothing when a key at its own limit changes nothing', () => {
+    expect(intEntry(21, 20, 3, 20)).toBeNull();
+    expect(intEntry(2, 3, 3, 20)).toBeNull();
+    expect(intEntry(161, 160, 24, 160)).toBeNull();
+    expect(intEntry(23, 24, 24, 160)).toBeNull();
+  });
+
+  it('reports nothing for a number typed past the end it is already at', () => {
+    expect(intEntry('999', 20, 3, 20)).toBeNull();
+    expect(intEntry('-4', 3, 3, 20)).toBeNull();
+  });
+
+  it('restores rather than collapsing when the field is cleared', () => {
+    expect(intEntry('', 12, 3, 20)).toBeNull();
+    expect(intEntry('   ', 12, 3, 20)).toBeNull();
+    expect(intEntry('twelve', 12, 3, 20)).toBeNull();
+  });
+
+  it('clamps a reachable entry and reports it', () => {
+    expect(intEntry('999', 12, 3, 20)).toBe(20);
+    expect(intEntry(-4, 12, 3, 20)).toBe(3);
+    expect(intEntry('15', 12, 3, 20)).toBe(15);
+    expect(intEntry(13, 12, 3, 20)).toBe(13);
+  });
+
+  it('rounds a fractional entry to the lattice', () => {
+    expect(intEntry('7.6', 12, 3, 20)).toBe(8);
+    expect(intEntry('12.4', 12, 3, 20)).toBeNull();
   });
 });

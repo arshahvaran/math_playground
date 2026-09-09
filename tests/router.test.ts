@@ -144,8 +144,18 @@ describe('coerceParams', () => {
     expect(coerceParams(specs, { rows: '2.4' })['rows']).toBe(3);
   });
 
-  it('does not snap range values to the step, only clamps', () => {
-    expect(coerceParams(specs, { p: '0.333' })['p']).toBe(0.333);
+  it('snaps range values to the step precision, the same rounding serializeParams applies', () => {
+    expect(coerceParams(specs, { p: '0.333' })['p']).toBe(0.33);
+    expect(coerceParams(specs, { p: '0.3333' })['p']).toBe(0.33);
+    expect(coerceParams(specs, { p: '0.336' })['p']).toBe(0.34);
+    expect(coerceParams(specs, { rate: '1234.7' })['rate']).toBe(1235);
+  });
+
+  it('snaps before clamping, so a value just outside the range lands on the bound', () => {
+    // roundToStep(0.4, step 1) is 0, below `rate`'s minimum of 1.
+    expect(coerceParams(specs, { rate: '0.4' })['rate']).toBe(1);
+    expect(coerceParams(specs, { p: '1.004' })['p']).toBe(1);
+    expect(coerceParams(specs, { p: '-0.4' })['p']).toBe(0);
   });
 
   it('accepts true/1 and false/0 for toggles, case-insensitively', () => {
@@ -228,6 +238,25 @@ describe('serializeParams', () => {
     const back = parseHash(hash);
     expect(back.id).toBe('galton');
     expect(coerceParams(specs, back.params)).toEqual(values);
+  });
+
+  it('advertises the run that is actually in force, for an off-step hand-typed link', () => {
+    // The permalink the page rewrites itself to must open the same experiment:
+    // p=0.3333 running while the bar, the caption and the copied link say 0.33
+    // is a different distribution from the one the sender is looking at.
+    const values = coerceParams(specs, { p: '0.3333', rate: '1234.7', rows: '12.6', seed: '-1' });
+    const advertised = serializeParams(specs, values);
+    expect(advertised).toEqual({ rows: '13', p: '0.33', rate: '1235', seed: '4294967295' });
+    expect(coerceParams(specs, advertised)).toEqual(values);
+  });
+
+  it('is idempotent over the whole range: coerce -> serialize -> coerce is a fixed point', () => {
+    const base = coerceParams(specs, {});
+    for (let i = 0; i <= 199; i++) {
+      // i/199 misses the 0.01 grid almost everywhere.
+      const values = { ...base, p: coerceParams(specs, { p: String(i / 199) })['p'] as number };
+      expect(coerceParams(specs, serializeParams(specs, values))).toEqual(values);
+    }
   });
 
   it('round-trips a drifted float without growing the URL', () => {
@@ -333,7 +362,7 @@ describe('createRouter (headless)', () => {
     router.destroy();
   });
 
-  it('navigate() discards a pending rewrite instead of letting it clobber the new route', () => {
+  it('navigate() leaves no pending rewrite behind to clobber the new route', () => {
     const router = createRouter();
     router.navigate('galton');
     router.replaceParams({ p: 0.7 });
@@ -355,5 +384,140 @@ describe('createRouter (headless)', () => {
     expect(vi.getTimerCount()).toBe(0);
     router.navigate('buffon');
     expect(seen).toHaveLength(1);
+  });
+});
+
+/**
+ * A fake `window` with the browser's real event timing: `location.hash` is
+ * written synchronously, `hashchange` is delivered as a queued task afterwards.
+ * That gap is what the tests below are about, and the in-memory source cannot
+ * model it — its push notifies inline, so the race can never open.
+ */
+function fakeWindow() {
+  let hash = '';
+  const listeners = new Set<() => void>();
+  const queued: Array<() => void> = [];
+  /** Every fragment written through `history.replaceState`, in order. */
+  const replaced: string[] = [];
+  return {
+    location: {
+      get hash(): string {
+        return hash;
+      },
+      set hash(next: string) {
+        if (next === hash) return;
+        hash = next;
+        for (const l of listeners) queued.push(l);
+      },
+    },
+    history: {
+      state: null,
+      replaceState(_state: unknown, _title: string, url: string): void {
+        hash = url;
+        replaced.push(url);
+      },
+    },
+    addEventListener(type: string, cb: () => void): void {
+      if (type === 'hashchange') listeners.add(cb);
+    },
+    removeEventListener(type: string, cb: () => void): void {
+      if (type === 'hashchange') listeners.delete(cb);
+    },
+    /** Run the queued hashchange tasks, as the event loop eventually would. */
+    deliver(): void {
+      for (const l of queued.splice(0)) l();
+    },
+    replaced,
+  };
+}
+
+/**
+ * The browser binding, where a hash navigation and a debounced rewrite can
+ * overlap. Everything here turns on `hashchange` arriving after the fragment
+ * has already changed.
+ */
+describe('createRouter (browser source)', () => {
+  let w: ReturnType<typeof fakeWindow>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    w = fakeWindow();
+    vi.stubGlobal('window', w);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('writes the debounced rewrite to the address bar when nothing moved under it', () => {
+    const router = createRouter();
+    router.navigate('galton');
+    w.deliver();
+
+    router.replaceParams({ p: 0.7 });
+    expect(w.location.hash).toBe('#/galton');
+
+    vi.advanceTimersByTime(150);
+    expect(w.replaced).toEqual(['#/galton?p=0.7']);
+    expect(w.location.hash).toBe('#/galton?p=0.7');
+    router.destroy();
+  });
+
+  it('abandons the debounced rewrite when a hash navigation lands inside the window', () => {
+    const router = createRouter();
+    const routes: Route[] = [];
+    router.subscribe((r) => routes.push(r));
+    router.navigate('buffon');
+    w.deliver();
+
+    router.replaceParams({ ratio: 0.55 }); // arms the 150 ms debounce
+    // The masthead wordmark, a pasted link, Back: the bar changes now, the
+    // hashchange task runs later.
+    w.location.hash = '#/galton';
+    vi.advanceTimersByTime(150);
+
+    // The stale rewrite must not put the old fragment back — nor mark it seen,
+    // which would make the pending hashchange a no-op and strand the app.
+    expect(w.replaced).toEqual([]);
+    expect(w.location.hash).toBe('#/galton');
+
+    w.deliver();
+    expect(router.route).toEqual({ id: 'galton', params: {} });
+    expect(routes.at(-1)).toEqual({ id: 'galton', params: {} });
+    router.destroy();
+  });
+
+  it('navigate() lands the pending write on the entry it leaves, so Back keeps the edit', () => {
+    const router = createRouter();
+    router.navigate('galton');
+    w.deliver();
+
+    router.replaceParams({ p: 0.77 });
+    vi.advanceTimersByTime(40); // still inside the debounce
+    router.navigate('buffon');
+
+    expect(w.replaced).toEqual(['#/galton?p=0.77']);
+    expect(w.location.hash).toBe('#/buffon');
+    expect(router.route).toEqual({ id: 'buffon', params: {} });
+
+    vi.runAllTimers();
+    expect(w.location.hash).toBe('#/buffon');
+    router.destroy();
+  });
+
+  it('navigate() still abandons a pending write whose fragment already moved', () => {
+    const router = createRouter();
+    router.navigate('galton');
+    w.deliver();
+
+    router.replaceParams({ p: 0.77 });
+    w.location.hash = '#/buffon'; // hashchange queued, not yet delivered
+    router.navigate('mandelbrot');
+
+    expect(w.replaced).toEqual([]);
+    expect(w.location.hash).toBe('#/mandelbrot');
+    expect(router.route).toEqual({ id: 'mandelbrot', params: {} });
+    router.destroy();
   });
 });

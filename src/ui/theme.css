@@ -2768,9 +2768,24 @@ input.window:disabled {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  /* Transport becomes a floating bottom deck. */
+  /* Transport becomes a floating bottom deck. The end of the page has to clear
+     the deck's whole footprint — its height, its 8 px inset AND the home
+     indicator it sits above — or the last control cannot be scrolled out from
+     under it. */
   body {
-    padding-bottom: calc(var(--deck-h) + var(--s-6));
+    padding-bottom: calc(var(--deck-h) + var(--s-6) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The deck is out of flow and opaque, so a control the browser has just
+     brought into view can land underneath it: `nearest` alignment stops at the
+     scrollport edge and the focus ring is then painted over by 64 px of
+     --surface-raised, which is WCAG 2.4.11 Focus Not Obscured. scroll-padding
+     lifts the scrollport's viewing region clear of the deck; the root is the
+     page's scroll container at this width, since .rail__panel is `display:
+     contents` below 1024 px. --s-4 is the deck's own 8 px inset plus 8 px, so
+     the 2 px ring at its 2 px offset clears the deck edge too. */
+  html {
+    scroll-padding-bottom: calc(var(--deck-h) + var(--s-4) + env(safe-area-inset-bottom, 0px));
   }
 
   .transport {

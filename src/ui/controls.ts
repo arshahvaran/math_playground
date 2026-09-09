@@ -9,14 +9,21 @@
  * Two things are worth knowing before reading:
  *
  * - A log fader does not slide over its own values. Its `<input type="range">`
- *   runs over `LOG_POSITIONS` integer positions and the value is computed from
- *   the position, because a range input distributes its steps uniformly and a
- *   1 → 200,000 parameter spends 199,900 of its 200,000 steps in the last
- *   decade otherwise.
+ *   runs over integer positions and the value is computed from the position,
+ *   because a range input distributes its steps uniformly and a 1 → 200,000
+ *   parameter spends 199,900 of its 200,000 steps in the last decade otherwise.
+ *   The position grid is deliberately *finer* than the value grid, so travel
+ *   and keyboard travel are two different units — see `logPositions`.
  * - An `int` row carries both a fader and the stepper from DESIGN §5. §1 is
  *   explicit that *every* quantity a person can turn is a fader with an engraved
  *   scale, and the stepper is that fader's numeric mirror — the exact value, and
  *   ±1 for a reader who cannot land a 22 px thumb on row 13 of 20.
+ *
+ * Every row commits through a guard: a control that clamps its way back to the
+ * value already in force must not report a change. `onChange` on a structural
+ * parameter tears the simulation down and rebuilds it, so a stepper key at its
+ * own limit, or a drag that lands on the value it started from, would otherwise
+ * throw the reader's run away while nothing on screen moved.
  */
 
 import type { ParamSpec, ParamValue, ParamValues, Prose } from '../core/types';
@@ -31,17 +38,21 @@ export interface ControlsHandle {
 }
 
 /**
- * Slider positions on a log fader. 1000 gives about three positions per percent
- * of a decade over the widest range in the registry (1 → 200,000), which is
- * finer than the thumb can be placed at any realistic rail width.
+ * Notches of travel on a log fader: the unit one arrow press moves, and the
+ * grain the thumb is drawn against. 1000 over the widest range in the registry
+ * (1 → 200,000) is about a percent of a decade per notch, which is finer than
+ * the thumb can be placed at any realistic rail width.
  */
-const LOG_POSITIONS = 1000;
+const LOG_NOTCHES = 1000;
+
+/** A slider with more positions than this is an attribute nobody benefits from. */
+const MAX_LOG_POSITIONS = 1_000_000;
 
 /** Above this many steps the engraved minor graduations would be a solid bar. */
 const MAX_ENGRAVED_TICKS = 20;
 
 // ---------------------------------------------------------------------------
-// Log mapping — pure, and the only part of this file a test can reach
+// The value grid — pure, and the part of this file a test can reach
 // ---------------------------------------------------------------------------
 
 /**
@@ -74,6 +85,94 @@ export function unmapLogPosition(value: number, min: number, max: number): numbe
     return span === 0 ? 0 : clamp01((value - min) / span);
   }
   return clamp01(Math.log(value / min) / Math.log(max / min));
+}
+
+/**
+ * How many integer positions a log fader's slider runs over.
+ *
+ * The thumb has to be able to land on the value it was mounted with: a fader
+ * opening at 2,000 whose position decodes to 1,990 turns a drag that ends where
+ * it began — or a single arrow press — into a parameter change and a lost run.
+ * Rounding a value to the nearest position costs at most half a position, a
+ * relative error of `ln(max/min) / 2N`, and at the top of the range that has to
+ * stay under half a step: `N > max·ln(max/min)/step`. The factor of two is
+ * margin. Galton's 1 → 20,000 balls asks for ~400,000 positions, which costs
+ * nothing — the keyboard walks the value grid (`LOG_NOTCHES`), not this one.
+ */
+export function logPositions(min: number, max: number, step: number): number {
+  if (!(min > 0) || !(max > min) || !(step > 0)) return LOG_NOTCHES;
+  const needed = Math.ceil((2 * max * Math.log(max / min)) / step);
+  return Math.min(MAX_LOG_POSITIONS, Math.max(LOG_NOTCHES, needed));
+}
+
+/**
+ * A value on the grid the parameter actually takes: on `step`, inside the ends,
+ * and rounded back out of the binary noise snapping accumulates — the number is
+ * about to be printed, compared against a default and put in a URL.
+ */
+export function snapToStep(value: number, min: number, max: number, step: number): number {
+  return quantize(value, min, max, step, decimalsForStep(step));
+}
+
+/** Log fader: value → the integer slider position that decodes back to it. */
+export function logPositionFor(value: number, min: number, max: number, step: number): number {
+  return Math.round(unmapLogPosition(value, min, max) * logPositions(min, max, step));
+}
+
+/**
+ * Log fader: integer slider position → value. The step is honoured after the
+ * mapping, never before — the position is uniform, the value it lands on is not.
+ */
+export function logValueFor(position: number, min: number, max: number, step: number): number {
+  const positions = logPositions(min, max, step);
+  return snapToStep(mapLogPosition(position / positions, min, max), min, max, step);
+}
+
+/**
+ * The value `notches` of travel from `value` — what one arrow press moves.
+ *
+ * A notch is a constant ratio, because that is the fader's whole claim, but over
+ * the lower decades a notch is finer than the parameter's own step: 41 arrow
+ * presses in a row land back on 1 ball. So a notch that does not move the value
+ * falls back to one step, and the result differs from `value` except at the end
+ * it is being pushed against.
+ */
+export function nudgeLogValue(
+  value: number,
+  min: number,
+  max: number,
+  step: number,
+  notches: number,
+): number {
+  const ratio = min > 0 && max > min ? (max / min) ** (notches / LOG_NOTCHES) : 1;
+  const moved = snapToStep(value * ratio, min, max, step);
+  return moved === value ? snapToStep(value + Math.sign(notches) * step, min, max, step) : moved;
+}
+
+/**
+ * What an int row makes of an entry — a typed number, a stepper key, a fader
+ * position. `null` means "put the value already in force back on screen and
+ * report nothing".
+ *
+ * Two entries resolve to nothing. A cleared field is not a zero: select-all-then-
+ * retype passes through `""`, and a blur in that gap must leave the parameter
+ * alone rather than collapse the board to its minimum. And a key at its own
+ * limit, or a number typed past it, clamps to the value already in force — the
+ * stepper keys deliberately stay enabled at the ends, so this is reachable on
+ * the first click, and `onChange` on a structural parameter costs the run.
+ */
+export function intEntry(
+  raw: string | number,
+  current: number,
+  min: number,
+  max: number,
+): number | null {
+  const text = typeof raw === 'string' ? raw.trim() : raw;
+  if (text === '') return null;
+  const typed = Number(text);
+  if (!Number.isFinite(typed)) return null;
+  const value = clampInt(typed, min, max);
+  return value === current ? null : value;
 }
 
 /** NaN maps to 0: every comparison against it is false, which is the intent here. */
@@ -169,6 +268,7 @@ function rangeRow(
   const helpId = spec.help ? `${id}-help` : undefined;
   const decimals = decimalsForStep(spec.step);
   const isLog = spec.log === true && spec.min > 0 && spec.max > spec.min;
+  const positions = isLog ? logPositions(spec.min, spec.max, spec.step) : 0;
 
   const valueText = document.createTextNode('');
   const output = h(
@@ -183,13 +283,13 @@ function rangeRow(
     id,
     type: 'range',
     min: isLog ? 0 : spec.min,
-    max: isLog ? LOG_POSITIONS : spec.max,
+    max: isLog ? positions : spec.max,
     step: isLog ? 1 : spec.step,
     'aria-describedby': helpId,
   });
 
-  // A log fader's own value is a position — 630 of 1000 — so the number it
-  // stands for has to be published, or the slider announces nothing meaningful.
+  // A log fader's own value is a position — 304,036 of 396,140 — so the number
+  // it stands for has to be published, or the slider announces nothing at all.
   // A unit is announced for the same reason: the window shows it, the input does
   // not carry it.
   const publish = (value: number): void => {
@@ -199,24 +299,45 @@ function rangeRow(
     }
   };
 
+  const snap = (value: number): number => snapToStep(value, spec.min, spec.max, spec.step);
+
   const positionFor = (value: number): number =>
-    isLog ? Math.round(unmapLogPosition(value, spec.min, spec.max) * LOG_POSITIONS) : value;
+    isLog ? logPositionFor(value, spec.min, spec.max, spec.step) : value;
 
   const valueFor = (position: number): number =>
-    isLog
-      ? quantize(mapLogPosition(position / LOG_POSITIONS, spec.min, spec.max), spec.min, spec.max, spec.step, decimals)
-      : quantize(position, spec.min, spec.max, spec.step, decimals);
+    isLog ? logValueFor(position, spec.min, spec.max, spec.step) : snap(position);
 
-  input.value = String(positionFor(initial));
-  publish(initial);
+  let current = snap(initial);
+  input.value = String(positionFor(current));
+  publish(current);
 
-  input.addEventListener('input', () => {
-    // The step is honoured after the log mapping, never before: the position is
-    // uniform, the value it lands on is not.
-    const value = valueFor(input.valueAsNumber);
+  const commit = (value: number): void => {
+    // Most positions of a log fader decode to the value already in force — that
+    // is the price of a position grid fine enough to land on every value — and
+    // a change reported from one of them resets the run.
+    if (value === current) return;
+    current = value;
     publish(value);
     onChange(spec.key, value);
-  });
+  };
+
+  input.addEventListener('input', () => commit(valueFor(input.valueAsNumber)));
+
+  if (isLog) {
+    // The browser's own arrow moves one position, which over the lower decades
+    // is no movement at all: 41 presses to get Galton's ball count off 1. A
+    // press moves one notch of travel, or one step, whichever actually lands on
+    // a different value.
+    input.addEventListener('keydown', (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const notches = nudgeNotches(event.key);
+      if (notches === 0) return;
+      event.preventDefault();
+      const next = nudgeLogValue(current, spec.min, spec.max, spec.step, notches);
+      input.value = String(positionFor(next));
+      commit(next);
+    });
+  }
 
   const row = h(
     'div',
@@ -239,11 +360,33 @@ function rangeRow(
   return {
     row,
     set(value) {
-      const n = quantize(asNumber(value, initial), spec.min, spec.max, spec.step, decimals);
-      input.value = String(positionFor(n));
-      publish(n);
+      current = snap(asNumber(value, current));
+      input.value = String(positionFor(current));
+      publish(current);
     },
   };
+}
+
+/**
+ * Arrows move a notch, Page keys a tenth of the travel. Both are handled here
+ * rather than left to the browser because a log fader's positions are finer
+ * than its values; Home and End are not, because the ends are exact positions.
+ */
+function nudgeNotches(key: string): number {
+  switch (key) {
+    case 'ArrowRight':
+    case 'ArrowUp':
+      return 1;
+    case 'ArrowLeft':
+    case 'ArrowDown':
+      return -1;
+    case 'PageUp':
+      return LOG_NOTCHES / 10;
+    case 'PageDown':
+      return -LOG_NOTCHES / 10;
+    default:
+      return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,25 +426,41 @@ function intRow(
     'aria-describedby': helpId,
   });
 
+  let current = clampInt(initial, spec.min, spec.max);
+
   const show = (value: number): void => {
     field.value = String(value);
     fader.value = String(value);
+    // The window carries no unit — the stepper is a three-column group with no
+    // room for one — so the fader announces it and the scale is engraved with
+    // it below. Without this the row is the only place the quantity appears
+    // unitless, while the caption under the plate reads "Line spacing 64px".
+    if (spec.unit !== undefined) fader.setAttribute('aria-valuetext', `${value} ${spec.unit}`);
   };
 
-  const commit = (raw: number): void => {
-    const value = clampInt(raw, spec.min, spec.max);
+  const commit = (raw: string | number): void => {
+    const value = intEntry(raw, current, spec.min, spec.max);
+    if (value === null) {
+      // Nothing to report — but the entry may still be on screen ("", or a
+      // number past the end), so the row is put back to the value in force.
+      show(current);
+      return;
+    }
+    current = value;
     show(value);
     onChange(spec.key, value);
   };
 
   // The number field commits on `change`, not `input`: mid-typing, "1" on the
   // way to "12" is a legal number and clamping it would fight the typist.
-  field.addEventListener('change', () => commit(Number(field.value)));
+  field.addEventListener('change', () => commit(field.value));
   fader.addEventListener('input', () => commit(fader.valueAsNumber));
 
   // The keys never go `disabled` at the ends. `.control:has(:disabled)` mutes
   // the whole row, so a board sitting at its maximum would read as switched off.
-  const stepBy = (delta: number) => () => commit(Number(field.value) + delta);
+  // They step from the committed value, not the field text, which may be a
+  // half-typed number or nothing at all.
+  const stepBy = (delta: number) => () => commit(current + delta);
 
   const stepper = h(
     'div',
@@ -319,7 +478,7 @@ function intRow(
     ),
   );
 
-  show(clampInt(initial, spec.min, spec.max));
+  show(current);
   engrave(fader, spec.min, spec.max, 1);
 
   const row = h(
@@ -328,14 +487,15 @@ function intRow(
     h('label', { class: 'control__label', for: id }, spec.label),
     stepper,
     fader,
-    scale(spec.min, spec.max, 0),
+    scale(spec.min, spec.max, 0, spec.unit),
     help(spec.help, helpId),
   );
 
   return {
     row,
     set(value) {
-      show(clampInt(asNumber(value, initial), spec.min, spec.max));
+      current = clampInt(asNumber(value, current), spec.min, spec.max);
+      show(current);
     },
   };
 }
@@ -483,12 +643,18 @@ function help(text: Prose | undefined, id: string | undefined): HTMLElement | nu
   return h('p', { class: 'control__help', id }, ...prose(text));
 }
 
-function scale(min: number, max: number, decimals: number): HTMLElement {
+/**
+ * The engraved ends. A row whose value window cannot carry the unit — the int
+ * row's stepper — engraves it on the top of the scale instead, the way an
+ * instrument marks a dial once at its end.
+ */
+function scale(min: number, max: number, decimals: number, unit?: string): HTMLElement {
+  const top = endLabel(max, decimals);
   return h(
     'div',
     { class: 'control__scale', 'aria-hidden': 'true' },
     h('span', { class: 'control__min' }, endLabel(min, decimals)),
-    h('span', { class: 'control__max' }, endLabel(max, decimals)),
+    h('span', { class: 'control__max' }, unit === undefined ? top : `${top} ${unit}`),
   );
 }
 

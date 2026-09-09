@@ -49,14 +49,18 @@ export function strokeWithHalo(
 }
 
 /**
- * Wait for the in-canvas label font, so the first background is painted in it.
+ * Ask for the in-canvas label font, and say when it has arrived.
  *
- * `ctx.font` fails silently: with `display=swap` a cold load draws every axis
- * numeral in the fallback (Consolas) and, because a background layer is
- * repainted only on init, resize and parameter change, they stay that way for
- * the life of the tab. §7 therefore requires awaiting this *before* the first
- * `drawBackground()` — and repainting once on `document.fonts.ready`, which is
- * the caller's job, since only the caller knows what to repaint.
+ * `ctx.font` fails silently, and canvas text never triggers a load: with
+ * `display=swap` a cold load draws every axis numeral in the fallback
+ * (Consolas) and, because a background layer is repainted only on init, resize
+ * and parameter change, they stay that way for the life of the tab. §7
+ * therefore requires *requesting* the face alongside the first
+ * `drawBackground()` and repainting when it lands — which is the caller's job,
+ * since only the caller knows what to repaint. Never awaited before that first
+ * paint: a blackholed request is a promise that never settles, and painting
+ * behind one leaves the plate blank and the ledger empty for the life of the
+ * tab. Whatever face is available is legible; the network does not gate a paint.
  *
  * Resolves immediately, and never rejects, where the API is missing (a
  * non-browser host, an old engine) or where the shorthand is one the font

@@ -14,17 +14,53 @@ import { NeedleField, crossingProbability, dropNeedle, estimatePi, piStandardErr
 /**
  * Needles kept on screen. Older ones are overwritten in place; the drop and
  * crossing counters do not forget them, so the estimate uses every drop.
+ *
+ * This is an ink budget, not a memory one, and it is what the tab is worth
+ * looking at at all: at 8,000 drops a 20,000-needle field is a solid vermilion
+ * mass with the floorboards buried under it, and the 200,000 preset is worse.
+ * 600 is the ceiling on a full-size plate — see `INK_TARGET`, which is what
+ * actually decides how many of them are painted.
  */
-const MAX_NEEDLES = 20_000;
+const MAX_NEEDLES = 600;
 
 /**
- * Alpha steps for the fade-by-angle overlay. Needles are batched into one path
- * per (crossing, level) pair, so a frame costs at most 2·ALPHA_LEVELS style
- * changes and stroke calls instead of one of each per needle. Eight steps are
- * indistinguishable from a continuous ramp at these line widths.
+ * The fraction of the plate the needles may ink.
+ *
+ * Randomly placed marks of area a on a plate of area A cover 1 − exp(−N·a/A) of
+ * it, so a target f is N = −ln(1 − f)·A/a needles. A needle inks L × 2·lineWidth
+ * px² — 102 px² at the default L = 0.8·d = 51 px — which puts f = 0.2 at about
+ * 680 needles on a 705 × 440 plate and 250 on a 343 px phone square. At that
+ * coverage the ruled lines read straight through the field and every needle's
+ * own orientation is still separable; by 0.5 neither is true.
+ *
+ * Deriving the count from the plate rather than fixing it is what keeps the
+ * picture the same weight on a phone as on a 1,280 px window, and it costs
+ * nothing: the ring still holds the needles and the counters still count them.
  */
-const ALPHA_LEVELS = 8;
-const ALPHA_MIN = 0.25;
+const INK_TARGET = 0.2;
+
+/**
+ * Weight steps for the weight-by-angle overlay. Needles are batched into one
+ * path per (crossing, level) pair, so a frame costs at most 2·WEIGHT_LEVELS
+ * style changes and stroke calls instead of one of each per needle. Eight steps
+ * are indistinguishable from a continuous ramp at these line widths.
+ */
+const WEIGHT_LEVELS = 8;
+
+/**
+ * Needle width in units of `theme.lineWidth`: the floor every needle is drawn
+ * at, and the extra the weight overlay adds at |sin θ| = 1.
+ *
+ * |sin θ| is encoded as weight rather than as opacity because opacity cannot
+ * carry it: the vermilion pen is 4.80:1 on the white plate at full strength and
+ * a translucent one composites straight through the floor — the alpha ramp this
+ * replaces bottomed out at 1.46:1, under the 3:1 SC 1.4.11 asks of a graphical
+ * object, on 44% of the needles. Every needle here keeps its pen at full
+ * strength, so the worst case is the pen's own 4.80:1 (vermilion) and 7.49:1
+ * (the muted pen for misses) whatever its angle.
+ */
+const WEIGHT_BASE = 2;
+const WEIGHT_SPREAD = 2;
 
 const DEFAULT_SEED = 42;
 
@@ -73,15 +109,15 @@ const params: readonly ParamSpec[] = [
     step: 100,
     default: 20_000,
     log: true,
-    help: 'Stop after this many drops. Only the newest 20,000 stay on screen; the counts keep going.',
+    help: `Stop after this many drops. At most ${MAX_NEEDLES} needles stay on screen; the counts keep going.`,
   },
   {
     kind: 'toggle',
     key: 'showAngle',
-    label: 'Fade by angle',
+    label: 'Weight by angle',
     default: false,
     help: [
-      'Crossing depends only on |sin ', { v: 'θ' }, '|: needles fade toward horizontal and stay solid near vertical.',
+      'Crossing depends only on |sin ', { v: 'θ' }, '|: needles thicken toward vertical and thin toward horizontal.',
     ],
   },
   {
@@ -182,6 +218,48 @@ function fontPx(font: string): number {
   return m ? Number(m[1]) : 12;
 }
 
+export interface FieldLayout {
+  /** Whole strips that fit the plate. Needles are painted only inside these. */
+  rows: number;
+  /** Top of the block of whole strips, in CSS px. */
+  originY: number;
+  /** Painted y of each of the `rows + 1` ruled lines, snapped to whole device pixels. */
+  lines: readonly number[];
+}
+
+/**
+ * Where the ruled lines land on a plate `height` px tall.
+ *
+ * Needles are painted only inside the whole strips that fit, and the block of
+ * them is centred so any leftover splits into two equal margins. (The strips
+ * also decide the sampling: a partial one at the bottom would make y mod d
+ * non-uniform there and bias the crossing fraction low — about 1.5% at 64 px
+ * spacing on a 500 px canvas, enough to make π look wrong.)
+ *
+ * A rule is drawn `lineWidth` wide about its centre, so the centre is held half
+ * that far inside the plate. Without it, a plate whose height is an exact
+ * multiple of the spacing — 448 px at d = 64, which is what a 1400 px window
+ * gives — leaves no margin at all and the closing rule is centred on the pixel
+ * row after the last one, so it simply never appears: seven floorboards drawn
+ * with seven edges instead of eight, and the bottom strip of needles reported
+ * as crossings of a line that is not on screen.
+ */
+export function layoutField(height: number, spacing: number, lineWidth: number): FieldLayout {
+  const d = Math.max(1, spacing);
+  const rows = Math.max(1, Math.floor(height / d));
+  const originY = Math.floor((height - rows * d) / 2);
+  // An odd-width line centred on a half-pixel covers whole device pixels at
+  // DPR 1; on an integer it smears across two.
+  const snap = lineWidth % 2 === 1 ? 0.5 : 0;
+  const inset = lineWidth / 2;
+  const lines: number[] = [];
+  for (let k = 0; k <= rows; k++) {
+    const y = originY + k * d + snap;
+    lines.push(Math.min(Math.max(y, inset), height - inset));
+  }
+  return { rows, originY, lines };
+}
+
 function create(ctx: VizContext): VizInstance {
   const field = new NeedleField(MAX_NEEDLES);
 
@@ -194,14 +272,10 @@ function create(ctx: VizContext): VizInstance {
   let maxDrops = 20_000;
   let showAngle = false;
 
-  // Field layout in CSS px. Centres are sampled only inside the `rows` whole
-  // strips that fit the canvas: a partial strip at the bottom would make
-  // y mod d non-uniform there and bias the crossing fraction low — about 1.5%
-  // at 64 px spacing on a 500 px canvas, enough to make π look wrong. The block
-  // of whole strips is centred so any leftover splits into two equal margins.
-  let rows = 1;
-  let fieldHeight = spacing;
-  let originY = 0;
+  // Where the ruled lines and the strips are on the current plate. Purely a
+  // painting concern: the needles themselves are stored unscaled, so this is
+  // re-derived on every resize and the field re-lays-out with it.
+  let layout: FieldLayout = layoutField(ctx.height, spacing, ctx.theme.lineWidth);
 
   // Fractional needles owed by the drop-rate accumulator between ticks.
   let pending = 0;
@@ -216,9 +290,7 @@ function create(ctx: VizContext): VizInstance {
     spacing = Math.max(1, Math.round(num(ctx.params, 'spacing', 64)));
     const ratio = Math.min(1, Math.max(0.01, num(ctx.params, 'ratio', 0.8)));
     length = ratio * spacing;
-    rows = Math.max(1, Math.floor(ctx.height / spacing));
-    fieldHeight = rows * spacing;
-    originY = Math.floor((ctx.height - fieldHeight) / 2);
+    layout = layoutField(ctx.height, spacing, ctx.theme.lineWidth);
   }
 
   function readouts(): Readout[] {
@@ -263,7 +335,7 @@ function create(ctx: VizContext): VizInstance {
       // exactly four rng draws, so the needle sequence for a seed is the same
       // at every drop rate — only the clock differs.
       while (pending >= 1 && field.drops < maxDrops) {
-        field.push(dropNeedle(ctx.rng, ctx.width, fieldHeight, length, spacing));
+        field.push(dropNeedle(ctx.rng, length, spacing));
         pending -= 1;
       }
     },
@@ -279,12 +351,8 @@ function create(ctx: VizContext): VizInstance {
       // apparatus pen. Nothing else on this plate does.
       bg.strokeStyle = theme.grid;
       bg.lineWidth = theme.lineWidth;
-      // An odd-width line centred on a half-pixel covers whole device pixels at
-      // DPR 1; on an integer it smears across two.
-      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
       bg.beginPath();
-      for (let k = 0; k <= rows; k++) {
-        const y = originY + k * spacing + snap;
+      for (const y of layout.lines) {
         bg.moveTo(0, y);
         bg.lineTo(width, y);
       }
@@ -296,36 +364,54 @@ function create(ctx: VizContext): VizInstance {
       const { width, height, theme } = ctx;
       fg.clearRect(0, 0, width, height);
 
-      // One Path2D per (crossing, alpha level) bucket. Non-crossing buckets come
-      // first so crossing needles paint on top of the muted ones.
-      const paths = new Array<Path2D | undefined>(2 * ALPHA_LEVELS);
+      // One Path2D per (crossing, weight level) bucket. Non-crossing buckets
+      // come first so crossing needles paint on top of the muted ones.
+      const paths = new Array<Path2D | undefined>(2 * WEIGHT_LEVELS);
+      const { rows, originY } = layout;
       const half = length / 2;
-      const top = ALPHA_LEVELS - 1;
-      field.forEach((x, y, cos, sin, crosses) => {
+      const top = WEIGHT_LEVELS - 1;
+      // Paint the newest needles the ink budget affords and let the rest
+      // recede. `forEach` skips from the oldest end, which is the right end to
+      // drop: a needle's information is already in the counters.
+      //
+      // The mean width under the overlay is WEIGHT_BASE + WEIGHT_SPREAD·E|sin θ|,
+      // and E|sin θ| over θ ~ U[0, π) is 2/π — the same 2/π that caps the
+      // crossing probability — so the overlay inks about 1.6× as much per
+      // needle and buys correspondingly fewer of them.
+      const meanWeight = WEIGHT_BASE + (showAngle ? (WEIGHT_SPREAD * 2) / Math.PI : 0);
+      const perNeedle = Math.max(1, length * meanWeight * theme.lineWidth);
+      const affordable = Math.ceil((-Math.log(1 - INK_TARGET) * width * height) / perNeedle);
+      const skip = Math.max(0, field.count - affordable);
+      field.forEach((u, v, t, cos, sin, crosses) => {
         // The field hands back the direction it stored at push, so no needle
-        // costs a sin/cos here — 20,000 pairs a frame was a measurable slice.
+        // costs a sin/cos here — a pair each a frame was a measurable slice.
         const level = showAngle ? Math.round(Math.abs(sin) * top) : top;
-        const b = crosses ? ALPHA_LEVELS + level : level;
+        const b = crosses ? WEIGHT_LEVELS + level : level;
         const path = paths[b] ?? (paths[b] = new Path2D());
-        const cy = originY + y;
+        // The stored draws are fractions, so the plate in front of us now — not
+        // the one the needle was dropped on — decides where it lands.
+        const x = u * width;
+        const cy = originY + (Math.floor(v * rows) + t) * spacing;
         path.moveTo(x - half * cos, cy - half * sin);
         path.lineTo(x + half * cos, cy + half * sin);
-      });
+      }, skip);
 
       // 2 px, not a hairline: the signal pen is 4.80:1 on the plate as a solid
       // 2 px mark and 2.20:1 once anti-aliasing smears it across a thinner one,
-      // which is why nothing in this system draws a 1 px line in it.
-      fg.lineWidth = 2 * theme.lineWidth;
+      // which is why nothing in this system draws a 1 px line in it. With the
+      // overlay on, that 2 px is the floor of the weight ramp rather than the
+      // whole of it; with it off, `level` is `top` for every needle and the
+      // spread is zero, so all of them are drawn at exactly the same 2 px.
       fg.lineCap = 'butt';
-      for (let b = 0; b < 2 * ALPHA_LEVELS; b++) {
+      const spread = showAngle ? WEIGHT_SPREAD : 0;
+      for (let b = 0; b < 2 * WEIGHT_LEVELS; b++) {
         const path = paths[b];
         if (!path) continue;
-        const level = b % ALPHA_LEVELS;
-        fg.globalAlpha = ALPHA_MIN + (1 - ALPHA_MIN) * (level / top);
-        fg.strokeStyle = b < ALPHA_LEVELS ? theme.inkMuted : theme.data1;
+        const level = b % WEIGHT_LEVELS;
+        fg.lineWidth = theme.lineWidth * (WEIGHT_BASE + spread * (level / top));
+        fg.strokeStyle = b < WEIGHT_LEVELS ? theme.inkMuted : theme.data1;
         fg.stroke(path);
       }
-      fg.globalAlpha = 1;
 
       // Live π in the top-right corner as a display window: an opaque plate of
       // the canvas colour with a 1 px frame, right-aligned mono, ink text. The
@@ -364,9 +450,22 @@ function create(ctx: VizContext): VizInstance {
         case 'dropRate':
           dropRate = asNumber(value, dropRate);
           return true;
-        case 'maxDrops':
-          maxDrops = asNumber(value, maxDrops);
+        case 'maxDrops': {
+          // Asymmetric, because the ceiling is not a property of the needles:
+          // a drop consumes the same four draws whatever it is, so the run on
+          // screen is the first `field.drops` of the run a fresh load at the new
+          // ceiling would produce — a true prefix — as long as the new ceiling
+          // is at least that. Raising it therefore continues the same sequence
+          // rather than restarting it. Below the drops already counted there is
+          // no reading of the ledger that is honest: it would go on reporting
+          // 20,000 drops while the control, the caption and the permalink all
+          // said 1,000, and the permalink the page advertises would show its
+          // recipient a different, shorter run. So the shell resets instead.
+          const next = asNumber(value, maxDrops);
+          if (next < field.drops) return false;
+          maxDrops = next;
           return true;
+        }
         case 'showAngle':
           showAngle = value === true;
           return true;
