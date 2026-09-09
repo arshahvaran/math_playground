@@ -8,15 +8,26 @@
       name="description"
       content="Interactive, parameter-driven visualizations of classic results in probability, chaos, and number theory."
     />
-    <!-- The faceplate colour, --surface. The dark scheme is opt-in through the
-         masthead toggle rather than prefers-color-scheme, so there is one value. -->
-    <meta name="theme-color" content="#d6ddd8" />
+    <!-- The page ground, --surface, in both schemes. theme.css declares
+         `color-scheme: light dark`, so a reader arriving from an OS in dark
+         mode gets the dark scheme on first paint and the masthead toggle still
+         wins in both directions; these two metas keep the browser chrome in
+         step with whichever one is showing. -->
+    <meta name="theme-color" content="#e8ecef" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15181b" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="/math_playground/icon.svg" type="image/svg+xml" />
 
     <!-- Archivo for words, Martian Mono for measurements. The axis ranges are
          trimmed to what theme.css actually asks for; display=swap keeps text
          visible while they load, and main.ts awaits the mono face before the
-         first canvas paint so in-canvas labels are never left in a fallback. -->
+         first canvas paint so in-canvas labels are never left in a fallback.
+
+         DO NOT TRIM THE wdth AXIS. theme.css uses Archivo's width axis as its
+         density instrument — 92% on dense labels and tab labels, 96% on the
+         visualization title, 125% on the wordmark — in place of the uppercase
+         eyebrows every dashboard reaches for. Narrow the requested range and
+         every label silently snaps to 100% with no error anywhere. The weights
+         asked for are 420/460/560/620/700, all inside 400..800. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

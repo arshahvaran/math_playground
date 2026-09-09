@@ -1,4 +1,4 @@
-# Design system — Plotter Bench
+# Design system — Linen Bench
 
 The visual system for Math Playground. It is written so that every screen can be
 built from it without a follow-up question: the tokens, the type, the layout at
@@ -7,142 +7,244 @@ the rules the canvas code must obey so the data stays legible, and the contract
 the shell must honour. `src/ui/theme.css` implements it verbatim; class names
 below are the class names there.
 
-**This is revision 2.** Revision 1 certified a system it had not built: three of
-its own canvas rules were normative in §7 and demoted to "recommended" in §8, so
-the shipped code drew exactly the failing cases they were invented to fix; and
-`body`'s `font:` shorthand silently reset `font-variant-numeric`, killing the
-tabular figures the whole document leans on. Everything a section states as a
-rule here is either implemented in `theme.css` or listed in §8 as a **required**
-contract change that lands with this revision. Nothing in this document is a
-suggestion.
+**This is revision 3.** Nothing in this document is a suggestion; everything
+stated as a rule is either implemented in `theme.css` or listed in §8 as a
+required contract change.
 
-Contents: [Concept](#1-concept) · [Typography](#2-typography) · [Color](#3-color)
-· [Layout](#4-layout) · [Components](#5-components) · [Motion](#6-motion)
+Contents: [What changed and why](#what-changed-and-why) · [Concept](#1-concept)
+· [Typography](#2-typography) · [Color](#3-color) · [Layout](#4-layout)
+· [Components](#5-components) · [Motion](#6-motion)
 · [Canvas conventions](#7-canvas-conventions) · [Shell contract](#8-shell-contract)
 · [Accessibility conformance](#9-accessibility-conformance)
 · [Known costs](#10-known-costs) · [Do not](#11-do-not)
 
 ---
 
+## What changed and why
+
+Revision 2 was called "Plotter Bench" and it was, in the owner's words, a page
+that "looks like Windows 98". It was right about that, and its own §1 predicted
+it: depth was carried entirely by a 1.20:1 ground step and 1 px seams at ~2:1,
+every radius was zero, spacing was tight, and the primary action was a flat
+vermilion rectangle. A machined lattice of hairlines rendered as one flat grey
+slab with sharp corners — which is exactly what a 1998 control panel is.
+
+The diagnosis is not "it needed rounded corners". It is that **one device was
+being asked to do the work of four**. Revision 3 inverts that:
+
+| | Revision 2 | Revision 3 |
+|---|---|---|
+| Depth | a value step, plus 1 px seams | a hairline **ring** + a layered tinted **shadow** + a real **radius scale** + **air** |
+| Ground step, page → panel | 1.20:1 | **1.08:1** |
+| Ground step, page → plate | 1.16:1 | **1.19:1** |
+| Between panels | `gap: 1px` on `--line` | **24 px** of page ground |
+| Radius | `--radius-0: 0` everywhere | **5 / 8 / 11 / 16 / 22**, with nested-radius arithmetic |
+| Shadows | none, by rule | two regimes, warm-tinted, negative spread on every blurred layer |
+| Visible hairlines per screen | the whole lattice — ~30 | **three** |
+| Press feedback | `steps(1, start)` full ink inversion | a 90 ms wash plus a 1 px depress |
+| Motion tokens | 2 durations, 2 curves | 5 durations by scope, 4 eases by intent, 1 reserved overshoot |
+
+The grounds got **closer together** and the page reads far more layered. That is
+the whole point: Linear ships 1.02–1.06:1 steps and reads layered; revision 2
+read flat because a 1 px seam was the only device in it.
+
+### The ground
+
+`--surface` moves from `#D6DDD8` to **`#E8ECEF`** — hsl(206 20% 93%), a pale
+cold-pressed linen with real chroma. Two reasons, and both are measurable.
+
+1. `#D6DDD8` sits at Radix sage step 5, which is a **border** value being used as
+   a page. Every contemporary tool puts the page at 92–100% lightness. This is
+   the single change the owner will see first.
+2. The hue is chosen as the optical complement of the vermilion's 32°, so the one
+   signal colour reaches maximum apparent saturation against the chrome instead
+   of blending into it. A warm cream ground — the reflex answer when a design is
+   told to stop being cold and grey — would put ground and accent in the same
+   hue family, which is precisely what makes that look soft. It is also on this
+   document's own §11 do-not list.
+
+Side effect that pays for the change on its own: vermilion goes from 3.48:1 to
+**4.04:1** on the page ground, so the signal colour is easier to see, not harder,
+and it now clears 3:1 as a focus ring on every plane including the sunken trough
+(3.66:1).
+
+Shadows are tinted `rgb(23 40 54)` = hsl(207 40% 15%) — one step deeper than the
+ground and adjacent to it in hue, **never `rgb(0 0 0)`**: black layered over a
+chromatic ground desaturates it and goes dusty.
+
+### The bug the redesign had to fix
+
+`@property --err` was declared `inherits: false`. The shell writes `--err` on
+`.hero` and the stylesheet reads it on `.hero__needle`, a **descendant** — so the
+needle computed the initial value `0.5` for every reading in every tab. Dead
+centre on a null meter is the one position that means *this agrees with theory*.
+The instrument at the intellectual heart of the tool was welded to a convergence
+claim nothing had been tested for.
+
+One word — `inherits: true` — unpins it. Verified in the running app: with a real
+reading the needle now computes `--err: 0.176538` and sits well left of centre.
+Because a registered custom property is animatable, the needle also stopped
+animating `left` (which laid out every frame) and now interpolates the number
+while a `translate` moves it.
+
+### What did not change
+
+Everything on the keep list, and it is all load-bearing in the new scheme:
+Archivo for words with its width axis as a real density instrument, Martian Mono
+for every measurement, tabular figures throughout, the vermilion `#D53619`, the
+three CVD-validated pens on a white plate, the peg-row tab strip where the peg
+swells into the ball, and the Measured / Analytic / Error ledger.
+
+**The white plate never changes value in either scheme**, so §7's canvas contract
+and its CVD validation (adjacent-pair separation dE 18.7 protan, dE 24.4 normal
+vision, every pen ≥ 3:1 on the plate) carry over with nothing to re-run.
+
+---
+
 ## 1. Concept
 
-The page is a benchtop instrument. A machined, cool-grey faceplate (anodised
-aluminium, not paper) holds a bright white plotter bed. A pen plotter draws with
-a fixed rack of pens, so the data palette is literally three pens: a **vermilion
-signal pen** for whatever is live and random (the balls, the walkers, the current
-estimate), a **blue-black drafting pen** for whatever is analytic (the fitted
-Gaussian, the π line, the bifurcation envelope), and a **graphite pen** for areas
-(histogram silhouettes and their wash, envelopes).
+The page is a sheet of pale cold-pressed linen holding a white plotter bed that
+floats on layered, blue-black shadow. A pen plotter draws with a fixed rack of
+pens, so the data palette is literally three pens: a **vermilion signal pen** for
+whatever is live and random (the balls, the walkers, the current estimate), a
+**blue-black drafting pen** for whatever is analytic (the fitted Gaussian, the π
+line, the bifurcation envelope), and a **graphite pen** for areas (histogram
+silhouettes and their wash, envelopes).
 
-Every quantity a person can turn is a fader with an engraved, graduated scale.
+Every quantity a person can turn is a fader with a filled channel and a carriage.
 Every quantity the instrument measures sits in a white display window or a ruled
 ledger next to its analytic target and its error, the way a bench meter shows
 reading, reference and tolerance. That is why the language fits a mathematics
 playground: an instrument makes *measurement and convergence* the visible
 subject. "Playful" is the vermilion streaming across the bed; "rigorous" is the
-tabular numerals, the ticks, and the error column that never lies.
+tabular numerals and the error column that never lies.
 
-It is crafted and contemporary — Teenage Engineering / Braun geometry, zero
-radius, 1 px seams, one signal colour — with no bevels, glows, gradients or CRT
-kitsch. Depth comes only from three grounds stepping up in brightness and from
-the seams between them. Revision 1 made both steps too small to see (1.12:1
-grounds, 1.35:1 seams) and the bench read as one flat grey field; the ladder is
-now 1.20:1 → 1.16:1 with 2.04:1 seams, which is a visible lattice on an
-uncalibrated laptop.
+**There are exactly three elevated objects on the page**: the plate, the rail
+panel, and the fact card. The sections inside the figure column — head, caption,
+readouts, story — have no container fill, no ring and no shadow at all. They are
+ruled bands separated by 24 px of ground. This restraint is deliberate and it is
+what keeps the redesign from turning into a grid of rounded cards, which would be
+the same mistake revision 2 made with seams, in a softer coat.
 
 Four signature details carry the identity at thumbnail scale:
 
-1. **Graduated faders.** Every range slider has an engraved scale sized to the
-   thumb's real travel, a ring thumb, and a 2 × 7 px vermilion index line
-   pointing at the scale.
+1. **The filled fader.** A 14 px channel with a vermilion filled portion and a
+   20 × 12 white **carriage** riding in it, with the vermilion index line painted
+   into the carriage. The carriage is not a circle, which leaves exactly **one
+   circle in the whole system** — the Galton ball on the active tab.
 2. **Display windows, the null meter, and the ledger.** Every measured number is
-   Martian Mono, tabular, in a white 1 px-stroked zero-radius window or in a
-   booktabs-ruled ledger with Measured / Analytic / Error columns. The headline
+   Martian Mono, tabular, in a white 8 px-radius window or in a ledger with
+   Measured / Analytic / Error columns under a sunken head band. The headline
    quantity is a 40 px hero numeral beside its analytic target, over a
    **galvanometer band** whose needle rests dead centre when the reading agrees
-   with theory.
-3. **The peg-row tab strip.** Every tab carries a small peg on its bottom edge;
-   the vermilion ball rests on the active one. No pictograms, no artwork per tab.
-4. **The plotter bed.** A white plate with a 16 px margin and four 10 px
-   registration marks painted in CSS, always the brightest surface on the page.
+   with theory — and which now actually moves.
+3. **The peg-row tab strip.** A sunken trough holding pill tabs; each carries a
+   small peg on its bottom edge, and on the active tab the peg turns vermilion
+   and swells into the ball over 200 ms on `--ease-settle`. That curve — the one
+   restrained overshoot in the file — is used here and nowhere else.
+4. **The plotter bed.** A white plate with a 16 px margin, a 16 px radius, four
+   12 px registration marks painted in CSS, and a four-layer cast. Always the
+   brightest surface on the page.
 
-The null meter replaces revision 1's hero delta chip on purpose. A big number
-next to a comparison value next to a colour-coded signed delta in parentheses is
-the KPI tile of every generated dashboard with the radius zeroed; a needle that
-walks off centre as an estimate diverges is an instrument.
+The null meter replaces a hero delta chip on purpose. A big number next to a
+comparison value next to a colour-coded signed delta in parentheses is the KPI
+tile of every generated dashboard with the radius zeroed; a needle that walks off
+centre as an estimate diverges is an instrument.
 
 ---
 
 ## 2. Typography
 
 Two families, both variable, both from Google Fonts. Hierarchy comes from width
-and weight extremes (300 against 800, wdth 88 against wdth 125), not from
-400-versus-600.
+and weight, not from 400-versus-600.
 
 | Role | Family | Axes requested | Notes |
 |---|---|---|---|
 | Display and body | **Archivo** | wdth 87–125, wght 400–800, italic 400 @ wdth 100 | Every word in the interface. Never uppercase, never tracked. |
 | Numerals and measurement | **Martian Mono** | wdth 87.5–100, wght 300–500 | Every digit that is a measurement. |
 
-The axis ranges are trimmed to what the stylesheet actually asks for (revision 1
-requested Archivo wdth 62–125 / wght 400–900 and Martian Mono wdth 75–112.5 /
-wght 300–700 and used none of the extremes). See §10 for what these two files
-cost and how to remove the third-party request without changing a token.
-
 ### The `font:` shorthand is banned
 
-`font:` resets `font-variant-numeric` **and** `font-stretch` to `normal`. In
-revision 1 `body { font: 400 15px/24px … }` wiped the `:root` tabular-figures
-declaration for the whole document and thirty further rules re-wiped it locally,
-so the live-rewritten caption ("2,000 balls have fallen at 40/s, seed 42") was
-proportional-figure Archivo and jittered on every parameter change — the exact
-defect §6 claimed to prevent — and the ledger lost `slashed-zero` in every cell.
+`font:` resets `font-variant-numeric` **and** `font-stretch` to `normal`, which
+silently kills tabular figures and the width axis. Every rule in `theme.css` uses
+longhands, and `font-variant-numeric: var(--num)` is declared on `body` **after**
+the font longhands. The single surviving shorthand is the form-control reset
+`font: inherit`, immediately followed by `font-variant-numeric: inherit`.
 
-Every rule in `theme.css` uses longhands. `font-variant-numeric: var(--num)` is
-declared on `body` **after** the font longhands and repeated explicitly on every
-element that renders a digit. The single surviving shorthand is the form-control
-reset `font: inherit`, immediately followed by `font-variant-numeric: inherit`.
+`--num` is `tabular-nums lining-nums slashed-zero`.
 
-`--num` is `tabular-nums lining-nums slashed-zero`. On a monospace face
-`tabular-nums` is a no-op and `slashed-zero` renders only if the face ships a
-`zero` feature; both degrade silently, and `--num` is one token so the request
-can be changed in one place if Martian Mono turns out not to carry it.
+### The width axis is the density instrument
+
+Uppercase-plus-tracking applied uniformly to every label is both a 2015 dashboard
+tell and a generated-interface tell. It is not used anywhere. Dense labels — tab
+labels, key labels, control labels, group labels, ledger column heads — are
+sentence case at **`font-stretch: 92%`**. The visualization title is 96%; the
+wordmark is 125%; body and prose are 100%.
+
+This is the one typographic move in the system that an Inter-based interface
+literally cannot perform, and it costs nothing: `index.html` already requests
+Archivo's `wdth` axis at 87..125. **Trimming that axis range to shrink the font
+payload would silently snap every label to 100% with no error anywhere.** There
+is a comment beside the `<link>` saying so.
+
+Weights are intermediate variable values rather than 400/500/600/700:
+
+| Token | Value | Used for |
+|---|---|---|
+| `--wght-body` | 420 | body, blurb, help |
+| `--wght-ui` | 460 | UI text, tab labels, key labels, readout labels |
+| `--wght-label` | 560 | control labels, ledger column heads, "Figure n." |
+| `--wght-title` | 620 | section titles |
+| `--wght-display` | 700 | the visualization title |
 
 ### Sizes are rem
 
-`html { font-size: 15px }` is gone. It hard-coded the root against the reader's
-browser preference — a student who sets 20 px for readability still got 15 px —
-and it quietly shrank the one `rem` in the file, inside the title's `clamp()`.
-The scale is now rem against the browser default (`--t-13: 0.8125rem`,
-`--t-15: 0.9375rem`, …), as are spacing, component heights, the rail width and
-the label column, so the whole bench scales with the reader's setting. Only
-machined geometry stays in px: 1 px seams, 2 px rules, the fader's track, thumb,
-index line and graduations, the plate margin and registration marks.
+The scale is rem against the browser default, so a reader who sets a 20 px root
+gets the whole bench at 20 px. Only machined geometry stays in px: the fader's
+channel, carriage, index line and graduations, the plate margin and registration
+marks, and the sub-pixel bevel.
 
-### The rule: words in Archivo, measurements in Martian Mono
+| Token (px at a 16 px root) | Face | Weight · width | Used for |
+|---|---|---|---|
+| `--t-11` 11 / 16 | Archivo | 560 · 92 | Ledger column heads. Nothing else is this small. |
+| `--t-11` 11 / 16 | Martian Mono | 500 · 87.5 | Fader scale numerals; in-canvas labels at wdth 100 (`--canvas-label-font`) |
+| `--t-12` 12 / 18 | Martian Mono | 400 · 87.5 | Analytic column, error column, fact source, footer meta |
+| `--t-13` 13 / 20 | Archivo | 460 · 92 | Tab labels, key labels, "Copy permalink", speed picker |
+| `--t-13` 13 / 20 | Archivo | 560 · 92 | Control labels |
+| `--t-13` 13 / 20 | Martian Mono | 500 · 100 | Windows: fader values, stepper, seed, story-step numerals |
+| `--t-14` 14 / 22 | Archivo | 420 · 100 | **Control help** and readout labels — was 12 px |
+| `--t-15` 15 / 24 | Martian Mono | 500 · 100 | Ledger measured values |
+| `--t-16` 16 / 26 | Archivo | 420 · 100 | Body: blurb, story caption, sources |
+| `--t-18` 18 / 26 | Archivo | 460 · 100 | Fact text (it is the heading); wordmark at 800 · 125 |
+| `--t-20` 20 / 27 | Archivo | 620 · 100, −0.011em | Story step label, Sources title |
+| `--title-size` clamp(30, 1.2rem + 2.4vw, 42) / 1.1 | Archivo | 700 · 96, −0.021em | The visualization title |
+| `--t-hero` 40 / 44 | Martian Mono | 500 (measured) and 300 (analytic) | Hero numeral pair; 32 / 36 below 600 px |
 
-Control labels, readout labels, tab labels, keys, captions, facts and the credit
-are Archivo. Slider values, steppers, the seed, ledger cells, the hero,
-story-step numerals, scale numerals, footer meta and in-canvas labels are Martian
-Mono. A number in prose (a fact, a caption sentence) stays in Archivo and aligns
-because `font-variant-numeric` is set on `body` and on each prose class. A
-readout or slider value is never routed through the body face.
+**Help text got bigger, not smaller.** 12 → 14 px. This is a teaching tool; the
+sentence explaining what a parameter does is content, not a footnote. The fix for
+"this is secondary" is a quieter colour, never a smaller size.
 
-Variables and Greek letters (`n`, `p`, `π`, `μ`, `σ`) are set in Archivo italic
-400 wherever the shell composes text — the blurb, captions, story captions,
-facts — via the `<var>` element (or `.var`). `ParamSpec.label` and
-`Readout.label` are plain strings and stay upright.
+`clamp()` appears **exactly once** in the whole stylesheet, on the title.
+`text-wrap: balance` appears exactly once, on the same element. The prose measure
+is 68ch and applies to two elements — the blurb and the story caption — never as
+a universal wrapper. The three are deliberately not deployed as a set.
+
+### Measurements
+
+Every mono run carries `letter-spacing: var(--tracking-mono)` = **−0.04em**.
+Martian Mono is unusually wide; without this the ledger's three `ch`-reserved
+columns sprawl and force the rail wider than it needs to be.
+
+Variables and Greek letters (`n`, `p`, `π`, `μ`, `σ`) are Archivo italic 420
+through `<var>` (or `.var`) wherever the shell composes text. `ParamSpec.label`
+and `Readout.label` are plain strings and stay upright.
 
 **The minus sign.** Prose uses U+2212 in Archivo. Mono cells use U+2212 only if
-it is present and metric-compatible in Martian Mono; the shell decides once at
-startup with `ctx.measureText('−').width === ctx.measureText('0').width`
-(a missing glyph falls back to another face and measures differently) and uses
-U+002D otherwise. A fallback glyph mid-column would break the tabular alignment
-the ledger is built on, which is worse than a hyphen.
+it is metric-compatible in Martian Mono; the shell decides once at startup with
+`ctx.measureText('−').width === ctx.measureText('0').width` and uses U+002D
+otherwise.
 
 ### Link tags for `index.html`
-
-Place these in `<head>` before the stylesheet. No `@import` anywhere in CSS.
 
 ```html
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -150,194 +252,193 @@ Place these in `<head>` before the stylesheet. No `@import` anywhere in CSS.
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,87..125,400..800;1,100,400&family=Martian+Mono:wdth,wght@87.5..100,300..500&display=swap" rel="stylesheet">
 ```
 
-Fallback stacks: `"Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif` and
-`"Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace`.
-
-### Scale
-
-| Token (px at a 16 px root) | Face | Weight · width | Used for |
-|---|---|---|---|
-| `--t-11` 11 / 16 | Martian Mono | 500 · 87.5 | Scale numerals under faders; in-canvas labels at wdth 100 (`--canvas-label-font`) |
-| `--t-12` 12 / 16 | Martian Mono | 400 · 87.5 | Analytic column, error column, fact source, footer meta |
-| `--t-12` 12 / 16 | Archivo | 500–600 · 88–100 | Ledger head, group labels, control help, credit, hero meta |
-| `--t-13` 13 / 20 | Archivo | 600 · 88 | Tab labels, key labels, "Copy permalink" |
-| `--t-13` 13 / 20 | Archivo | 500 · 100 | Control labels, readout labels, select text |
-| `--t-13` 13 / 20 | Martian Mono | 500 · 100 | Windows: slider values, stepper, seed, story-step numerals |
-| `--t-15` 15 / 24 | Archivo | 400 · 100 | Body: blurb, story caption, sources |
-| `--t-15` 15 / 20 | Martian Mono | 500 · 100 | Ledger measured values |
-| `--t-17` 17 / 24 | Archivo | 600 · 100 | Fact text (it is the heading), story step label, Sources title |
-| `--t-18` 18 / 24 | Archivo | 800 · 125 | Wordmark "Math Playground" |
-| `--title-size` clamp(28, 1.1rem + 2.6vw, 44) / 1.1 | Archivo | 700 · 90, −0.01em, `text-wrap: balance` | The visualization title — the page's one display step |
-| `--t-hero` 40 / 44 | Martian Mono | 500 (measured) and 300 (analytic) | Hero numeral pair; 32 / 36 below 600 px |
-
-Letter-spacing is 0 everywhere except the title (−0.01em). No small caps, no
-uppercase labels, no italics in Martian Mono (none exist). `text-wrap: balance`
-is used on exactly three elements (the title, the story label, the sources
-title), not blanket-applied to `h1, h2, h3`. Paragraphs get `text-wrap: pretty`.
-Measure ≤ 62ch.
+Fallbacks: `"Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif` and
+`"Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace`. No
+`@import` anywhere in CSS.
 
 ---
 
 ## 3. Color
 
-All neutrals carry a green-blue bias strong enough to see (surface
-`hsl(146 12% 85%)`, ink `hsl(197 12% 10%)`). Canvas-contract tokens are written
-as 6-digit hex below for legibility in this table, but that is a convention and
-not a constraint: `readCanvasTheme()` passes the value through verbatim and
-nothing parses it, so any CSS colour syntax — `oklch()` included — is valid.
-(Revision 1 required hex because `withAlpha()` parsed it; that helper was
-deleted, and with it the requirement.)
+### How the two schemes are written
+
+**Every scheme-varying token is a `light-dark()` pair written once.** There is no
+duplicated dark block, and therefore no class of bug where the two schemes drift
+apart. `:root` declares `color-scheme: light dark`, so a reader arriving from an
+OS in dark mode gets the dark scheme on first paint; the masthead toggle writes
+`data-theme` on `<html>` and `:root[data-theme="dark"] { color-scheme: dark }` /
+`[data-theme="light"] { color-scheme: light }` make it win in both directions.
+
+The shadow ladder varies by scheme through its **colour** tokens
+(`--ring-c`, `--shade-1…5`, `--lift`), not through duplicated geometry. `--lift`
+— the inset white top highlight a dark plane needs because a drop shadow does
+almost nothing on a near-black ground — is fully `transparent` in light, so one
+shadow string serves both schemes.
+
+### RULE 0 — the canvas contract stays literal hex
+
+`core/canvas.ts` reads the thirteen properties named in `CANVAS_THEME_VARS` with
+`getComputedStyle` and hands them to `ctx.fillStyle`. **An unregistered custom
+property is not resolved at computed-value time**, so a `light-dark()` or a
+`color-mix()` there arrives at the canvas as the literal string
+`light-dark(#…, #…)` and paints nothing. Verified in the running app.
+
+They are therefore **pinned as literal hex on `.plate`, unconditionally, in both
+schemes** — not restated under `[data-theme="dark"]`. Same computed result, one
+fewer conditional, and the pens are scheme-independent *by construction* rather
+than by a restatement someone has to remember. `color-mix()` and `light-dark()`
+are for chrome only.
+
+`light-dark()` nested inside `color-mix()` is also avoided: one resolves at
+used-value time and the other at computed-value time, and a wash that silently
+produces nothing is every hover state in the file. The washes are written as
+`light-dark()` pairs of the ink at alpha.
 
 ### Tokens
 
-| Token | Hex | Role |
-|---|---|---|
-| `--surface` | `#D6DDD8` | Faceplate: masthead, footer, page ground |
-| `--surface-raised` | `#EDEFEC` | Rails, plates, the tab bar, every section in the figure column |
-| `--canvas` | `#FFFFFF` | The plotter bed and every display window |
-| `--line` | `#A2ABA6` | 1 px seams — 2.04:1 on raised, so the lattice is visible |
-| `--stroke` | `#657069` | Control outlines and the fader track on grey grounds (≥ 3.7:1) |
-| `--tick` | `#6F7975` | Engraved graduations, inactive pegs, dotted leaders (≥ 3.2:1 on every ground) |
-| `--ink` | `#171B1D` | Text, key borders, switch, booktabs rules |
-| `--ink-muted` | `#4E5750` | Secondary text: blurb, help, labels, analytic column |
-| `--accent` | `#D53619` | The signal colour (see the rubrication rule) |
-| `--accent-hover` | `#BD2F16` | Primary key hover |
-| `--accent-ink` | `#FFFFFF` | Text on the accent |
-| `--agree` | `#24467A` | A reading that matches its reference, on grey grounds |
-| `--window-ink` / `--window-ink-muted` | `#171B1D` / `#4E5750` | Text inside white windows and the hero |
-| `--window-stroke` / `--window-stroke-hover` | `#657069` / `#171B1D` | Borders **on white** — resting and hover |
-| `--window-agree` | `#24467A` | Agreement inside a white window |
-| `--data-1` | `#D53619` | Signal pen: particles, walkers, needles, the live estimate |
-| `--data-2` | `#24467A` | Drafting pen: analytic overlays **and every thin mark** |
-| `--data-3` | `#7F8985` | Graphite pen: area **silhouettes** at full opacity |
-| `--data-3-fill` | `#D2D6D4` | Graphite wash: area **fills**, opaque — never a `globalAlpha` |
-| `--grid` | `#23292B` | The experiment's own geometry: pegs, needles, Buffon's ruled lines |
-| `--grid-soft` | `#8A938F` | Containers: bin dividers, axes, floors, frames, registration marks |
-| `--wash-1` / `--wash-2` | `rgb(23 27 29 / .06 / .14)` | Hover and pressed washes for themed picker options |
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `--surface` | `#E8ECEF` | `#15181B` | Page ground: masthead, bench gutter, footer |
+| `--surface-raised` | `#F1F5F8` | `#1E2225` | Rail panel, fact card, the active tab pill |
+| `--surface-sunk` | `#DDE1E5` | `#0C0F11` | Tab trough, fader channel, ledger head band, transport |
+| `--canvas` | `#FFFFFF` | `#FFFFFF` | The plotter bed and every display window |
+| `--mat` | `transparent` | `#282D30` | The bezel that mats the plate at night |
+| `--ink` | `#14181B` | `#EEF2F4` | Body, headings, labels, key labels |
+| `--ink-muted` | `#4D585F` | `#B0BABF` | Blurb, control help, sources, ledger heads |
+| `--ink-soft` | `#5E696F` | `#939EA3` | Captions, footer meta, scale numerals, disabled |
+| `--stroke` / `--tick` | `#737E85` | `#818C92` | Control boundaries; graduations and inactive pegs |
+| `--line` | `#D2D9DE` | `#333A3E` | **Decorative only.** Budget: three per screen |
+| `--accent` | `#D53619` | `#EF5B33` | The signal colour (see the rubrication rule) |
+| `--accent-hover` | `#BD2F16` | `#F7714B` | |
+| `--accent-press` | `#A72913` | `#D94E26` | Also the primary key's own ring |
+| `--accent-ink` | `#FFFFFF` | `#17110D` | Text on the accent — **it flips in dark** |
+| `--accent-text` | `#B8300F` | `#EF5B33` | The one legal accent-coloured text token |
+| `--agree` | `#24467A` | `#8FB4E8` | A reading that matches its reference |
+| `--focus-line` | `#14181B` | `#FFFFFF` | The 2 px focus outline |
+| `--focus-window` | `#D53619` | `#D53619` | Ring and halo for controls with a **white** face |
+| `--window-ink` / `--window-ink-muted` | `#171B1D` / `#4E5750` | unchanged | Text inside white windows and the hero |
+| `--window-stroke` / `--window-stroke-hover` | `#657069` / `#171B1D` | unchanged | Boundaries **on white** — resting and hover |
+| `--window-agree` | `#24467A` | unchanged | Agreement inside a white window |
+| `--data-1` | `#D53619` | pinned | Signal pen: particles, walkers, needles, the live estimate |
+| `--data-2` | `#24467A` | pinned | Drafting pen: analytic overlays **and every thin mark** |
+| `--data-3` | `#7F8985` | pinned | Graphite pen: area **silhouettes** at full opacity |
+| `--data-3-fill` | `#D2D6D4` | pinned | Graphite wash: area **fills**, opaque — never `globalAlpha` |
+| `--grid` | `#23292B` | pinned | The experiment's own geometry: pegs, needles, ruled lines |
+| `--grid-soft` | `#8A938F` | pinned | Containers: bin dividers, axes, floors, frames, reg marks |
 
-**Why there is no green/amber pair.** Revision 1 used `#1f6f4a` /`#8a5a00`, which
-is the Bootstrap success/warning reflex — banning indigo while adopting stock
-green-and-amber is the same instinct in a different hue. Here, a reading that
-agrees with theory is printed in the theory's own ink (`--agree`, the drafting
-pen) and its convergence square fills. A reading that has not converged is not a
-fault — it is the resting state of an estimate with more samples to draw — so it
-stays `--ink` and is marked, not coloured, by a dotted underline under the
-absolute error and a hollow square. Three redundant channels, one fewer colour,
-and a truer statement about what the number means.
+### Three ink tiers, not two
 
-### The `--window-*` tokens exist because the plate does not invert
+Revision 2 asked `--ink-muted` to carry the blurb, the help text, the captions,
+the footer meta **and** the ledger heads, which flattened exactly the hierarchy
+it wanted. `--ink-soft` is the third, quieter voice.
 
-Every rule that paints onto `--canvas` — window borders, window hover, select
-borders, the hero's rule and needle — uses `--window-*`, which is identical to
-the chrome tokens in the light scheme and **unchanged** in the dark one. In
-revision 1 these rules used `--ink` and `--stroke`, so in dark mode
-`.select:hover { border-color: var(--ink) }` resolved to `#ECEFED` on `#FFFFFF`
-— 1.16:1, an affordance that simply disappeared on every select, seed field and
-stepper.
+`--ink-soft` is AA on `--surface` (4.74) and `--surface-raised` (5.14). On
+`--surface-sunk` it measures 4.29 and the only thing it colours there is a
+disabled transport key, which SC 1.4.3 exempts as an inactive component. **Nothing
+else may use it on the sunk ground.** The ledger's head band is sunk, so its
+column heads take `--ink-muted` at 5.55.
 
 ### Rubrication rule
 
-Vermilion is spent only on what is **current or moving**: the particles and the
-live estimate on the plate, the Play/Pause key, the ball on the active tab, the
-index line on every fader thumb and the border of the control being adjusted, the
-current story step, the transport's top rule while the simulation runs, and focus
-rings on neutral controls. It never colours links, seams, static borders or text
-on the grey grounds (3.48:1 on `--surface` fails AA for text). The only accent
-text is white on the accent key. Links are ink with a 1 px underline that
-thickens to 2 px on hover — no colour change.
+Vermilion is spent only on what is current or moving: particles and the live
+estimate on the plate (`--data-1`), the Play/Pause key, the ball on the active
+tab, the filled portion of the fader and its index line, the current story step,
+the transport's ring while the simulation runs, and the focus halo. It never
+colours links, static borders, or text on the grey grounds. The only
+accent-coloured **text** is `--accent-ink` on `--accent` and `--accent-text`.
 
-### Contrast (WCAG 2.x relative luminance, recomputed for every token)
+### Contrast (WCAG 2.x relative luminance; every value computed, none eyeballed)
 
-Text, 4.5:1 required:
+**Ground steps.** Deliberately small, because ring + shadow + radius + air carry
+the depth now.
 
-| Pair | on `--surface` | on `--surface-raised` | on `--canvas` |
-|---|---|---|---|
-| `--ink` | 12.55 | 15.00 | 17.34 |
-| `--ink-muted` | 5.42 | 6.48 | 7.49 |
-| `--agree` | 6.81 | 8.14 | 9.41 |
-| `--accent-ink` on `--accent` / `--accent-hover` | 4.80 / 5.86 | | |
-
-UI components and graphical objects, 3:1 required (SC 1.4.11):
-
-| Pair | on `--surface` | on `--surface-raised` | on `--canvas` |
-|---|---|---|---|
-| `--stroke` / `--window-stroke` | 3.73 | 4.46 | 5.15 |
-| `--tick` (graduations, inactive peg) | 3.25 | 3.89 | 4.50 |
-| `--accent` as a mark (ball, index line, focus ring) | 3.48 | 4.15 | 4.80 |
-| `--ink` (key border, switch, needle) | 12.55 | 15.00 | 17.34 |
-| `--ink` focus ring on `--accent` | 3.61 | | |
-| `--line` (seam) | 1.57 | 1.88 | decorative, exempt |
-
-Revision 1's `--tick` was 2.70:1 and failed as an informative mark; it now clears
-3:1 on all three grounds. Seams remain decorative — the lattice they draw is
-never the only cue for a boundary — but they are now visible.
-
-Marks on the plate:
-
-| Mark | Ratio | Note |
+| Step | Light | Dark |
 |---|---|---|
-| `--data-1` 2 px particle on `--canvas` | 4.80 | Holds only if positions snap to device pixels (§7) |
-| `--data-2` 2 px curve on `--canvas` | 9.41 | A 50 % anti-aliasing smear still reads at 2.56 |
-| `--data-2` 2 px thin mark on `--canvas` | 9.41 | Every hairline in the system is this pen now |
-| `--data-3` 2 px area silhouette on `--canvas` | 3.61 | The bar's outline is the graphical object |
-| `--data-3-fill` area on `--canvas` | 1.47 | **Decorative wash only.** Never the sole encoding |
-| `--grid` peg on `--canvas` | 14.75 | The video's black pegs |
-| `--grid-soft` divider / axis on `--canvas` | 3.16 | Recessive but conformant |
-| `--data-1` particle on `--data-3-fill` | 3.27 | Balls landing on the pile stay visible |
-| `--data-2` curve on `--data-3-fill` | 6.41 | Plus the halo where it crosses the pile |
-| `--data-3` silhouette against `--data-3-fill` | 2.46 | Its other side is the plate at 3.61 — conformant |
-| `--grid` peg on `--data-3-fill` | 10.05 | |
-| `--ink-muted` 11 px canvas label on `--data-3-fill` | 5.11 | Was 4.46 and failing in revision 1 |
-| `--data-1` vs `--data-2` | 1.96 | Hue-separated colour-blind-safe pair; the halo (§7) separates them wherever they cross |
+| page → raised | 1.08 | 1.11 |
+| raised → plate | **1.10** | 16.02 |
+| page → plate | 1.19 | 17.82 |
+| page → sunk | 1.11 | 1.08 |
+| mat → plate | — | **13.92** |
 
-**The histogram, honestly.** Revision 1 certified `--data-3` at 3.61:1 full
-opacity while §7 mandated the 0.35 alpha the code actually draws, which
-composites to `#D2D6D4` = **1.47:1** — the least visible object on the page, and
-the entire content of tab one. There is no single colour that is both 3:1 against
-the white plate and 3:1 under vermilion dots (the first needs L ≤ 0.30, the
-second L ≥ 0.61), so the bar is two marks: an opaque **wash** at 1.47:1 that the
-dots read against at 3.27:1, and a full-opacity 2 px **silhouette** in `--data-3`
-that is the 3.61:1 graphical object carrying the bell's shape — including the
-part above the dot cap, where revision 1 left nothing but the wash.
+**The plate is the brightest surface on the page and must stay so.** The floor is
+`raised → plate ≥ 1.09:1`; it currently measures 1.10. This is written down as a
+tripwire because it is an easy constraint to lose: two competing proposals for
+this revision independently drifted the panel to 1.03:1 from the plate, at which
+point the panel and the bed are the same colour and the one property the canvas
+contract exists to protect is gone.
 
-### Dark scheme (opt-in, and now reachable)
+**Text, light** (measured off the rendered DOM, not from the token table):
 
-`html[data-theme="dark"]` inverts the chrome only. `--canvas`, `--grid`,
-`--grid-soft`, `--data-*` and every `--window-*` token do not change, so the
-plate and every window stay white and no canvas ratio needs revalidating. It is
-never selected from `prefers-color-scheme` — the light faceplate is the identity
-— which is exactly why the **masthead scheme toggle in §5 is mandatory**.
-Revision 1 shipped forty lines of dark tokens with nothing anywhere that could
-set the attribute; a reader in an OS dark mode had no recourse at all.
+| Pair | Ratio |
+|---|---|
+| Title / page | 15.03 |
+| Blurb, sources / page | 6.14 |
+| Caption, footer meta, "no target" cells / page | 4.74 |
+| Control label, fact text, key label / panel | 16.29 |
+| Control help / panel | 6.66 |
+| Fader scale numerals, fact source / panel | 5.14 |
+| Ledger column heads / head band | 5.55 |
+| Inactive tab label / trough | 5.55 |
+| Active tab label / pill | 16.29 |
+| Readout label and value / page | 15.03 |
+| Hero meta / white window | 7.49 |
+| Window and select ink / white | 17.34 |
+| `--accent-ink` on `--accent` / `--accent-hover` / `--accent-press` | 4.80 / 5.86 / 7.07 |
 
-**Three of the inverted tokens are canvas-contract tokens, so the plate restates
-them.** `--ink`, `--ink-muted` and `--accent` are all entries in
-`CANVAS_THEME_VARS`, and `readCanvasTheme()` reads them **off `.plate`** (§7) —
-so with the chrome's dark values inherited, Buffon's live π window painted
-`#ECEFED` on a `#FFFFFF` bed (**1.16:1**, invisible, and precisely the failure
-the `--window-*` tokens were invented to prevent) and Galton's bin numerals fell
-from 5.11:1 to 2.06:1. The dark block is therefore followed by
+**Text, dark:**
 
-```css
-:root[data-theme="dark"] .plate { --ink: #171b1d; --ink-muted: #4e5750; --accent: #d53619; }
-```
+| Pair | Ratio |
+|---|---|
+| Title / page | 15.82 |
+| Blurb, story step / page | 9.01 |
+| Caption / page | 6.50 |
+| Control label, fact text, active tab / panel | 14.22 |
+| Control help / panel | 8.10 |
+| Fader scale numerals / panel | 5.84 |
+| Ledger heads, inactive tab / band, trough | 9.73 |
+| Window and select ink / white | 17.34 |
+| `--accent-ink` `#17110D` on `--accent` | **5.54** |
 
-which mirrors what the `forced-colors` block already does, for the same reason.
-The fix belongs in CSS and not in a re-read on the toggle: `readCanvasTheme()`
-runs once per route by design, and keeping the contract scheme-independent is
-what makes that safe.
+**Why the dark primary key flips its ink.** White on `#EF5B33` is 3.38:1 and
+**fails** AA as text. Near-black on it is 5.54:1. That flip is the difference
+between a designed dark scheme and an inverted light one.
 
-| Dark token | Hex | Check |
-|---|---|---|
-| `--surface` / `--surface-raised` | `#191D1F` / `#282E30` | ground step 1.23:1 |
-| `--ink` | `#ECEFED` | 14.66 on surface, 11.90 on raised |
-| `--ink-muted` | `#AEB7B2` | 8.26 / 6.70 |
-| `--line` | `#4A5255` | 2.13 / 1.73 — visible seam |
-| `--stroke` | `#8A948F` | 4.41 on raised |
-| `--tick` | `#6E7873` | 3.02 on raised (revision 1's `#5E6764` was 2.52 and failed) |
-| `--accent` / `--accent-ink` | `#E8502F` / `#171B1D` | 4.64 text; 3.69 as a mark on raised; 3.74 as a focus ring on a white window |
-| `--agree` | `#8FB4E8` | 6.47 on raised |
-| every `--window-*` | unchanged | 17.34 / 7.49 / 5.15 / 17.34 / 9.41 on white |
+**Non-text (SC 1.4.11), light:**
+
+| Pair | on page | on raised | on sunk | on canvas |
+|---|---|---|---|---|
+| `--stroke` / `--tick` | 3.50 | 3.79 | **3.16** | 4.16 |
+| `--accent` as a mark (ball, index line, fader fill) | 4.04 | 4.38 | 3.66 | 4.80 |
+| `--focus-line` (the 2 px outline) | 15.03 | 16.29 | 13.58 | 17.85 |
+| `--focus-line` on `--accent` (the primary key) | 3.72 | | | |
+| `--line` (a rule) | 1.20 | 1.30 | decorative, exempt | |
+
+`--stroke` on `--surface-sunk` is a pass by 0.16. `--surface-sunk` is used for
+exactly four things — the tab trough, the fader channel, the ledger head band and
+the transport group — and nothing may be added to that list without recomputing.
+
+**Non-text, dark:** `--stroke` 5.18 / 4.65 / 5.59 and 3.44 on a white window;
+`--accent` 5.27 / 4.74 / 5.69 and **3.38 on a white window**, so the chrome
+accent is still a conformant ring out on the plate; `--focus-line` (white) 3.38
+on `--accent`. The switch's ON fill measures 4.74 against the panel.
+
+**One focus construction, no per-context variant.** A 2 px `--focus-line` outline
+at 2 px offset inside a 5 px vermilion halo. `--ink` clears 3:1 on every ground
+*and* on the vermilion fill itself, which deletes the "ring on accent" special
+case revision 2 needed — an all-vermilion outline is invisible on a vermilion key
+by construction. Controls with a white face (`.window`, `.select`) take
+`--focus-window` `#D53619` for their ring and halo instead, 4.80:1 on white in
+both schemes: the same architecture the `--window-*` family already establishes,
+applied to focus.
+
+### The `--window-*` tokens exist because the plate does not invert
+
+The plate and every display window stay `#FFFFFF` in both schemes, so anything
+painting onto them uses `--window-*`, never `--ink` / `--stroke`. This is what
+made revision 1's dark hover states vanish. In dark, the plate is matted in a
+`#282D30` bezel drawn as a spread-only shadow layer, which takes the local step
+from 17.82:1 down to 13.92:1 and turns a glare cliff into a framed sheet. The
+plate is never dimmed and never filtered — that would break §7.
 
 ---
 
@@ -346,187 +447,204 @@ what makes that safe.
 ### Page anatomy
 
 ```
-.page                         grid rows: masthead / tabs / bench / footer, 1 px seams
-  header.masthead             48 px on --surface, wordmark · credit · scheme toggle
-  nav.tabs                    grid: scrolling peg strip + pinned index, on --surface-raised
-  main.bench                  grid: minmax(0,1fr) + --rail-w, gap 1 px, ground --line
-    div.figure                vertical lattice on --surface-raised
-      header.figure__head     title + blurb (one row ≥ 1280 px)
-      div.plate               white bed, registration marks, holds .stage
+.page                         grid rows: masthead / tabs / bench / footer, on --surface
+  header.masthead             56 px, wordmark · credit · Source · scheme toggle
+  nav.tabs                    grid: sunken peg-strip trough + pinned index
+  main.bench                  grid: minmax(0,1fr) + --rail-w, gap 24 px of ground
+    div.figure                flex column, gap 24 px, NO fill, NO ring, NO shadow
+      header.figure__head     title + blurb (one row >= 1024 px)
+      div.plate               ELEVATED: white bed, 16 px radius, reg marks, --e-plate
       p.caption               "Figure n." sentence + Copy permalink
       section.readouts        .hero window (capped) + .ledger-wrap > .ledger
       section.story           tape + label + caption
-      section.fact            fact as heading + source + Another fact
-    div.rail                  --surface-raised column
-      div.rail__panel         sticky, max-height 100dvh, own scroll, 1 px lattice
-        div.transport         Play/Pause · Step · Fast-forward · Reset · speed, 2 px ink rule on top
-        form.controls         one .control row per ParamSpec, seed last
-  footer.footer               Sources list + meta + shortcuts switch, on --surface
+      section.fact            ELEVATED: fact as heading + source + Another fact
+    div.rail                  container-type: inline-size
+      div.rail__panel         ELEVATED: sticky, 20 px padding, radius 16, --e-2
+        div.transport         a 5 px-padded sunken group holding 44 px keys
+        form.controls         one .control row per ParamSpec, 20 px apart
+  footer.footer               Sources list + meta + shortcuts switch
 ```
 
-The whole page sits on one lattice: containers are `gap: 1px` grids or flex
-columns with `background: var(--line)`, and every child paints its own ground.
-No panel carries a border. Only display windows (1 px `--window-stroke`), keys
-(1 px `--ink`) and the ledger's booktabs rules (2 px / 1 px `--ink`) have rules
-of their own. Radius is 0 on every panel, window, key, select, switch, tab and
-the plate; 50 % on the fader thumb and the tab peg. Shadows: none.
+**No panel carries a border and no container is a `gap: 1px` lattice.** Depth is
+`box-shadow: var(--ring), var(--e-N)`. Boundaries are drawn as **outer rings**
+(`0 0 0 1px`), which compose with elevation in one declaration and can thicken on
+hover with zero layout shift — the thing `border: 1px solid` could not do, and
+the reason revision 2's hover states had to be colour-only and felt dead.
+
+`inset` box-shadow survives in exactly three places: the fader's channel well,
+the tab trough, and the transport group.
+
+### Elevation
+
+Two regimes, one light source (zero horizontal offset, vertical ≈ half the blur),
+negative spread on every blurred layer over 4 px so the penumbra is narrower than
+the box.
+
+| Token | Strength | Used for |
+|---|---|---|
+| `--e-1` | 5–8% | display windows, chips, resting keys, the active tab pill |
+| `--e-2` | 5–10% | rail panel, fact card |
+| `--e-3` | 5–13% | the select picker, popovers |
+| `--e-float` | 10–16% | the handheld transport deck |
+| `--e-plate` | inset hairline + mat + 8–16% out to 40 px | the plate |
+| `--e-hover` | one **added** layer, 13% | hover — it adds, it does not swap |
+| `--bevel` | sub-pixel inset, ±16–22% | the primary key and the fader carriage **only** |
+
+A shadow beside a bright white bed needs 3–5× the alpha a card on a grey page
+needs; a 5% shadow next to the plate is invisible, which is part of how revision
+2 ended up flat. That is what `--e-float` is for.
+
+### Geometry
+
+Five radius steps, non-power-of-two so they cannot be mistaken for a framework
+default, with real nested-radius arithmetic (outer = inner + padding):
+
+| Token | Value | Used for |
+|---|---|---|
+| `--radius-1` | 5px | unit chips, small marks |
+| `--radius-2` | 8px | display window, number input, story step, ledger head band |
+| `--radius-3` | 11px | key, select, transport key, tab pill |
+| `--radius-4` | 16px | rail panel, fact card, plate, tab trough, transport group |
+| `--radius-5` | 22px | the handheld transport deck |
+| `--radius-pill` | 999px | fader channel, switch track |
+| `--radius-thumb` | 50% | the tab ball — the only circle in the system |
+
+The three joins that actually occur are concentric by construction:
+tab trough 16 − 5 padding = 11 tab · transport group 16 − 5 = 11 key ·
+stepper group 11 − 3 = 8 window.
+
+Where the arithmetic would drive an inner radius below 4 px — the rail panel is
+16 with 20 px padding — the inner element gets **no radius at all**. Control rows
+are separated by space, not boxed. That is a feature: it is what stops the rail
+becoming a stack of nested cards.
 
 ### Keeping the readouts above the fold
 
-Measured at 1024 × 800 in revision 1, `.readouts` began at y = 800 — the fold
-exactly — on a design whose stated subject is measurement and convergence. Three
-changes buy it back, and any future change must keep the sum under ~700 px at
-that viewport:
+Measured in the running app at 1024 × 800 on a landscape visualization:
 
-| Item | Revision 1 | Now |
+| Item | Revision 2 | Revision 3 |
 |---|---|---|
-| masthead + tab row | 48 + 44 | 48 + 44 |
-| `.figure__head` | 24 top padding, title, blurb on its own row, 16 bottom ≈ 144 | 16 / 16 padding, blurb on the title's row ≥ 1280 px ≈ 100 |
-| plate | `min(72vh, 900px)` + 32 ≈ 608 | `--viz-max-h: min(58dvh, 720px)` + 32 ≈ 496 |
-| caption | 36 | 36 |
-| **readouts begin at** | **800** | **~724** |
+| masthead | 48 | 56 |
+| tab row | 44 | 80 (a 48 px trough with 12/20 padding) |
+| `.figure__head` | ~100 | 97 (blurb on the title's row from **1024 px**, was 1280) |
+| plate | ~496 | 368 + a 24 px gap |
+| caption | 36 | 40, pulled 8 px closer to its figure |
+| **readouts begin at** | **~724** | **705** |
 
-`dvh`, not `vh`, everywhere the viewport is measured: `vh` measures the *large*
-viewport on mobile Safari, so the cap was systematically too tall on the device
-that needed it most.
+The budget is met and slightly improved, in spite of a taller masthead, a taller
+hero and 24 px gaps replacing 1 px seams, because the blurb moves onto the
+title's row 256 px earlier. Any future change must keep this under ~720 px at
+that viewport.
 
-### Desktop (≥ 1100 px)
+A **portrait** experiment (Galton declares `--viz-aspect: 0.8`) pushes the
+readouts to ~830 px at that viewport, as it did in revision 2. The plate's height
+cap, not the chrome, is the lever there.
 
-`.bench` is `minmax(0, 1fr) 20rem` (`22.5rem` at ≥ 1440). Left column, top to
-bottom: figure head, plate, caption, readouts (hero left, ledger right), story,
-fact; the last section grows to fill the column. Right column: `.rail__panel` is
-`position: sticky; top: 0; max-height: 100dvh; overflow-y: auto` so the transport
-stays reachable while the page scrolls; scroll chaining is left on. Page
-max-width 100rem, centred; gutters 24 px.
-
-**The readouts grid is `minmax(15rem, 22rem) minmax(0, 1fr)`, and `.hero` carries
-`max-width: 22rem`.** Revision 1's `max-content` hero ignored the hero's own
-`flex-wrap` and claimed 444 px with a realistic label ("Fraction of needles
-crossing a line" + "analytic 2L/(πd)" + the error), leaving the ledger a 220 px
-track for content that wants 360 px with three `nowrap` `ch`-reserved columns and
-no scroller anywhere in the file. The ledger now also lives in `.ledger-wrap`
-(`overflow-x: auto`), so the page body never scrolls sideways.
-
-### Tablet (600–1099 px)
-
-Below 1100 px the readouts stack (hero over ledger) — the squeeze band is gone
-rather than merely narrowed. Below 1024 px the bench becomes one column:
-`.figure`, `.rail` and `.rail__panel` become `display: contents` and the sections
-interleave by `order`: head, plate, caption, **transport**, readouts,
-**controls**, story, fact. Nothing is sticky.
-
-### Handheld (≤ 599 px)
-
-Gutters 16 px, header 40 px (wordmark + scheme toggle). The peg strip is hidden
-and `.tabs__index` — Previous key, `<select>` with `<optgroup>`s, Next key —
-spans the row. The plate goes edge to edge with an 8 px margin and 8 px marks.
-The ledger collapses to almanac lines (label … dotted leader … value; analytic
-and error on a second line separated by a ruled edge; a readout with no target is
-one line). The transport becomes a fixed bottom deck, 56 px on
-`--surface-raised` with its 2 px rule on top, keys 44 px; `body` gets 64 px
-bottom padding. `--key-s` rises to 44 px so stepper keys meet SC 2.5.8 without
-relying on the spacing exception.
-
-**Portrait experiments get a portrait aspect, not a taller cap.** Revision 1's
-`--viz-max-h: 80vh` on handheld was inert: `width: min(100%, …)` binds at 344 px
-on a 360 px screen and `aspect-ratio` then fixes the height, so the height cap
-never engages for any aspect ≥ 1 and the Galton board rendered as a 258 px
-letterbox. `.stage` therefore reads `--viz-aspect-narrow` below 600 px:
-
-```css
-.stage { --stage-aspect: var(--viz-aspect); aspect-ratio: var(--stage-aspect); }
-@media (max-width: 37.4375rem) {
-  .stage { --stage-aspect: var(--viz-aspect-narrow, var(--viz-aspect)); }
-}
-```
-
-Galton declares `--viz-aspect: 0.8` (4 / 5) and `--viz-aspect-narrow: 0.75`
-(3 / 4). **`--viz-aspect` is a unitless number (width ÷ height)**, not a
-`<ratio>`: `@property` has no `<ratio>` syntax, and a number is valid in both
-`aspect-ratio` and `calc()`. `--viz-aspect-narrow` is deliberately *not*
-registered, so `var(--viz-aspect-narrow, …)` can fall back.
+`dvh`, not `vh`, everywhere the viewport is measured.
 
 ### Spacing
 
-4 px base at a 16 px root: `--s-1` … `--s-12`. Control rows are 44 px minimum (a
-range row is label row 20 + fader 40 + scale 16 + help 16, padded 8); the hero
-window is 96 px; ledger rows 32 px; keys 40 px (44 on touch); windows 22 px
-(inputs 32 px). Control labels share an 8 rem column (`--label-col`) so every
-value window right-aligns on one vertical line down the rail.
+4 px base. Revision 2 declared a scale and did not spend it; these are the
+amounts that stop the rail feeling cramped.
 
-### Tab navigation
+| Amount | Where |
+|---|---|
+| 12 px | inside a control (padding-inline on keys, selects, windows) |
+| 16 px | label → input; hero padding-block |
+| 20 px | between control **rows**; rail panel padding |
+| 24 px | between figure sections; `--bench-gap`; between hero and ledger |
+| 28 px | between control **groups** (transport → controls) |
+| 32 px | above the footer |
+| 8 px | minimum between a control and its help text (was 4) |
 
-The tab row is a two-column grid: a scrolling **peg strip** and a pinned
-**index**, separated by a seam.
+Page gutters by breakpoint: 16 / 24 / 32 / 40 px. `--page-max` 100rem, centred.
+Prose measure 68ch, applied to the blurb and the story caption only.
 
-`.tabs__strip` is `role="tablist"`, `overflow-x: auto`, `scroll-padding-inline:
-24px`, with **a visible thin scrollbar** (`scrollbar-width: thin` +
-`scrollbar-color`). Revision 1 hid the scrollbar, offered no arrows, refused to
-wrap and explicitly declined a jump menu — yet ten tabs already overflow a
-1280 px viewport by 234 px (measured: `scrollWidth` 1499 vs `clientWidth` 1265)
-and by 490 px at 1024 px. At the stated 25-tab target roughly two thirds of the
-tabs were undiscoverable to a mouse-only desktop user while the sub-600 px
-`<select>` handled 25 fine — the design was worse on desktop than on phones.
+`--rail-w` is **23rem** (25rem at ≥ 1440), up from 20/22.5. The extra 48 px is
+spent on 14 px help text, 20 px of panel padding and a transport that fits five
+44 px controls and its rate picker on one row — not on more controls.
 
-`.tabs__index` fixes that at every width, not just on phones: a Previous key, a
-`<select class="select tabs__select">` whose `<optgroup>`s are the groups and
-whose options are every visualization in registry order, and a Next key. It is
-outside the tablist, so it does not violate tablist ownership, and it is the
-complete index at 10 tabs or 25.
+`container-type: inline-size` on `.rail`, so the control grid restacks by the
+rail's own width rather than the viewport's: below 17rem of rail the label column
+collapses and every control takes the full width. That is what matters when a
+reader zooms.
 
-**At the ends of the run those two keys are `aria-disabled`, never `disabled`.**
-Below 600 px the peg strip is `display: none` and they are the only tab
-navigation there is, so a keyboard reader walks to the last tab with Next and
-presses Enter — and a `disabled` button is removed from focus, under the reader's
-own keypress. `document.activeElement` falls back to `<body>` and the next Tab
-restarts at the wordmark, past the entire index. `aria-disabled` announces the
-same state, keeps the key focusable, and takes the same
-`.key[aria-disabled="true"]` styling; the shell's click handler refuses the
-activation. The same rule governs the story tape's Prev / Next.
+### Control and hit-target sizes
 
-Tabs are 44 px `<button role="tab">`s, `padding 0 14px`, Archivo 600 / 13 px at
-wdth 88, sentence case. Each `.tabs__group` is a flex run preceded by a 1 px
-vertical seam and a 12 px Archivo 600 group label in the same row.
+| Token | Value | Notes |
+|---|---|---|
+| `--header-h` | 56 | was 48 |
+| `--tab-h` | 38 | pill inside a 48 px trough; 44 on a coarse pointer |
+| `--key-h` | 36 | secondary key; 44 on coarse |
+| `--key-h-lg` | 44 | Play/Pause and every transport key, at every width |
+| `--key-s` | 30 | **visual only** — stepper key, story step; 44 on coarse |
+| `--window-h` | 28 | was 22, which is a 98.css text field |
+| `--input-h` | 36 | was 32 |
+| `--range-h` | 44 | hit area; the channel is 14 px, the rest is transparent border |
+| `--switch` | 44 × 26 | was 36 × 18, an SC 2.5.8 failure on its short axis |
+| `--hero-h` | 112 | was 96 |
+| `--deck-h` | 64 | handheld transport deck, was 56 |
+| ledger row | 40 | was 32 |
 
-**Group runs are decoration, in ARIA terms.** `role="tablist"` may own only
-`role="tab"` elements; revision 1 put `<div>` and `<span>` wrappers inside it, so
-assistive technology drops the grouping and mis-reports set position. Each
-`.tabs__group` therefore carries `role="presentation"`, each
-`.tabs__group-label` carries `aria-hidden="true"`, and the group name is carried
-into the accessibility tree through each tab's own `aria-label` ("Galton board,
-Randomness") plus explicit `aria-setsize` / `aria-posinset`.
+**The 44 px rule, in one block and one pattern.**
 
-States: inactive `--ink-muted` text with a 4 px `--tick` peg centred on the
-bottom edge; hover `--ink` text and peg (inside `@media (hover: hover)`); active
-`aria-selected="true"` gives `--ink` text and the peg becomes the ball —
-`--accent`, scaled ×2 to 8 px (4.15:1 on the strip). There is **no
-`.tab--active`**; the ARIA attribute is the only state. Focus-visible:
-`outline: 2px solid var(--ink); outline-offset: -4px`.
+```css
+@media (pointer: coarse) {
+  :root { --key-h: 2.75rem; --key-s: 2.75rem; --input-h: 2.75rem; --tab-h: 2.75rem }
+}
+.story__step::after,
+.stepper__key::after,
+.key--small::after,
+.caption__copy::after { content: ""; position: absolute; inset: -6px }  /* -7px for the 30 px keys */
+```
 
-Keyboard: roving tabindex, Left / Right / Home / End move, Enter / Space
-activate; the URL hash is the route, so every tab is a permalink. The shell
-scrolls the active tab into view with `scrollIntoView({ inline: 'nearest' })`.
+This decouples target from ink, which is what lets the bench look precise on a
+mouse and still be tappable. Named revision-2 failures fixed: the switch at
+36 × 18, story steps at 28 × 28, "Copy permalink" at 78 × 20, and `.window` at
+22 px tall. SC 2.5.8's spacing exception is not relied on anywhere.
 
-From 10 to 25 tabs nothing changes but the strip's scroll width and the index's
-option count. A new group is one entry in the `GROUPS` array (§8) — revision 1
-called it "a new run" while `VizGroup` was a closed union, which made it a type
-change and a DOM change.
+### Breakpoints
+
+- **≥ 1024 px** — two-column bench, sticky rail, `align-items: start` so the rail
+  column does not stretch. The blurb sits on the title's baseline row.
+- **≤ 1099 px** — the readouts stack (hero over ledger); the squeeze band where a
+  23rem hero and a 360 px ledger fought over one track is gone rather than
+  narrowed.
+- **≤ 1023 px** — one column. `.figure`, `.rail` and `.rail__panel` become
+  `display: contents` and the sections interleave by `order`: head, plate,
+  caption, **transport**, readouts, **controls**, story, fact. `.bench` restates
+  `align-items: stretch` — in a *column*, `start` means "shrink to content", which
+  collapses the plate to the stage's intrinsic width.
+- **≤ 599 px** — handheld. Gutters 16 px, header 48 px, the peg strip hidden and
+  `.tabs__index` spanning the row. The plate takes an 8 px margin and 10 px marks.
+  The ledger collapses to almanac lines. The transport becomes a **floating**
+  rounded deck, 64 px, `inset-inline: 8px`, above `env(safe-area-inset-bottom)`,
+  on `--e-float`; `body` gets bottom padding for it. `--key-s` rises to 44.
+- **Portrait experiments** take `--viz-aspect-narrow` below 600 px:
+
+```css
+.stage { --stage-aspect: var(--viz-aspect); aspect-ratio: var(--stage-aspect) }
+@media (max-width: 37.4375rem) {
+  .stage { --stage-aspect: var(--viz-aspect-narrow, var(--viz-aspect)) }
+}
+```
+
+`--viz-aspect` is a unitless number (width ÷ height), registered;
+`--viz-aspect-narrow` is deliberately **not** registered so the `var()` fallback
+works.
 
 ### Canvas frame
 
-`.plate`: `background: var(--canvas)`, radius 0, no border, no shadow; the seams
-frame it. `padding: var(--plate-pad)` (16 px, 8 below 600) is the plotter margin;
-in it, four 10 px L-shaped registration marks (1 px `--grid-soft`, 6 px in from
-each corner) are painted with eight `background-image` gradients, so they are
-CSS, never canvas pixels. They are `--grid-soft`, not `--grid`: the frame is not
-part of the experiment.
+**The radius lives on `.plate`, never on the pixels.** `.stage` and both canvases
+carry no `border-radius` and `.plate` carries no `overflow: hidden`. The canvas is
+already inset by `--plate-pad`, so its corners never reach the plate's 16 px
+radius and no datum can ever be clipped. `core/canvas.ts` is untouched by the
+radius change.
 
-`.stage` is the host `core/canvas.ts` fills with the two canvases:
-`width: min(100%, calc(var(--viz-max-h) * var(--stage-aspect)))`, `aspect-ratio:
-var(--stage-aspect)`, `min-height: 10rem`, centred. The width clamp keeps the
-declared aspect when the height cap bites. The `min-height` is a guard: a
-collapsed stage makes `createStage` floor the backing store at one device pixel
-and render a 1 × 1 canvas with no error anywhere.
+`--reg-inset` rises **6 → 14 px** (10 px handheld) and `--reg-mark` 10 → 12 px, so
+all eight registration-mark strokes fall on the straight run outside the curve.
+This is the one place the radius change touches an existing decorative
+construction, and it was checked at 360, 768 and 1440.
 
 ---
 
@@ -545,144 +663,158 @@ and render a 1 × 1 canvas with no error anywhere.
 </div>
 ```
 
+`.tabs__strip` is a **trough**: `--surface-sunk`, `--radius-4`, 5 px block padding
+and 10 px inline padding, `box-shadow: inset var(--ring)`, `scroll-snap-type: x
+proximity`. Tabs are `--radius-3` pills at `--tab-h`, Archivo 13 / 460 / 92%.
+Inactive: transparent with an `--ink-muted` label. Active: `--surface-raised`
+plus `var(--ring), var(--e-1)` and an `--ink` label. Hover is a `--wash-1`
+background that appears in 0 ms and fades out over 140 ms.
+
+**The peg and the ball are kept exactly as built.** There is no separate ball
+element — `.tab::after` *is* the peg, a 4 px `--tick` dot 7 px above the pill's
+bottom edge, and on `[aria-selected="true"]` it turns `--accent` and
+`transform: scale(2)`. State is read from ARIA alone; there is no class for the
+shell to desynchronise. What changed is the execution: the swell runs 200 ms on
+`--ease-settle` `cubic-bezier(0.5, 1, 0.75, 1.2)` — the one restrained overshoot
+in the file, spent on the one moment that deserves it.
+
+Group runs are separated by 12 px of space, not by a 1 px seam. Tab focus is the
+standard ring at 2 px offset, replacing revision 2's `outline-offset: -4px` inset
+rectangle, which read as a Win98 focus box.
+
+**The strip's scrollbar is gone.** A 10 px `mask-image` edge fade — exactly the
+width of the strip's own inline padding, so nothing sits in the fade at rest —
+softens the clip when the row genuinely scrolls. The index beside it lists every
+visualization at every width, so nothing here is a sole affordance.
+
 ### Tab index (all widths)
 
-```html
-<div class="tabs__index">
-  <button class="key key--icon tabs__prev" type="button" aria-label="Previous visualization"
-          aria-disabled="true">
-    <svg class="key__glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2 4.5 8l6 6z"/></svg>
-  </button>
-  <label class="visually-hidden" for="viz-index">Jump to visualization</label>
-  <select class="select tabs__select" id="viz-index">
-    <optgroup label="Randomness">
-      <option value="galton" selected>Galton board</option>
-      <option value="buffon">Buffon's needle</option>
-    </optgroup>
-    <optgroup label="Waves">…</optgroup>
-  </select>
-  <button class="key key--icon tabs__next" type="button" aria-label="Next visualization">…</button>
-</div>
-```
+Unchanged in markup: a `.key.key--icon.tabs__prev`, a `.select.tabs__select` with
+`<optgroup>`s, and a `.key.key--icon.tabs__next`, pinned outside the scroller.
 
 ### Scheme toggle (masthead)
 
-```html
-<button class="key key--icon theme-toggle" type="button"
-        aria-pressed="false" aria-label="Dark scheme">
-  <svg class="key__glyph" viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M2 2h12v12H2z" fill="none" stroke="currentColor" stroke-width="1.5"/>
-    <path d="M8 2h6v12H8z"/>
-  </svg>
-</button>
-```
-A half-filled square: the plate with one half inked. Pressed writes
-`data-theme="dark"` on `<html>` and persists to `localStorage`; released writes
-`data-theme="light"`. Both values are honoured by the stylesheet, so the toggle
-wins in both directions. This is the only path into the dark scheme.
+A `.key.key--icon.theme-toggle` with `aria-pressed`; a half-filled square, the
+plate with one half inked. Pressed writes `data-theme="dark"` on `<html>` and
+persists to `localStorage`; released writes `data-theme="light"`. Both values are
+honoured. **It is no longer the only path into the dark scheme** — `:root` now
+declares `color-scheme: light dark`, so the OS preference is honoured on first
+visit and the toggle overrides it in both directions.
 
 ### Control rail and control row
 
-```html
-<div class="rail"><div class="rail__panel">
-  <div class="transport" role="group" aria-label="Transport" data-running="false">…</div>
-  <form class="controls" aria-label="Parameters">
-    <div class="control control--range">…</div>
-  </form>
-</div></div>
-```
-`.control` is a grid: `var(--label-col) minmax(0, 1fr)` with areas
-`label value / input input / scale scale / help help`. Modifiers per
-`ParamSpec.kind`: `.control--range` (add `.control--log` when `log: true`),
-`.control--int`, `.control--toggle`, `.control--choice`, `.control--seed`.
-`.control__help` (the spec's `help`) is a visible 12 px muted row beneath — this
-is a teaching tool, help is content.
+`.control` is a grid: `minmax(0, var(--label-col)) minmax(0, 1fr)` with areas
+`label value / input input / scale scale / help help`, 4 px row gap, and **20 px
+between rows**. It has no fill, no ring and no padding of its own — the panel
+provides those. Modifiers per `ParamSpec.kind`: `.control--range` (add
+`.control--log` when `log: true`), `.control--int`, `.control--toggle`,
+`.control--choice`, `.control--seed`.
+
+Three explicit hierarchy levels replace revision 2's SCADA faceplate where
+everything competed at similar size and weight:
+
+| Level | Spec |
+|---|---|
+| Control | label Archivo 13 / 560 / 92% `--ink`; value window Martian Mono 13 `--window-ink` |
+| Help | Archivo 14 / 420 `--ink-muted`, 8 px below the control, **never smaller than 14 px** |
+| Scale | Martian Mono 11 / 87.5% `--ink-soft` |
 
 Disabled rows are targeted, not inherited:
 `.control:has(:disabled) :is(.control__label, .control__help, .control__scale,
-.control__value) { color: var(--ink-muted) }`. Revision 1 set `color` on
-`.control` and every one of those children overrode it with its own, so a
-disabled row was indistinguishable from an enabled one. **There is no
-`.control--disabled`** — `:has(:disabled)` needs no JS bookkeeping.
+.control__value) { color: var(--ink-soft) }`. There is no `.control--disabled`.
 
-The accent border on the control being adjusted targets the primitive:
-`.control:focus-within :is(.window, .select) { border-color: var(--accent) }`.
-Revision 1 targeted `.control__value`, a class only the range row renders, so the
-rule was silently false for the stepper, the seed field and the select.
+The accent ring on the control being adjusted targets the primitive and steps
+aside for the focused element's own halo:
 
-### Range slider (the graduated fader)
+```css
+.control:focus-within :is(.window, .select):not(:focus-visible) {
+  box-shadow: 0 0 0 1px var(--focus-window), var(--e-1);
+}
+```
+
+### Range slider (the fader)
 
 ```html
-<div class="control control--range">
-  <label class="control__label" for="p">Bias <var>p</var></label>
-  <output class="window control__value" for="p" aria-live="off">0.50</output>
-  <input class="range" id="p" type="range" min="0" max="1" step="0.01" value="0.5"
-         style="--ticks: 10">
-  <div class="control__scale" aria-hidden="true">
-    <span class="control__min">0</span><span class="control__max">1</span>
-  </div>
-  <p class="control__help">Probability of going right at a peg. ½ is a fair coin.</p>
-</div>
+<input class="range" id="p" type="range" min="0" max="1" step="0.01" value="0.5"
+       style="--ticks: 10">
 ```
-Anatomy: the value window (right, updated on every `input` event; unit in a
-`.window__unit` span); the fader — 40 px hit area, a 2 px `--stroke` track with
-**no fill** (a fader shows position, the window shows the number); the engraved
-scale above the track: three 8 px majors at 0 / 50 / 100 % of thumb travel and
-5 px minors every `1 / --ticks` of travel, all `--tick`, drawn as background
-gradients sized `calc(100% − 22px + 1px)` so they align with the real travel; min
-and max numerals centred under the end majors in Martian Mono 11 px.
 
-Thumb: 22 px circle, 2 px `--ink` border, `--surface-raised` fill, a 2 × 7 px
-`--accent` index line at the top pointing at the scale. WebKit `margin-top:
-calc(var(--track-h) / 2 − var(--thumb) / 2)` (−10 px); Firefox no margin. Every
-rule is duplicated for `::-webkit-slider-runnable-track` /
-`::-webkit-slider-thumb` and `::-moz-range-track` / `::-moz-range-thumb`, never
-comma-joined.
+A **14 px channel with a vermilion filled portion** and a 20 × 12 white
+**carriage** riding in it, index line painted into the carriage. The channel is
+`--surface-sunk` with `inset 0 0 0 1px var(--stroke)` — the ring is what makes it
+a conformant graphical object, since the fill alone is 1.20:1 against the panel.
 
-States: hover — ring thickens (`inset 0 0 0 1px --ink`), inside
-`@media (hover: hover) and (pointer: fine)`. Dragging — thumb inverts to `--ink`,
-index line `--canvas`, cursor grabbing. Focus-visible — a round ring on the thumb
-in both engines (`0 0 0 2px --surface-raised, 0 0 0 4px --accent`) and the value
-window's border turns `--accent`. Disabled — opacity .5, index line
-`--ink-muted`. `touch-action: pan-y` so a page still scrolls from a fader.
+**The fill needs no JavaScript.** WebKit takes a negative-offset box-shadow on
+`::-webkit-slider-thumb`:
 
-`--ticks` is **registered** (`@property`, `<number>`, initial 10). Unregistered
-it was a divisor inside `calc((100% - 1px) / var(--ticks))`, so an empty or
-malformed value from the shell would invalidate the whole `background-size` at
-computed-value time and the entire engraved scale would vanish with no error.
-The shell sets it inline when `(max − min) / step ≤ 20` (one minor per step);
-for `log: true` it adds `.control--log` and sets `--ticks` to `log10(max / min)`
-— majors at the ends only, minors at the decades.
+```css
+box-shadow: calc(-1 * var(--range-w)) 0 0 calc(var(--range-w) - var(--thumb) / 2) var(--accent);
+```
+
+The shadow's right edge lands at `thumbLeft + thumb − W + (W − thumb/2)` =
+`thumbLeft + thumb/2`, exactly the carriage's centre line. Firefox uses
+`::-moz-range-progress`. `--range-w: 480px` is a constant **upper bound** on the
+input's width; `--rail-w` tops out at 25rem = 400 px, of which the fader gets
+~344, so there is headroom — **raise it if the rail ever grows past 480 px.**
+
+Two consequences follow from the `overflow: hidden` that confines the fill, and
+both are load-bearing:
+
+1. **The clip edge is the input's padding box, not the track.**
+   `border-block: 15px solid transparent` with `border-inline-width: 0` makes the
+   padding box exactly `--channel` tall while the hit box stays 44 px. Without
+   this the fill paints as a 44 px vermilion slab. (This is why the thumb is a
+   12 px carriage and not a 22 px circle: a circle overhanging a 14 px channel is
+   sliced by the same clip.)
+2. **A ring drawn on the thumb is sliced flat top and bottom**, so the focus ring
+   lives on the **input**, where it renders complete and follows the input's pill
+   radius. This supersedes revision 2's `0 0 0 2px --surface-raised, 0 0 0 4px
+   --accent` on the thumb.
+
+The engraved major/minor scale is **deleted** — `--major-h` and `--minor-h` are
+gone with it, and so is the JSlider faceplate look. `--ticks` is still written by
+the shell and still registered; it renders as one quiet row of 1 × 3 px `--tick`
+marks below the channel, sized to the carriage's real travel
+(`calc(100% - var(--thumb) + 1px)`). Min, max and the live value are printed as
+text, which is the modern replacement for engraving them.
+`background-origin: border-box` so the marks are positioned against the 44 px
+box; an element's own background is not clipped by its own `overflow`.
+
+States: hover and active scale the carriage 1.06 over 140 ms on `--ease-tactile`;
+`cursor: grab` / `grabbing`; disabled sets `--accent: var(--tick)` locally so the
+fill goes graphite rather than translucent and the control still reads as a
+fader. `touch-action: pan-y` so a page still scrolls from a fader. Every engine
+pseudo-element gets its own rule, never comma-joined.
 
 ### Stepper (int)
 
-```html
-<div class="stepper">
-  <button class="stepper__key" type="button" aria-label="Decrease rows">−</button>
-  <input class="window stepper__input" type="number" min="3" max="20" value="12">
-  <button class="stepper__key" type="button" aria-label="Increase rows">+</button>
-</div>
-```
-Keys and window share seams (`margin-inline: -1px`), max-width 12 rem,
-right-aligned in the value column; `height: max(var(--input-h), var(--key-s))`,
-which is 32 px on a pointer device and **44 px on handheld** where `--key-s`
-rises. Native spin buttons are hidden; the focused element rises with
-`z-index: 1`.
+A **group container** at `--radius-3` with 3 px padding and 3 px gaps on
+`--surface-sunk` with `inset var(--ring)`, holding a `--radius-2` window (11 − 3 =
+8, concentric) and two `--radius-2` ghost keys. No shared 1 px seams — that was a
+Motif idiom. Keys are 30 px of ink on a mouse with a `::after { inset: -7px }`
+44 px target, and a real 44 px box on a coarse pointer. Native spin buttons are
+hidden; the focused child rises with `z-index: 1`.
 
 ### Select (choice)
 
-`<select class="select">`: `appearance: none`, 32 px, Archivo 500 / 13 px, white
-window, 1 px `--window-stroke`, and a **solid 9 × 5 triangle** as an SVG data URI
-at `right 9px center`. Revision 1 used a 12 px, 1.5 px, round-capped, round-joined
-chevron — the shadcn/Radix mark verbatim, inside a document that forbids
-shadcn-style controls. A bench instrument silk-screens a filled index mark.
+`appearance: none`, `--radius-3`, white window, `0 0 0 1px var(--window-stroke)`
+plus `--e-1`, Archivo 13 / 460 / 92%, and a **solid 10 × 6 triangle** as an SVG
+data URI at `right 11px center` — the deliberate opposite of the 12 px, 1.5 px,
+round-cap, round-join chevron that is the Radix/Lucide house mark. The URI is
+literal rather than `currentColor`-through-a-mask because a select's face is
+white in **both** schemes, so the mark's colour is a constant by construction; a
+second URI in `--window-ink-muted` covers `:disabled`.
 
-Hover border `--window-stroke-hover`; focus border accent; disabled on
-`--surface` in muted ink. `option` and `optgroup` are styled in both the legacy
-path and inside `@supports (appearance: base-select)`, where the picker stays a
-white display window (`--canvas` ground, `--window-ink` text, checked option
-inverted) in both schemes — `optgroup` is the mobile grouping mechanism and was
-styled nowhere in revision 1.
+Inside `@supports (appearance: base-select)` the picker stays a white display
+window in both schemes, gains `--radius-3`, 4 px padding, `--radius-2` options at
+a 36 px minimum height, styled `optgroup`s, and a 140 ms opacity fade driven by
+`@starting-style` with `transition-behavior: allow-discrete` on `overlay` and
+`display`. `option::checkmark` is removed.
+
+`.select.transport__speed` and `.select.tabs__select` need **two class
+selectors**: `.select` is a full-width control declared later in the file, and a
+single-class override loses to it — which in the transport grows the picker to
+300 px and crushes the icon keys to their glyphs.
 
 ### Toggle (switch)
 
@@ -692,26 +824,24 @@ styled nowhere in revision 1.
   <input class="switch" type="checkbox" role="switch" checked>
 </label>
 ```
-The `<label>` wraps the input, so the 44 px row genuinely is the hit target —
-§5 claimed this in revision 1 and nothing implemented it. The switch is
-36 × 18 px, 1 px `--ink` border, radius 0. `::before` is a 12 px ink square at
-2 px inset; when `:checked` the track fills ink and the square translates 18 px
-and turns `--surface-raised`. State is carried by position and inversion, not
-colour. Travel is `--dur-2`.
 
-(The revision-1 `.check` class, styled "for any future multi-select kind" that
-does not exist in `ParamSpec`, is deleted. Add it back with the kind.)
+44 × 26 track at `--radius-pill`, 20 px white knob at 3 px inset, travel
+`translate: 18px 0` — **translate, never `left`**. Off: `--surface-sunk` with
+`inset 0 0 0 1px var(--stroke)` at 3.16:1, so the control is identifiable when
+off, which is where most toggles fail. On: `--accent` at 4.38:1 (light) / 4.74:1
+(dark) against the panel, with an `--accent-press` inset ring. State is carried
+by position **and** fill, so colour is never the sole cue.
+
+The tactile detail: `:active` stretches the knob to 24 px over 120 ms and the
+checked knob translates 14 px instead of 18, so it squashes under the finger.
+The `<label>` wraps the input and is `min-height: 44px`, so the whole row
+genuinely is the target.
 
 ### Seed field
 
-```html
-<div class="seed">
-  <input class="window seed__input" type="number" inputmode="numeric" value="42">
-  <button class="key seed__random" type="button">Randomize</button>
-</div>
-```
-A 32 px window and a 32 px secondary key sharing a seam (44 px each on touch,
-where `--key-s` rises); last row of the rail.
+A `--radius-2` window and a `--radius-3` ghost key **8 px apart**, not sharing a
+seam. The input takes `field-sizing: content` with a `min-width: 7ch` floor, so a
+4-digit seed does not sit in a field sized for 10.
 
 ### Transport
 
@@ -722,274 +852,237 @@ where `--key-s` rises); last row of the rail.
   <button class="key key--icon transport__ff" aria-label="Fast-forward" aria-keyshortcuts="Shift+.">…</button>
   <button class="key key--icon transport__reset" aria-label="Reset">…</button>
   <label class="visually-hidden" for="transport-speed-1">Speed</label>
-  <select class="select transport__speed" id="transport-speed-1">
-    <option value="0.5">0.5×</option><option value="1" selected>1×</option>…
-  </select>
+  <select class="select transport__speed" id="transport-speed-1">…</select>
 </div>
 ```
-Keys 40 × 40 (44 on the deck) sharing 1 px seams. `.transport__play`, `__step`,
-`__ff` and `__reset` are **JS hooks only** — `.key`, `.key--icon` and
-`.key--primary` carry all the styling except `.transport__play`'s `min-width`.
 
-**The speed picker.** A `.select` — the same white display window as every other
-select on the bench, 40 px tall to match the keys, `width: auto` with a 5 rem
-floor — pushed to the far right of the row by `margin-inline-start: auto`, so it
-does **not** share the key cluster's seams. That gap is the point: it is not a
-transport key. Play/Pause, Step, Fast-forward and Reset act on the run; this sets
-the *rate* the run advances at, 0.5× to 8× of real time, and it is the only
-control on the cluster that reads as a value rather than an action — hence a
-window rather than a key. It is not a substitute for Fast-forward, which skips
-ahead in batches with no intermediate frames and leaves the rate alone. On the
-handheld deck the auto margin is dropped to a fixed gap, so the keys stay centred.
+A **group container**: `--radius-4`, 5 px padding, 4 px gaps, `--surface-sunk`,
+`inset var(--ring)`, holding `--radius-3` keys at 44 px (16 − 5 = 11,
+concentric). It **wraps**: five 44 px controls plus a picker want 292 px and a
+23rem rail gives ~296 px of panel, so wrapping is the only version of this that
+cannot overflow.
 
-The multiplier is engine state and the picker is per-route DOM, so **the shell
-resets the engine to 1× when it tears a route down** — otherwise a tab left at 8×
-hands the next visualization eight times the rate its own picker displays, and
-selecting 1× on a picker that already reads 1× fires no `change` event to correct
-it.
+**Play/Pause is the one primary key on the page.** 44 px tall, 5.5rem minimum,
+`--accent` fill, `--accent-ink` label, its own darker `--accent-press` ring, a
+contact shadow and the sub-pixel `--bevel`. Hover **adds** `--e-hover` rather
+than swapping a layer; active takes `--accent-press` and a 1 px `translate`.
 
-Glyphs are inline `<svg class="key__glyph" aria-hidden="true">` at 16 px, **solid
-`fill: currentColor`, no stroke**: Play (filled triangle), Pause (two filled
-bars), Step (bar + filled triangle), Fast-forward (two filled triangles), Reset
-(filled triangle against a bar, pointing back to the start). Revision 1's 16 px /
-1.5 px / round-cap / round-join spec is Feather-Lucide's house style exactly —
-"no icon library" satisfied by rebuilding the icon library's look.
+**Step, Fast-forward and Reset are ghosts** — no fill and no ring at rest, so
+nothing competes with Play for a newcomer's eye. They take `--wash-1` on hover,
+`--wash-2` plus a 1 px depress on press, and `--ring-strong` while
+`aria-pressed` (Fast-forward held).
 
-Play/Pause is the one primary key on the page; it swaps its label and glyph and
-never uses `aria-pressed`. Fast-forward while held is `aria-pressed` (inverted).
-The cluster's 2 px top rule is ink and turns `--accent` while running — read from
-`[data-running="true"]` alone, with no parallel `.transport--running` class.
-Disabled keys: muted text, `--line` border, opacity 1.
+The 2 px ink rule on top is gone; `[data-running="true"]` turns the group's own
+inset ring `--accent` and nothing else changes — read from the data attribute
+alone, no parallel class.
+
+Glyphs stay inline 16 px SVG, **solid `fill: currentColor`, no stroke**: filled
+triangle, two filled bars, bar + triangle, two triangles, triangle against a bar.
+
+The speed picker keeps its `margin-inline-start: auto`; that gap is still the
+point — it sets a rate, it is not a transport key. The shell still resets the
+engine to 1× when it tears a route down.
 
 ### Readouts: hero window and ledger
 
-```html
-<section class="readouts" aria-label="Readouts">
-  <p class="readouts__summary visually-hidden" aria-live="polite"></p>
+Markup is unchanged from revision 2, including the complete
+`table` / `rowgroup` / `row` / `columnheader` / `cell` role chain, which must stay
+explicit because `.ledger`, `tbody`, `tr` and `td` all take a new `display` at
+≤ 599 px and engines drop the implicit table role when they do.
 
-  <div class="hero" data-state="agree" style="--err: 0.52">
-    <div class="hero__row">
-      <output class="hero__value" aria-live="off">6.012</output>
-      <span class="hero__target">6.000</span>
-    </div>
-    <div class="hero__band" aria-hidden="true"><span class="hero__needle"></span></div>
-    <div class="hero__meta">
-      <span class="hero__label">Mean bin</span>
-      <span>analytic <var>n</var>·<var>p</var></span>
-      <span class="hero__error">+0.012</span>
-    </div>
-  </div>
+**Hero**: 112 px white window at `--radius-3`, `0 0 0 1px var(--window-stroke)`
+plus `--e-1`, `max-width: 23rem`. The measured value at Martian Mono 500 / 40 px
+and its analytic target at 300 / 40 px on one baseline — observed against theory
+carried by weight, not by a label.
 
-  <div class="ledger-wrap">
-    <table class="ledger" role="table">
-      <thead role="rowgroup"><tr role="row">
-        <th class="ledger__head" role="columnheader" scope="col"><span class="visually-hidden">Quantity</span></th>
-        <th class="ledger__head" role="columnheader" scope="col">Measured</th>
-        <th class="ledger__head" role="columnheader" scope="col">Analytic</th>
-        <th class="ledger__head" role="columnheader" scope="col">Error</th>
-      </tr></thead>
-      <tbody role="rowgroup">
-        <tr class="readout" role="row" data-state="off">
-          <td class="readout__label" role="cell">Variance</td>
-          <td class="readout__value" role="cell">2.971<span class="readout__unit"></span></td>
-          <td class="readout__target" role="cell">3.000</td>
-          <td class="readout__error" role="cell">
-            <span class="readout__abs">−0.029</span><span class="readout__rel">(1.0%)</span>
-            <span class="readout__state"></span><span class="visually-hidden">not yet converged</span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+**The null meter.** A band of fixed width `--band-w: 12rem` with the baseline and
+the centre tick drawn as two background layers of a single `::before`, and a
+2 × 10 px needle positioned with
+
+```css
+.hero__needle { left: 50%; translate: calc((clamp(0, var(--err), 1) - 0.5) * var(--band-w)) 0 }
+.hero        { transition: --err var(--dur-4) var(--ease-std) }
 ```
 
-**The whole role chain is explicit, `role="table"` included.** `.ledger`,
-`tbody`, `tr` and `td` all take a new `display` at ≤ 599 px, and Chrome and
-Firefox drop the implicit `table` role from an element whose display is not a
-table display. `role="rowgroup"` has a *required context role* of
-table/grid/treegrid, so a `<tbody role="rowgroup">` under a table that has lost
-its own role is an orphan and the browser exposes a generic div full of dangling
-roles — which is what revision 2 shipped, with every role present except the one
-that anchors them. At that width `thead` is clipped visually-hidden, so the
-column headers reach a reader only through this chain.
+`--err` is registered `inherits: true` (see [What changed and why](#what-changed-and-why)),
+so the needle reads what the shell writes on `.hero`, and because a registered
+`<number>` is animatable the transition interpolates the value instead of
+animating a layout property. `::before` carries both marks so `::after` is free
+to speak in the empty state.
 
-**Hero**: 96 px white window, 1 px `--window-stroke`, `max-width: 22rem`. The
-measured value at Martian Mono 500 / 40 px and its analytic target at 300 / 40 px
-on one baseline — observed against theory carried by weight, not by a label.
-Beneath it the **null meter**: a 12 rem band with a centre major and a 2 × 9 px
-needle at `left: clamp(0%, calc(var(--err) * 100%), 100%)`. Beneath that at
-12 px: the label, the word "analytic" with the target's formula if the viz gives
-one (`Readout.formula`, marked-up prose, so `n·p` and `2L/(πd)` arrive with their
-variables italic), and the signed error. `[data-state="agree"]` colours the error
-and the needle `--window-agree` and drops the dotted underline. If the hero
-readout has no target, `.hero__target` and `.hero__band` are omitted (not "—" at
-40 px).
+**No reading yet is not a reading**, and it now says so. Where
+`Number.isFinite(value)` is false the shell prints an em dash and hides the
+needle (`.hero__needle[hidden]`) — dead centre is the one position that means
+"agrees with theory". The stylesheet dresses that with `:has()` and **no DOM
+change**:
 
-**No reading yet is not a reading.** A mean over zero samples is `NaN` — the
-honest value, and the worst possible thing to set at 40 px. Where
-`Number.isFinite(value)` is false the hero prints an em dash in place of the
-numeral, empties the error, and **hides the needle** (`.hero__needle[hidden]`)
-rather than parking it: dead centre on the null meter is the one position that
-means "the reading agrees with theory", and a needle resting there under a `NaN`
-claims a convergence nothing has been tested for. The analytic target still
-prints — it is known whether or not anything has been measured against it. This
-is the same degradation the live region already makes ("Mean bin not measured
-yet"), which is why §6 also requires the tab to *open* on a completed run.
-`.hero__unit` is a Martian Mono 15 px muted suffix after the measured value, for
-readouts that carry one.
+```css
+.hero:has(.hero__needle[hidden]) .hero__band::before { /* the centreline goes dashed */ }
+.hero:has(.hero__needle[hidden]) .hero__band::after  { content: "waiting for the first sample" }
+.hero:has(.hero__needle[hidden]) .hero__value        { color: var(--window-ink-muted) }
+```
 
-**Ledger**: booktabs rules — 2 px ink top and bottom, 1 px under the head, no
-vertical rules, no zebra. Columns: label (Archivo 500 / 13 px, left), Measured
-(Martian Mono 500 / 15 px, right, unit after in muted 12 px, width reserved
-10ch), Analytic (Martian Mono 400 / 12 px wdth 87.5, muted, 8ch), Error (12 px
-mono, 12ch; absolute error with an explicit sign, then the relative error in
-muted parentheses). Tolerance state is carried three ways, none of them a
-green/amber pair: colour (`--agree` when converged, `--ink` otherwise), a dotted
-underline on the absolute error **until** it converges, and an 8 px
-`.readout__state` square that is hollow until converged and filled `--agree`
-after, with visually-hidden "converged" / "not yet converged" text.
-`.readout--none` marks a readout with no target — and for such a row the shell
-emits **no target and no error content at all**, not an em dash, so the handheld
-collapse really is one line.
+`.hero__band` already carries `aria-hidden="true"`, so the sentence is added for
+sighted readers with **zero duplication** in the live region, which already
+announces "not measured yet". Three redundant cues: a quiet value, a dashed
+centreline, and words. The analytic target still prints in full — it is known
+whether or not anything has been measured against it.
 
-Every number is text in the DOM; widths are reserved in `ch` so a font swap
-cannot reflow the ledger.
+**Ledger**: the lattice is gone. No vertical rules, no inter-cell seams, no
+zebra, and no booktabs 2 px ink rules. Exactly **one** 1 px `--line` rule, under
+the head. The head band sits on `--surface-sunk` with `--radius-2` end corners
+and column heads in Archivo 11 / 560 / 92% `--ink-muted`. Rows are 40 px (was 32)
+with a `--wash-1` hover that arrives in 0 ms and fades out over 140 ms, so
+following one quantity across four columns stops being an act of concentration.
+
+Columns keep their `ch` reservations so a value change cannot reflow. Tolerance
+state keeps all three cues — `--agree` colour, the dotted underline until
+convergence, and the 8 px `.readout__state` square, hollow → filled. No
+green/amber pair, no delta chips.
+
+**No convergence animation.** A settle wash on `[data-state="agree"]` was
+considered and dropped: `converged()` in `readouts.ts` is a plain threshold with
+no hysteresis, so a reading sitting near the tolerance boundary during a run
+would flip the attribute repeatedly and strobe the ledger. Liveness is carried by
+the null meter, which is continuous, and by the row hover. See §8 for the one
+change that would make it safe.
 
 ### Story stepper (the program tape)
 
-```html
-<section class="story">
-  <h2 class="visually-hidden">Story mode</h2>
-  <div class="story__tape">
-    <button class="key key--small" type="button" aria-disabled="true">Prev</button>
-    <ol class="story__steps">
-      <li><button class="story__step story__step--visited" type="button">1</button></li>
-      <li><button class="story__step" type="button" aria-current="step">2</button></li>
-    </ol>
-    <button class="key key--small" type="button">Next</button>
-  </div>
-  <h3 class="story__label">Ten thousand</h3>
-  <p class="story__caption">…</p>
-</section>
-```
-Steps are 28 × 28 px keys numbered 1…n in Martian Mono 500 / 13 px. Unvisited:
-muted numeral, 1 px `--stroke` border. Visited: ink numeral and border
+Steps are 30 px of ink at `--radius-2` with a 44 px target from
+`::after { inset: -7px }`, numbered in Martian Mono 500 / 13 px. Unvisited: muted
+numeral, `--ring`. Visited: `--ink` numeral, `--ring-strong`
 (`.story__step--visited` is genuine state the DOM cannot otherwise express).
-Current is `aria-current="step"` **only** — there is no `.story__step--current`.
-Selecting a step writes its values to the controls and the URL. Prev and Next at
-the ends of the tape are `aria-disabled`, for the reason §4 gives: a key must not
-take itself out of the tab order under the keypress that operated it.
+Current is `aria-current="step"` **only** — `--accent` fill, `--accent-ink`
+numeral, `--e-1`. Prev and Next at the ends are `aria-disabled`, not `disabled`.
 
 ### Fact card (a data plate)
 
-```html
-<section class="fact">
-  <h2 class="fact__text">Abraham de Moivre derived the bell curve in 1733 …</h2>
-  <p class="fact__source">Source: <a href="…">de Moivre, Approximatio… (1733)</a></p>
-  <button class="key key--small fact__next" type="button">Another fact</button>
-</section>
-```
-The fact text **is** the heading; no "Fact" or "Did you know" label above it. The
-source is Martian Mono 400 / 12 px muted with the label as an ink-underlined
-link. No emoji, icon, coloured stripe or quotation ornament.
+The second elevated object in the figure column: `--surface-raised`,
+`--radius-4`, `var(--ring), var(--e-2)`, 20 px padding. The fact text **is** the
+heading at 18 px — no "Fact" or "Did you know" label. It fades in once on mount
+through `@starting-style`; that is the only entrance animation in the file.
 
 ### Caption
 
-```html
-<p class="caption" data-permalink="https://…/#galton?rows=12&p=0.5&seed=42">
-  <span class="caption__figure">Figure 1.</span>
-  <span class="caption__text">A Galton board with 12 rows and bias <var>p</var> = 0.5; 2,000 balls have fallen at 40/s, seed 42.</span>
-  <button class="caption__copy" type="button">Copy permalink</button>
-</p>
-```
-Archivo 13 px muted under the plate; "Figure n." in ink 600 where n is the
-visualization's registry position. The sentence is rewritten from the live
-parameters and seed — which is why the tabular-figures fix in §2 matters here
-above all. `data-permalink` is what the print stylesheet prints.
+Archivo 13 px `--ink-soft` 16 px under the plate — closer than the 24 px section
+rhythm, because a caption belongs to its figure. "Figure n." in `--ink` at 560.
+"Copy permalink" is a ghost pill with a hover wash and a 44 px target, and turns
+`--accent-text` on success. `data-permalink` is what the print stylesheet prints.
 
 ### Masthead and footer
 
-Masthead: wordmark "Math Playground" (Archivo 800 / 18 px wdth 125, a link to the
-default route) left; right, `.masthead__end` holds the credit as two spans —
-"Ali Reza Shahvaran" in ink, "University of Toronto" muted — a "Source" link, and
-the scheme toggle. The credit is hidden below 600 px; the toggle is not.
+Masthead 56 px: wordmark left; right, the credit as two spans, a "Source" link
+and the scheme toggle. The credit is hidden below 600 px; the toggle is not.
 
-Footer (`.footer`, on `--surface`): `.sources` — a "Sources" heading and a list
-aggregating every fact's source across the registry (each `.sources__item`
-prefixed by the visualization's title in `.sources__viz`), 1 px seams between
-items; `.footer__meta` — version, licence, author in Martian Mono 12 px muted,
-and `.footer__shortcuts`, a `<label>` wrapping a `.switch` that turns the
-single-character keyboard shortcuts off (§9).
+Footer: `.sources` with 8 px between items and no seams, `.footer__meta` in
+Martian Mono 12 px `--ink-soft`, and `.footer__shortcuts`, a `<label>` wrapping a
+`.switch` that turns the single-character shortcuts off.
 
 ### Windows
 
-`.window` is the display-window primitive: white, 1 px `--window-stroke`, 22 px
-tall (32 px as an input), Martian Mono 500 / 13 px, tabular slashed-zero, right
-aligned, min-width 7ch, unit in `.window__unit`. Text inside uses `--window-ink`.
+`.window` is the display-window primitive: white, `--radius-2`,
+`0 0 0 1px var(--window-stroke)` plus `--e-1`, 28 px tall (36 px as an input,
+44 px on a coarse pointer), Martian Mono 500 / 13 px at −0.04em, tabular
+slashed-zero, right aligned, min-width 7ch. Text uses `--window-ink`; focus takes
+`--focus-window`.
 
 ---
 
 ## 6. Motion
 
 The simulation is the only continuous motion on the page. Chrome moves only in
-answer to a person's action and only to show what changed; nothing floats,
-breathes, fades in on scroll, counts up, or plays a load choreography. Values
-change instantly and in place — tabular numerals prevent jitter, now that they
-actually apply — and the first frame of every tab already shows the bed drawn and
-real readouts.
+answer to a person's action and only to show what changed. **Nothing animates on
+first paint** except the fact card's `@starting-style` fade.
 
-| Token | Value | Used for |
+| Token | Value | Scope |
 |---|---|---|
-| `--dur-1` | 80 ms | hover, press, checked, window border, the transport rule going vermilion |
-| `--dur-2` | 160 ms | switch travel, the ball settling on the active tab, the hero needle |
-| `--ease-snap` | `cubic-bezier(0.2, 0, 0, 1)` | every transition above |
-| `--ease-flip` | `steps(1, start)` | key inversion — a switch flips, it does not fade |
+| `--dur-1` | 90 ms | colour and opacity: hover wash, press, ledger row hover |
+| `--dur-2` | 140 ms | transform and box-shadow: carriage scale, key depress, rings |
+| `--dur-3` | 200 ms | travel: switch knob, the peg swelling into the ball |
+| `--dur-4` | 280 ms | the null-meter needle |
+| `--dur-5` | 420 ms | the fact card's entrance |
+| `--ease-std` | `cubic-bezier(0.2, 0, 0, 1)` | moving in place (revision 2's `--ease-snap` value, kept, renamed) |
+| `--ease-out` | `cubic-bezier(0.05, 0.7, 0.1, 1)` | arriving |
+| `--ease-in` | `cubic-bezier(0.3, 0, 0.8, 0.15)` | leaving |
+| `--ease-tactile` | `cubic-bezier(0.25, 0.46, 0.45, 0.94)` | keys and the carriage |
+| `--ease-settle` | `cubic-bezier(0.5, 1, 0.75, 1.2)` | **the ball landing on the active peg. Nowhere else.** |
+| `--hover-in` / `--hover-out` | 0 ms / 140 ms | hover appears instantly and fades out |
 
-Transitions are declared only on `transform`, `opacity`, `background-color`,
-`border-color`, `outline-color` and the needle's `left`; never on width, height
-or box-shadow.
+`--ease-flip: steps(1, start)` is **deleted**, and with it
+`.key:active { background: var(--ink); color: var(--surface-raised) }`. An instant
+full inversion is not a fast transition; it is the deliberate absence of one, and
+black/white inversion is exactly how a 1998 toolbar button reported "pressed".
+
+**What may animate:** `transform` / `translate` / `scale`, `opacity`,
+`box-shadow`, `background-color`, `background-image`, `color`, `border-color`,
+`outline-color`, and the registered custom property `--err`. **Banned:** `left`,
+`top`, `right`, `bottom`, `width`, `height`, `padding`, `margin`, `font-size`. A
+grep for `transition: left|top|width|height` must return zero, and does.
+Independent `translate:` and `scale:` are preferred over `transform:` so a hover
+scale and a state translate cannot clobber each other.
+
+Every transition is enumerated per rule. `transition: all` appears nowhere.
 
 **Tab transition.** Route change is an in-place swap, not a page transition. The
-bench stays; the incoming visualization paints its background layer on the first
-frame; the title, blurb, caption, readouts, story and fact are re-rendered. The
-peg on the new tab becomes the ball over `--dur-2`; the strip scrolls it into
-view. The canvas never crossfades: an instrument switches channels instantly.
+canvas never crossfades: an instrument switches channels instantly.
 
-**Revision 1's readout "re-arm" is deleted.** It asked the shell to toggle a
-class for exactly one frame to trigger an opacity fade, which needs a
-forced-reflow dance between add and remove and is precisely the frame-timing
-fragility CSS animations exist to avoid — and a fade-in on every route change is
-load choreography, which §11 forbids. Readouts now appear with the swap.
+**Reduced motion.**
 
-**Reduced motion.** `@media (prefers-reduced-motion: reduce)` sets both durations
-to 0, forces `scroll-behavior: auto`, and zeroes every transition and animation
-duration, **delay**, and iteration count (revision 1 zeroed only the two
-durations, so the guard would not have held the first time a delay was added).
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+```
+
+Two deliberate choices. **0.01 ms rather than `none`**, so `transitionend` still
+fires and nothing listening for it hangs. And **durations are collapsed while
+colour, background and box-shadow state changes are preserved** — hover, focus
+and pressed feedback all survive, they simply arrive instantly. A blanket
+`transition: none !important` would be a regression, not a fix.
+
+Every state in the design is legible with all motion removed, by construction:
+the active tab is fill + ring + shadow + ink weight, not the ball's arrival; the
+switch is knob position + fill; the fader is the filled channel; the needle is
+its position. The ball's swell and the needle's glide are confirmation, never the
+encoding.
+
 The shell does the rest: every visualization opens on the **completed state of
-its default configuration** — histogram filled, curve fitted, readouts real — and
-waits for Play; a user-triggered run is permitted. Fast-forward renders batches
-without intermediate frames. Focus and pressed states remain fully visible.
-
-"Opens on the completed state" is work the shell has to do, not a property a
-visualization has: `create()` plus one `reset()` is an empty bed, and a
-reduced-motion reader gets no autoplay, so that empty bed is their *resting*
-state — a lone Gaussian over nothing and a 40 px `NaN` against its analytic
-target. Before the first paint the shell therefore advances the instance in
-Fast-forward batches until the emitted readouts stop changing, under a tick
-ceiling and a wall-clock budget. It cannot ask a visualization whether it is
-finished — the contract has no such question, and some experiments never are — so
-"the numbers have stopped moving" is the test, and a run that hits the budget
-stops on a real partial measurement rather than a `NaN`.
+its default configuration** and waits for Play; Fast-forward renders batches
+without intermediate frames.
 
 ---
-
 ## 7. Canvas conventions
 
-The plate is white (`--canvas`) and always the brightest surface on the page;
+The plate is white (`--canvas`) and always the brightest surface on the page —
+1.10:1 above the raised panels, which is the documented floor (§3);
 `core/canvas.ts` reads the tokens named in `CANVAS_THEME_VARS` **off the
 `.plate` element** and hands them to every visualization as `VizContext.theme`.
 No visualization hardcodes a colour.
+
+Two rules from §3 and §4 restated here, because this is the section a person
+reads before touching canvas code:
+
+- **RULE 0.** Every `CANVAS_THEME_VARS` token is a literal hex, pinned on
+  `.plate` in both schemes. Not `light-dark()`, not `color-mix()`, not a derived
+  value. An unregistered custom property is not resolved at computed-value time,
+  so `getComputedStyle` would hand `ctx.fillStyle` the literal function text and
+  it would paint nothing.
+- **The radius lives on `.plate`, never on the pixels.** `.stage` and both
+  canvases carry no `border-radius`, and `.plate` carries no `overflow: hidden`.
+  The canvas is inset by `--plate-pad`, so its corners never reach the plate's
+  radius and no datum can ever be clipped.
+
+Because the plate never changes value in either scheme, every ratio in this
+section and the CVD validation behind it survive the revision-3 re-level with
+nothing to re-run.
 
 ### The three pens
 
@@ -1093,8 +1186,10 @@ smeared, or given the halo.
 ## 8. Shell contract
 
 What `src/ui/*.ts` and `src/core/*.ts` must do for the theme to hold. **None of
-this is optional and none of it is "recommended".** The four contract changes at
-the top land with this revision; the theme is not conformant without them.
+this is optional and none of it is "recommended".** These landed with revision 2
+and are restated here unchanged; revision 3 is a stylesheet-only change and adds
+no shell requirement. The one thing it *removes* is a bug that lived in
+`theme.css` rather than in the shell — see [What changed and why](#what-changed-and-why).
 
 ### Required contract changes
 
@@ -1261,8 +1356,36 @@ announced every intermediate value and a run announced every throttled update.
 ### Scheme
 
 - The masthead toggle writes `data-theme="dark"` / `"light"` on
-  `document.documentElement` and persists it. Default is light with no key
-  stored: the light faceplate is the identity, and the toggle is the recourse.
+  `document.documentElement` and persists it. **With no key stored the OS
+  preference decides**, because `:root` declares `color-scheme: light dark` and
+  every scheme-varying token is a `light-dark()` pair; the toggle wins in both
+  directions through `:root[data-theme="dark"|"light"] { color-scheme: … }`.
+  Revision 2 made dark reachable only through the toggle on the argument that the
+  light faceplate was the identity. That argument is gone with the faceplate: the
+  light scheme is now a warm-lit page, not a machined plate, and a reader
+  arriving from an OS in dark mode should not get a bright page while hunting for
+  an icon. No `.ts` change is needed — `shell.ts` already writes both values.
+
+### One optional change, not shipped
+
+The ledger would teach more if a reading visibly **settled** when it started
+agreeing with theory — a 420 ms wash in the analytic ink on
+`.readout[data-state="agree"]`. The shell already writes `data-state`, so the CSS
+is one `@keyframes` and one rule and needs no new hook.
+
+It is not shipped because `converged()` in `readouts.ts` is a bare threshold:
+
+```ts
+return scale === 0 ? Math.abs(value) <= tolerance
+                   : Math.abs(value - target) / scale <= tolerance;
+```
+
+A reading sitting near the tolerance boundary during a run flips the attribute on
+consecutive updates, and the animation restarts every time — a strobing
+convergence indicator in a tool built for watching convergence, which is worse
+than none. **The prerequisite is hysteresis**: enter `agree` at `tolerance` and
+leave it at, say, `1.5 × tolerance`, so the state cannot chatter. With that in
+place the animation is safe to add.
 
 ---
 
@@ -1270,32 +1393,23 @@ announced every intermediate value and a run announced every throttled update.
 
 | Criterion | How it is met |
 |---|---|
-| 1.4.3 Contrast (AA) | Every text pair in §3, recomputed; the lowest is `--ink-muted` at 5.42:1 |
-| 1.4.11 Non-text contrast | Every border, mark, peg, track and data pen in §3; the histogram wash is explicitly not a sole encoding |
-| 1.4.1 Use of colour | Convergence carries colour + a dotted underline + a hollow/filled square + hidden text; switch state carries position + inversion; running state carries a rule that is also the Pause label |
+| 1.4.3 Contrast (AA) | Every text pair in §3, computed from the rendered DOM. The lowest is `--ink-soft` at 4.74:1 on the page ground; the lowest on a panel is 5.14:1 |
+| 1.4.11 Non-text contrast | Every ring, mark, peg, channel, fill and data pen in §3. `--stroke` is 3.16:1 at its worst (on `--surface-sunk`); the fader's fill is 3.66:1 against its channel and the channel carries its own 3.16:1 ring; the switch reads 3.16:1 when **off** |
+| 1.4.1 Use of colour | Convergence carries colour + a dotted underline + a hollow/filled square + hidden text; switch state carries position + fill; running state carries a ring that is also the Pause label; the empty hero carries a quiet value + a dashed centreline + the words "waiting for the first sample" |
 | 1.4.4 Resize text | The whole scale is rem against the browser default; no `html { font-size }` |
-| 1.4.10 Reflow | 360 px single column, no horizontal page scroll; the ledger scrolls inside `.ledger-wrap` |
+| 1.4.10 Reflow | 360 px single column with **zero** horizontal page scroll, verified in the browser; the ledger scrolls inside `.ledger-wrap`; the tab strip inside `.tabs__strip` |
 | 1.4.12 Text spacing | No fixed heights on text blocks; `ch`-reserved ledger columns |
-| 2.1.4 Character key shortcuts | Target-filtered, no Space binding, and switchable off in the footer |
-| 2.5.8 Target size | 44 px keys, tab buttons and stepper keys on touch; the switch row is a 44 px `<label>` |
+| 2.1.4 Character key shortcuts | Target-filtered, no Space binding, switchable off in the footer |
+| 2.4.11 Focus not obscured / focus appearance | One construction everywhere: a 2 px `--focus-line` outline at 2 px offset, fully enclosing the control, plus a 5 px vermilion halo. The **outline** is what conforms — `box-shadow` is dropped in forced-colors mode, and a ≥ 2 px solid enclosing line needs no separate contrast check against the control |
+| 2.5.5 / 2.5.8 Target size | One `@media (pointer: coarse)` block lifts keys, stepper keys, story steps, inputs and tabs to 44 px; three `::after { inset: −6/−7px }` extensions give the 30–32 px keys a 44 px target on a fine pointer without growing the ink. The transport is 44 px at **every** width. The spacing exception is not relied on anywhere |
 | 4.1.2 Name, role, value | `role="tablist"` owns only tabs; groups are `role="presentation"`; the ledger carries the complete `table` / `rowgroup` / `row` / `columnheader` / `cell` chain, so its semantics survive the ≤ 599 px `display` change |
-| 2.4.3 Focus order | No control removes itself from the tab order under the keypress that operated it: a key at the end of its range (tab index Previous / Next, story tape Prev / Next) is `aria-disabled`, not `disabled`, so focus stays where the reader put it |
-| 2.3.3 Animation from interactions | `prefers-reduced-motion` zeroes durations, delays and iteration counts; visualizations open on the completed state |
-| Forced colors | A `@media (forced-colors: active)` block remaps every chrome token to system keywords, keeps `forced-color-adjust: none` on the marks whose backgrounds are the message (tab peg, switch, convergence square, hero needle, fader), and opts `.plate` out entirely with its canvas tokens restated as literals — `readCanvasTheme()` hands them to `ctx.fillStyle`, which cannot take a system keyword |
-
-Print (`@media print`) is a conformance-adjacent feature this audience will
-actually use: the page is a titled figure, a numbered caption, a table of
-measurements against analytic targets and a sources list — a handout. The block
-hides the tab bar, transport, controls, story tape, copy key, scheme toggle and
-shortcuts switch, forces one column, caps the plate at 4 in, prints the permalink
-from `data-permalink` after the caption, and keeps the ledger and the sources.
+| 2.4.3 Focus order | No control removes itself from the tab order under the keypress that operated it: a key at the end of its range is `aria-disabled`, not `disabled` |
+| 2.3.3 Animation from interactions | `prefers-reduced-motion` collapses every duration, delay and iteration count while preserving state feedback; visualizations open on the completed state |
+| Forced colors | `@media (forced-colors: active)` remaps every chrome token to system keywords **and hands every boundary back to `border`**, because `box-shadow` — which this design draws all of its rings with — is not rendered in that mode. `forced-color-adjust: none` is kept on the marks whose backgrounds are the message (tab peg, switch, convergence square, hero needle, fader channel, fill and track), and `.plate` opts out entirely with its canvas tokens restated as literals — `readCanvasTheme()` hands them to `ctx.fillStyle`, which cannot take a system keyword |
 
 ---
 
 ## 10. Known costs
-
-Stated here rather than left implicit, because both were unacknowledged in
-revision 1.
 
 **Two variable webfonts from `fonts.googleapis.com`.** The identity rests on
 Archivo and Martian Mono, requested render-blocking from a third party on a page
@@ -1303,56 +1417,91 @@ whose premise is zero runtime dependencies — and a third-party request leaks
 visitor IPs from a tool published under a university affiliation. Mitigations in
 place: the axis ranges are trimmed to what is used, `preconnect` is declared,
 `display=swap` prevents invisible text, and the canvas font-loading rule in §8
-makes the swap deterministic instead of leaving axis labels in Consolas forever.
-The documented hardening path, which changes no token and no class: drop two
-woff2 files into `public/fonts`, declare them with `@font-face` in `theme.css`
-(the ban is on `@import`, not `@font-face`), add `unicode-range` Latin subsets,
-and delete the three `<link>` tags. Take it if the privacy question is ever
-answered "no third parties".
+makes the swap deterministic. The documented hardening path, which changes no
+token and no class: drop two woff2 files into `public/fonts`, declare them with
+`@font-face` in `theme.css` (the ban is on `@import`, not `@font-face`), add
+`unicode-range` Latin subsets, and delete the three `<link>` tags.
+
+**`light-dark()` has no fallback.** The two-scheme palette is written as
+`light-dark()` pairs with no `@supports not` duplicate, deliberately: a
+hand-synced second palette is exactly the drift this construction exists to
+delete. The cost is that a browser older than Chrome 123 / Safari 17.5 /
+Firefox 120 (all shipped in 2023–24) gets a page with unresolved colour tokens.
+If that ever matters, the fix is a `@supports not (color: light-dark(#000, #fff))`
+block containing the **light** literals only — never a second dark palette.
 
 **The plate stays white in the dark scheme.** A large white rectangle in a dark
 room is a deliberate trade: it keeps every canvas contrast ratio in §3 valid
 across both schemes, keeps one set of pens, and matches the instrument — paper is
-paper. If that ever becomes unacceptable, it is a second full canvas palette and
-a second contrast audit, not a token flip.
+paper. The `#282D30` mat takes the local step from 17.82:1 to 13.92:1, which is a
+real improvement and not a comfortable one. Dropping the plate to an off-white is
+rejected because the three-pen CVD validation was measured against `#FFFFFF` and
+would have to be re-run; matting is the cheaper and safer choice, and the residual
+glare is a stated cost of keeping §7 intact.
+
+**`--range-w` is a constant.** The fader's zero-JavaScript fill depends on
+`--range-w: 480px` exceeding the input's real width. `--rail-w` tops out at 25rem
+= 400 px, so there is headroom — but it is a constant that must be raised if the
+rail ever grows past 480 px, and nothing will warn you.
+
+**A ledger value-change flash is not shipped.** Making the ledger something you
+watch rather than audit wants an animation on convergence, and the honest version
+needs hysteresis the CSS cannot express. See §8.
 
 ---
 
 ## 11. Do not
 
-The default AI web aesthetic, and this project's own tells, spelled out:
+The default AI web aesthetic, the second-order "escape from it", and this
+project's own tells, spelled out:
 
 - No Inter, system-ui, Space Grotesk, Geist, Fraunces or Instrument Serif. Two
   families only: Archivo and Martian Mono.
 - **No `font:` shorthand.** It resets `font-variant-numeric` and `font-stretch`.
-- No near-white slate or slate-950 grounds, no cream paper, no purple-to-blue or
-  any gradient. The only "gradients" are opaque 1 px ticks and marks.
-- No indigo, violet or teal accents. One signal colour, vermilion, spent by the
-  rubrication rule; never as text on grey, never on links or borders.
+- No indigo, violet, purple or teal accents; no gradient of any kind; no
+  glassmorphism, `backdrop-filter`, blur, grain, noise or texture. One signal
+  colour, vermilion, spent by the rubrication rule.
+- **No cream paper and no warm beige ground**, and equally no `#fafafa`,
+  zinc or slate-950. The ground is a specific low-chroma hue chosen as the
+  optical complement of the accent, and the shadow tint is matched to it.
 - **No green/amber semantic pair.** Agreement is the drafting pen; deviation is
   ink plus a dotted underline plus a hollow square.
-- No cards. No rounded-xl — radius 0 on every panel, window, key, select, switch,
-  tab and plate; 50 % on the thumb and the peg.
-- No shadows of any kind, including hover lifts, focus glows and modal shadows.
-  No blur, backdrop-filter, glassmorphism, grain, noise or texture.
+- **No card grid.** Three elevated objects on the page, and only three: the
+  plate, the rail panel, the fact card. The sections inside the figure column get
+  no fill, no ring and no shadow. Boxing every section at 12 px radius on 5% grey
+  is the generic answer, and it is the same mistake revision 2 made with seams.
+- No `border-radius: 0` and no `--radius-0`. Radius is by role from a five-step,
+  non-power-of-two scale, and nested radii are computed, not guessed.
+- No `border: 1px solid` for a panel or control boundary — boundaries are rings
+  (`box-shadow: 0 0 0 1px`) so hover can thicken them with no layout shift.
+  `border` survives only where a ring cannot go: the fader carriage and the
+  ledger's single head rule.
+- No uniform-alpha black shadows. Shadows are tinted to the ground's hue, layered
+  with per-layer alphas, and every blurred layer over 4 px carries negative
+  spread.
 - No shadcn-style tracks, pills or toggles — **and no shadcn chevron**: the
   select's index mark is a solid triangle. No icon library — **and no
   16 px / 1.5 px / round-cap glyph spec**, which is that library's look rebuilt
   by hand; transport glyphs are solid fills.
 - No hero-plus-three-feature-cards, no bento grid, no centred landing layout, no
-  KPI stat tile — the hero is a null meter, not a big number with a green delta
-  chip.
-- No `:hover` outside `@media (hover: hover) and (pointer: fine)`. Hover here is
-  a full inversion and inversion means "pressed"; a latched hover on iOS would
-  leave the Play key reading as pressed after every tap.
-- No uppercase or tracked eyebrows, no middle-dot meta strings, no arrows
-  appended to buttons, no coloured left or top stripes, no "Did you know", no
-  "Get started" pairs, no blinking live dot, no fps counter shown to students.
+  KPI stat tile — the hero is a null meter, not a big number with a delta chip.
+- No `:hover` outside `@media (hover: hover) and (pointer: fine)`.
+- No uppercase or tracked eyebrows — density comes from Archivo's **width axis**.
+  No middle-dot meta strings, no arrows appended to buttons, no coloured left or
+  top stripes, no "Did you know", no "Get started" pairs, no blinking live dot,
+  no fps counter shown to students.
 - No numbering except story steps and figure numbers.
+- No `clamp()`, `text-wrap: balance` and a prose measure deployed as a set.
+  `clamp()` appears once, on the title; `balance` once, on the same element; the
+  measure applies to two elements.
 - No motion that is not the simulation or a direct answer to a user action: no
-  scroll reveals, count-ups, staggered load-ins, canvas crossfades, overshoot
-  easing, and no one-frame class toggles standing in for an animation.
+  scroll reveals, count-ups, staggered load-ins, canvas crossfades, or one-frame
+  class toggles standing in for an animation. Exactly one overshoot curve exists
+  and it is spent on exactly one element.
+- No animation of a layout property. Not `left`, not `width`, not the needle.
 - No measurement set in Archivo, no paragraph set in Martian Mono.
+- **No `color-mix()` or `light-dark()` in a `CANVAS_THEME_VARS` token**, and no
+  `light-dark()` nested inside `color-mix()`. See §3 RULE 0.
 - No per-visualization hex values, no `globalAlpha` on a data area, no thin mark
   in `--data-3`, no container line in `--grid`. A needed colour is a new token,
   and a new token is a line in `CANVAS_THEME_VARS` in the same commit.

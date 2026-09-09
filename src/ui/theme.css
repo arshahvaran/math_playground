@@ -1,30 +1,56 @@
 /* ==========================================================================
    math_playground — theme.css
-   Plotter Bench  ·  revision 2
+   Linen Bench  ·  revision 3
 
-   A machined, cool-grey faceplate holding a bright white plotter bed. Three
-   grounds step up in brightness (surface 1.20:1 → raised 1.16:1 → canvas) and
-   the plate is always the brightest thing on the page, which is what a 2 px
-   vermilion particle needs. Depth comes from that stepping and from 1 px seams
-   at ~2:1, never from shadows.
+   A pale cold-pressed linen page holding a white plotter bed that floats on
+   layered, blue-black shadow. The bench is no longer a machined faceplate cut
+   into cells by 1 px seams; it is a sheet of paper with three genuinely
+   elevated objects on it — the plate, the rail, the fact card — separated by
+   24 px of air.
 
-   The palette is three pens. --data-1 is the signal pen (vermilion) for what is
-   live and random; --data-2 the drafting pen (blue-black) for what is analytic;
-   --data-3 the graphite pen for area silhouettes, with --data-3-fill as its
-   opaque wash. The same vermilion is the chrome's single accent, spent by the
-   rubrication rule below. Agreement with theory is drawn in the drafting pen;
-   there is no green/amber pair.
+   The structural move: depth stops being carried by a value step and starts
+   being carried by four devices at once — a hairline ring drawn as
+   `box-shadow: 0 0 0 1px`, a two-to-four layer drop shadow with negative
+   spread, a real five-step radius scale, and generous space. That inversion is
+   what lets the grounds get CLOSER together (1.08:1 page → panel, 1.19:1
+   page → plate, down from revision 2's 1.20:1 and 1.16:1) while reading far
+   more layered. Revision 2 read flat because a 1 px seam was the only device
+   in it.
 
-   THREE FILE-WIDE RULES, in order of how easily they are broken:
+   The ground is #e8ecef — hsl(206 20% 93%), a pale drafting linen with real
+   chroma, up from revision 2's #d6ddd8, which sat at a BORDER value and was
+   being used as a page. Its hue is chosen as the optical complement of the
+   vermilion's 32°, so the one signal colour reaches maximum apparent
+   saturation against the chrome instead of blending into it. Shadows are
+   tinted rgb(23 40 54) = hsl(207 40% 15%), one step deeper than the ground and
+   never black: black layered over a chromatic ground desaturates it and goes
+   dusty.
 
+   What survives untouched, because it was never the problem: Archivo for words
+   with its width axis as the density instrument, Martian Mono for every
+   measurement, the vermilion #d53619, the three CVD-validated pens on a white
+   plate, the peg-row tab strip where the peg swells into the ball, and the
+   Measured / Analytic / Error ledger.
+
+   FIVE FILE-WIDE RULES, in order of how easily they are broken:
+
+   0. Every custom property read by CANVAS_THEME_VARS stays a LITERAL HEX and
+      is pinned on `.plate` in BOTH schemes. An unregistered custom property is
+      not resolved at computed-value time, so a `light-dark()` or a
+      `color-mix()` there would arrive at `ctx.fillStyle` as the literal string
+      and paint nothing. color-mix() and light-dark() are for chrome only.
    1. The `font:` shorthand is banned. It resets font-variant-numeric AND
       font-stretch to normal, which silently kills tabular figures and the
-      width axis. Every rule uses longhands.
+      width axis. Every rule uses longhands, and `font-variant-numeric` is
+      declared AFTER every font longhand.
    2. Every :hover rule lives inside @media (hover: hover) and (pointer: fine).
-      Hover here is a full inversion, and inversion means "pressed"; a latched
-      hover on a touch device would lie about state.
-   3. No colour literal outside §1 and the two scheme blocks. A needed colour
-      is a new token.
+   3. Every focus rule is `:focus-visible`, and the OUTLINE is load-bearing —
+      box-shadow is dropped in forced-colors mode, and a 2 px solid line that
+      fully encloses a control satisfies SC 2.4.11 with no separate contrast
+      check against the control.
+   4. Nothing animates a layout property. Allowed: transform / translate /
+      scale, opacity, box-shadow, background-color, color, border-color,
+      outline-color, and the registered custom property --err.
 
    Section map:
      1  Tokens                        9  Story mode
@@ -34,7 +60,7 @@
      5  Tab bar                      13  Native controls
      6  Bench, figure, plate         14  Footer and utilities
      7  Caption                      15  Responsive
-     8  Readouts: hero + ledger      16  Reduced motion, forced colors, print, dark
+     8  Readouts: hero + ledger      16  Reduced motion, forced colors, print
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -42,7 +68,7 @@
 
    --ticks and --viz-aspect are written by the shell and consumed inside calc()
    and aspect-ratio. Unregistered, an empty or malformed value makes the whole
-   declaration invalid at computed-value time: the fader's engraved scale would
+   declaration invalid at computed-value time: the fader's graduations would
    vanish and .stage would collapse to a 1x1 backing store with no error
    anywhere. Registered, a bad value falls back to the initial value.
 
@@ -64,11 +90,23 @@
 }
 
 /* Hero needle position, 0 = full negative error, 0.5 = converged, 1 = full
-   positive. Deliberately NOT given to --viz-aspect-narrow, which must stay
-   unregistered so `var(--viz-aspect-narrow, …)` can fall back. */
+   positive.
+
+   `inherits: true` is a CORRECTION, not a preference. The shell writes --err on
+   `.hero` and the needle reads it on `.hero__needle`, a DESCENDANT. Declared
+   `inherits: false` — as it was through revision 2 — the needle computed the
+   initial value 0.5 for every reading in every tab, and dead centre is the one
+   position on a null meter that means "this agrees with theory". The meter was
+   welded to a convergence claim nothing had been tested for.
+
+   Registered and inherited, it is also animatable, which is what lets the
+   needle transition the NUMBER rather than its `left` offset.
+
+   Deliberately NOT given to --viz-aspect-narrow, which must stay unregistered
+   so `var(--viz-aspect-narrow, …)` can fall back. */
 @property --err {
   syntax: "<number>";
-  inherits: false;
+  inherits: true;
   initial-value: 0.5;
 }
 
@@ -77,191 +115,402 @@
    -------------------------------------------------------------------------- */
 
 :root {
-  /* Grounds — a three-step machined stack; the plate is always brightest.
-     The step is 1.20:1 then 1.16:1 (1.38:1 end to end), enough that the rail
-     reads as a different plane from the faceplate on an uncalibrated laptop. */
-  --surface: #d6ddd8;          /* faceplate: masthead, footer, page ground */
-  --surface-raised: #edefec;   /* rails, plates, tab bar, figure sections */
-  --canvas: #ffffff;           /* plotter bed and display windows */
-  --line: #a2aba6;             /* 1 px seams — 2.04:1 on raised, visible */
-  --stroke: #657069;           /* control outlines, fader track (≥ 3.7:1 everywhere) */
-  --tick: #6f7975;             /* engraved graduations (≥ 3.2:1 on every ground) */
+  /* The scheme follows the reader's OS on first visit and the masthead toggle
+     wins in both directions (see the two overrides below). Every scheme-varying
+     token is a light-dark() PAIR written once — there is no duplicated dark
+     block to drift out of sync. */
+  color-scheme: light dark;
 
-  /* Ink */
-  --ink: #171b1d;
-  --ink-muted: #4e5750;
+  /* ---- Grounds.  Light: pale cold-pressed linen, hsl(206 20% 93%).
+     Dark: a cool graphite that keeps the same hue family, not slate, not
+     violet. Steps are deliberately small; ring + shadow + radius + air carry
+     the depth from here on.
 
-  /* Ink and rules that live on the white plate and inside display windows.
-     These do NOT change in the dark scheme, because the plate and the windows
-     stay white there. Every rule that paints onto --canvas uses these, never
-     --ink / --stroke — that is what made dark-mode hover vanish in revision 1. */
+       light   page → raised 1.08 · raised → plate 1.10 · page → plate 1.19
+               page → sunk 1.11 · raised → sunk 1.20
+       dark    page → raised 1.11 · page → sunk 1.08 · raised → mat 1.15
+               mat  → plate 13.92 (the page → plate cliff is 17.82) */
+  --surface: light-dark(#e8ecef, #15181b);        /* page ground, masthead, gutter, footer */
+  --surface-raised: light-dark(#f1f5f8, #1e2225); /* rail panel, fact card, active tab */
+  --surface-sunk: light-dark(#dde1e5, #0c0f11);   /* tab trough, fader channel, ledger head */
+  --canvas: #ffffff;                              /* plotter bed and every display window */
+
+  /* The bezel that mats the white plate at night. Transparent in light, so one
+     shadow string serves both schemes. */
+  --mat: light-dark(transparent, #282d30);
+  --mat-w: 12px;
+
+  /* ---- Ink.        page  / raised / sunk  (light)   ·   page / raised / sunk (dark) */
+  --ink: light-dark(#14181b, #eef2f4);        /* 15.03 · 16.29 · 13.58   ·  15.82 · 14.22 · 17.07 */
+  --ink-muted: light-dark(#4d585f, #b0babf);  /*  6.14 ·  6.66 ·  5.55   ·   9.01 ·  8.10 ·  9.73 */
+  --ink-soft: light-dark(#5e696f, #939ea3);   /*  4.74 ·  5.14 ·  4.29   ·   6.50 ·  5.84 ·  7.01 */
+  --stroke: light-dark(#737e85, #818c92);     /*  3.50 ·  3.79 ·  3.16   ·   5.18 ·  4.65 ·  5.59 */
+  --tick: light-dark(#737e85, #818c92);       /* same value, distinct role: graduations, pegs */
+  --line: light-dark(#d2d9de, #333a3e);       /*  1.20 ·  1.30 ·  1.09   — DECORATIVE ONLY.
+                                                 Budget: three visible rules per screen. */
+
+  /* Three ink tiers, not two. Revision 2 asked --ink-muted to carry the blurb,
+     the help text, the captions, the footer meta AND the ledger heads, which
+     flattened exactly the hierarchy it wanted. --ink-soft is the third, quieter
+     voice: captions, footer meta, fader scale numerals, the fact's source line,
+     the "no analytic target" cells and disabled controls.
+
+     --ink-soft is AA on --surface (4.74) and --surface-raised (5.14). On
+     --surface-sunk it measures 4.29 and the ONLY thing it colours there is a
+     disabled transport key, which SC 1.4.3 exempts as an inactive component.
+     Nothing else may use it on the sunk ground. The ledger's head band is sunk,
+     so its column heads take --ink-muted at 5.55. */
+
+  /* ---- Ink and rules that live on the white plate and inside display
+     windows. These do NOT vary by scheme, because the plate and the windows
+     stay white in both. Every rule painting onto --canvas uses these, never
+     --ink / --stroke — that is what made revision 1's dark hover states vanish.
+     Ratios on white: 17.34 / 7.49 / 5.15 / 17.34 / 9.41. */
   --window-ink: #171b1d;
   --window-ink-muted: #4e5750;
   --window-stroke: #657069;
   --window-stroke-hover: #171b1d;
   --window-agree: #24467a;
 
-  /* The one signal colour.
+  /* ---- The one signal colour.
      RUBRICATION RULE — vermilion is spent only on what is current or moving:
        particles and the live estimate on the plate (--data-1),
        the Play/Pause key,
        the ball on the active tab,
-       the index line on every fader thumb and the border of the control being
-         adjusted,
+       the filled portion of the fader being adjusted and its index line,
        the current story step,
-       the transport rule while the simulation runs,
-       focus rings on neutral controls.
-     It never colours links, seams, static borders, or text on the grey grounds
-     (3.48:1 on --surface is below AA for text). The only accent text is
-     --accent-ink on --accent. */
-  --accent: #d53619;
-  --accent-hover: #bd2f16;
-  --accent-ink: #ffffff;
+       the transport's ring while the simulation runs,
+       the focus halo.
+     As a MARK it is 4.04 / 4.38 / 3.66 / 4.80 on page / raised / sunk / canvas
+     and clears 3:1 on every plane. As TEXT it is below 4.5:1 on --surface and
+     --surface-sunk, so it still never colours text on the grey grounds;
+     --accent-text is the one legal accent-coloured text token.
 
-  /* Agreement with theory, drawn in the drafting pen — a reading that matches
+     In dark the CHROME accent lifts to #ef5b33 (5.27 / 4.74 / 5.69 — AA as
+     text) while the canvas pen stays #d53619 on the plate. That split is what
+     keeps the dark scheme honest without touching the bed. */
+  --accent: light-dark(#d53619, #ef5b33);
+  --accent-hover: light-dark(#bd2f16, #f7714b);
+  --accent-press: light-dark(#a72913, #d94e26);
+  /* White on #d53619 is 4.80; white on #ef5b33 is only 3.38 and FAILS AA, so
+     the dark primary key flips its ink to near-black at 5.54. A designed dark
+     scheme, not an inverted one. */
+  --accent-ink: light-dark(#ffffff, #17110d);
+  --accent-text: light-dark(#b8300f, #ef5b33); /* 5.10 · 5.52 · 4.61 · 6.06 */
+
+  /* Agreement with theory, drawn in the drafting pen. A reading that matches
      its reference is printed in the reference's ink. There is no warn colour:
-     deviation is the resting state of a converging estimate, not a fault, so
-     it stays --ink and is marked by a dotted underline and a hollow square. */
-  --agree: #24467a;
+     deviation is the resting state of a converging estimate, not a fault, so it
+     stays --ink and is marked by a dotted underline and a hollow square. */
+  --agree: light-dark(#24467a, #8fb4e8);       /* 7.92 · 8.58 · 7.16 · 9.41 */
 
-  /* Pens, in declared order for every tab; never re-rolled per visualization.
-     Read by core/canvas.ts (CANVAS_THEME_VARS) and handed to ctx.fillStyle
-     verbatim — nothing parses them, so any CSS colour syntax is valid here. */
-  --data-1: #d53619;           /* signal pen: particles, walkers, the live estimate */
-  --data-2: #24467a;           /* drafting pen: fitted / theoretical overlay, thin marks */
-  --data-3: #7f8985;           /* graphite pen: area SILHOUETTES at full opacity (3.61:1) */
-  --data-3-fill: #d2d6d4;      /* graphite wash: area FILLS, opaque — never globalAlpha */
-  --grid: #23292b;             /* the experiment's own geometry: pegs, needles, ruled lines */
-  --grid-soft: #8a938f;        /* containers: bin dividers, axes, floors, frames (3.16:1) */
+  /* ---- Washes. Written as light-dark() pairs of the ink at alpha rather than
+     as color-mix(in oklab, var(--ink) …): light-dark() resolves at USED-value
+     time and color-mix() at computed-value time, so nesting one inside the
+     other is the kind of thing that either works or silently produces nothing.
+     A wash that silently produces nothing is every hover state in the file. */
+  --wash-1: light-dark(rgb(20 24 27 / 0.07), rgb(238 242 244 / 0.08));  /* hover */
+  --wash-2: light-dark(rgb(20 24 27 / 0.13), rgb(238 242 244 / 0.16));  /* pressed */
 
-  /* Hover / pressed washes for the themed <select> picker. */
-  --wash-1: rgb(23 27 29 / 0.06);
-  --wash-2: rgb(23 27 29 / 0.14);
+  /* ------------------------------------------------------------------------
+     Elevation. The shadow LADDER is one geometry; only its colour tokens vary
+     by scheme, so there is no duplicated set of shadow strings anywhere in the
+     file. --lift is fully transparent in light and a white top highlight in
+     dark, because a drop shadow does almost nothing on a near-black ground.
 
-  /* Canvas contract (read by core/canvas.ts on .plate).
-     ctx.font carries no font-variation-settings, so the in-canvas label is
-     pinned to Martian Mono's default width axis and must not be given one. */
-  --canvas-label-font: 500 11px "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --canvas-line-width: 1;
-  --canvas-particle-radius: 2;
+     Light source is straight down for every shadow on the page: zero horizontal
+     offset, vertical ≈ half the blur. Every blurred layer over 4 px carries
+     NEGATIVE spread so the penumbra is narrower than the box — zero spread is
+     what makes a shadow read as a grey halo.
 
-  /* Type. Sizes are rem against the browser default so a reader who sets a
-     20 px root gets 20 px body text; only machined geometry stays in px. */
-  --font-display: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-body: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-mono: "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+     Two regimes. --e-1/2/3 sit on the linen at Vercel strength. --e-float is
+     for chrome that sits BESIDE the white plate, at tldraw strength: a 5 %
+     shadow next to a bright bed is invisible, which is exactly how revision 2
+     ended up flat.
+     ------------------------------------------------------------------------ */
+  --ring-c: light-dark(rgb(23 40 54 / 0.11), rgb(255 255 255 / 0.09));
+  --ring-c-2: light-dark(rgb(23 40 54 / 0.19), rgb(255 255 255 / 0.16));
+  --shade-1: light-dark(rgb(23 40 54 / 0.05), rgb(0 0 0 / 0.40));
+  --shade-2: light-dark(rgb(23 40 54 / 0.08), rgb(0 0 0 / 0.46));
+  --shade-3: light-dark(rgb(23 40 54 / 0.10), rgb(0 0 0 / 0.52));
+  --shade-4: light-dark(rgb(23 40 54 / 0.13), rgb(0 0 0 / 0.58));
+  --shade-5: light-dark(rgb(23 40 54 / 0.16), rgb(0 0 0 / 0.64));
+  --lift: light-dark(transparent, rgb(255 255 255 / 0.06));
 
-  --t-11: 0.6875rem;
-  --lh-11: 1rem;
-  --t-12: 0.75rem;
-  --lh-12: 1rem;
-  --t-13: 0.8125rem;
-  --lh-13: 1.25rem;
-  --t-15: 0.9375rem;
-  --lh-15: 1.5rem;
-  --t-17: 1.0625rem;
-  --lh-17: 1.5rem;
-  --t-18: 1.125rem;
-  --lh-18: 1.5rem;
-  --t-hero: 2.5rem;
-  --lh-hero: 2.75rem;
-  --title-size: clamp(1.75rem, 1.1rem + 2.6vw, 2.75rem);
+  --ring: 0 0 0 1px var(--ring-c);
+  --ring-strong: 0 0 0 1px var(--ring-c-2);
+  --ring-ctl: 0 0 0 1px var(--stroke);   /* the conformant 3:1 control boundary */
 
-  --wdth-wordmark: 125%;
-  --wdth-title: 90%;
-  --wdth-display: 100%;
-  --wdth-ui: 88%;              /* tabs, keys, group labels: semi-condensed */
-  --wdth-mono: 100%;
-  --wdth-mono-dense: 87.5%;    /* analytic, error, scale numerals, footer meta */
-  --tracking-display: -0.01em;
-  --measure: 62ch;
-  --num: tabular-nums lining-nums slashed-zero;
+  --e-1:
+    0 1px 1px var(--shade-1),
+    0 1px 2px -1px var(--shade-2),
+    inset 0 1px 0 var(--lift);
+  --e-2:
+    0 1px 2px var(--shade-1),
+    0 4px 8px -4px var(--shade-3),
+    inset 0 1px 0 var(--lift);
+  --e-3:
+    0 1px 2px var(--shade-1),
+    0 6px 12px -6px var(--shade-3),
+    0 18px 28px -12px var(--shade-4),
+    inset 0 1px 0 var(--lift);
+  --e-float:
+    0 0 0 1px var(--ring-c),
+    0 2px 3px var(--shade-4),
+    0 10px 24px -8px var(--shade-5),
+    inset 0 1px 0 var(--lift);
+  /* The plate is a lit bed, so it gets a frame, a mat (dark only — the ring is
+     transparent in light) and a long soft cast. */
+  --e-plate:
+    inset 0 0 0 1px var(--ring-c),
+    0 0 0 var(--mat-w) var(--mat),
+    0 1px 2px var(--shade-2),
+    0 8px 16px -8px var(--shade-3),
+    0 24px 40px -20px var(--shade-5);
+  /* Hover ADDS a layer, it does not swap one. */
+  --e-hover: 0 3px 9px -3px var(--shade-4);
 
-  /* Spacing (4 px base at a 16 px root) */
+  /* Sub-pixel tactile bevel. The primary key and the fader carriage ONLY —
+     anywhere else this is the 1998 raised-border idiom wearing a soft coat. */
+  --bevel:
+    inset 0 1px 0.5px rgb(255 255 255 / 0.22),
+    inset 0 -1px 0.5px rgb(23 40 54 / 0.16);
+
+  /* ------------------------------------------------------------------------
+     Geometry. Five steps, non-power-of-two, with nested-radius arithmetic
+     (outer = inner + padding). The three joins that actually occur are
+     concentric by construction:
+       tab trough 16 − 5 = 11 tab · transport group 16 − 5 = 11 key ·
+       stepper group 11 − 3 = 8 window.
+     Where the arithmetic would drive an inner radius below 4 px (rail panel 16
+     with 20 px padding), the inner element has NO radius: control rows are
+     separated by space, not boxed. That is what keeps this from becoming a
+     grid of nested cards.
+     ------------------------------------------------------------------------ */
+  --radius-1: 5px;    /* readout state square, unit chip, tick cap */
+  --radius-2: 8px;    /* display window, number input, story step */
+  --radius-3: 11px;   /* key, select, transport key, tab pill */
+  --radius-4: 16px;   /* rail panel, fact card, plate, tab trough, key group */
+  --radius-5: 22px;   /* handheld transport deck */
+  --radius-pill: 999px;
+  --radius-thumb: 50%; /* the tab ball — the ONLY circle in the system */
+
+  /* ------------------------------------------------------------------------
+     Spacing. 4 px base, no odd values. Revision 2 declared a scale and did not
+     spend it; these are the amounts that stop the rail feeling cramped.
+       12  inside a control        16  label → input, transport → first group
+       20  between control ROWS    24  between figure sections; the bench gap
+       28  between control GROUPS  32  above the footer
+        8  minimum between a control and its help text (was 4)
+     ------------------------------------------------------------------------ */
   --s-1: 0.25rem;
   --s-2: 0.5rem;
   --s-3: 0.75rem;
   --s-4: 1rem;
+  --s-5: 1.25rem;
   --s-6: 1.5rem;
+  --s-7: 1.75rem;
   --s-8: 2rem;
+  --s-10: 2.5rem;
   --s-12: 3rem;
+  --s-16: 4rem;
+
   --gutter: 1.5rem;
+  --bench-gap: var(--s-6);   /* was a 1 px seam. This one line is most of the fix. */
   --page-max: 100rem;
-  --rail-w: 20rem;
-  --rail-w-wide: 22.5rem;
-  --label-col: 8rem;
+  /* 23rem, not revision 2's 20rem: the transport's five 44 px controls and its
+     rate picker want 292 px on one row, and the rail also pays for 14 px help
+     text and 20 px of panel padding. The extra 48 px is spent on legibility,
+     not on more controls. */
+  --rail-w: 23rem;
+  --rail-w-wide: 25rem;
+  --label-col: 8.5rem;
+  --measure: 68ch;           /* blurb and story caption ONLY, never a wrapper */
 
-  /* Component sizes */
-  --header-h: 3rem;
-  --tab-h: 2.75rem;
-  --key-h: 2.5rem;
+  /* ------------------------------------------------------------------------
+     Control sizes. Desktop default 36 px; the primary action and the transport
+     are 44 px; everything reaches 44 px on a coarse pointer. Small keys keep a
+     30 px VISUAL and buy their 44 px target from a transparent ::after, so the
+     bench stays precise on a mouse without failing SC 2.5.8 on a finger.
+     ------------------------------------------------------------------------ */
+  --header-h: 3.5rem;        /* 56 — was 48 */
+  --tab-h: 2.375rem;         /* 38 pill inside a 48 trough */
+  --key-h: 2.25rem;          /* 36 */
+  --key-h-lg: 2.75rem;       /* 44 — Play/Pause and every transport key */
+  --key-s: 1.875rem;         /* 30 visual; target extended to 44 by ::after */
   --key-h-touch: 2.75rem;
-  --key-s: 2rem;               /* small key: stepper, seed */
-  --window-h: 1.375rem;
-  --input-h: 2rem;
-  --hero-h: 6rem;
-  --hero-max: 22rem;           /* ceiling on the hero column — max-content ran away */
+  --window-h: 1.75rem;       /* 28 — was 22, i.e. a 98.css text field */
+  --input-h: 2.25rem;        /* 36 */
+  --hero-h: 7rem;            /* 112 — was 96 */
+  --hero-max: 23rem;
+  --band-w: 12rem;           /* the null meter's travel — fixed, so the needle
+                                can move on `translate` instead of `left` */
   --row-control: 2.75rem;
-  --deck-h: 3.5rem;
+  --deck-h: 4rem;            /* 64 handheld transport deck */
 
-  /* Fader geometry — machined, so px. The scale gradients are sized to the
-     thumb's real travel and every offset here is part of that arithmetic. */
-  --range-h: 40px;
-  --track-h: 2px;
-  --thumb: 22px;
-  --thumb-margin: calc(var(--track-h) / 2 - var(--thumb) / 2); /* −10px, WebKit only */
+  /* Fader. A 14 px channel with a vermilion filled portion and a 20 x 12
+     carriage riding in it — not a circle: the ball belongs to the tab strip,
+     and one circle in the system is the Galton ball. Machined, so px.
+     --range-w is a CONSTANT upper bound on the input's width, used by the
+     box-shadow fill; it only has to EXCEED the real width. --rail-w tops out at
+     23.5rem = 376 px, so there is 104 px of headroom. Raise it if the rail ever
+     grows past 480 px. */
+  --range-h: 44px;
+  --range-w: 480px;
+  --channel: 14px;
+  --range-inset: calc((var(--range-h) - var(--channel)) / 2);   /* 15px */
+  --thumb: 20px;
+  --thumb-h: 12px;
+  --thumb-margin: calc((var(--channel) - var(--thumb-h)) / 2);  /* 1px, WebKit only */
+  --carriage-r: 4px;
   --index-w: 2px;
-  --index-h: 7px;
-  --major-h: 8px;
-  --minor-h: 5px;
-  --switch-w: 36px;
-  --switch-h: 18px;
-  --plate-pad: 16px;
-  --reg-mark: 10px;
-  --reg-inset: 6px;
+  --index-h: 8px;
+  --tick-h: 3px;             /* replaces revision 2's engraved --major-h / --minor-h */
+  --switch-w: 44px;          /* was 36 x 18 — an SC 2.5.8 failure on its short axis */
+  --switch-h: 26px;
+  --switch-knob: 20px;
+  --switch-travel: 18px;
 
-  /* Stage. 58dvh, not 72vh: at 1024x800 a 72vh plate pushed the readouts —
-     the design's declared subject — exactly to the fold. dvh, not vh, so
-     mobile Safari's shrinking toolbar is accounted for. */
+  --plate-pad: 16px;
+  --reg-mark: 12px;
+  --reg-inset: 14px;         /* was 6 — the marks must clear the 16 px plate radius */
+
+  /* Stage. 58dvh, not 72vh: at 1024x800 a 72vh plate pushed the readouts — the
+     design's declared subject — exactly to the fold. dvh, not vh, so mobile
+     Safari's shrinking toolbar is accounted for. */
   --viz-max-h: min(58dvh, 720px);
 
-  /* Radii — by role, not global */
-  --radius-0: 0;
-  --radius-thumb: 50%;
+  /* ------------------------------------------------------------------------
+     Type. Archivo for words, Martian Mono for measurements. Density comes from
+     the WIDTH AXIS, not from uppercase plus letter-spacing — uppercase eyebrows
+     are both a 2015 dashboard tell and a generated-interface tell, and the axis
+     is a move no Inter-based interface can make. Weights are intermediate
+     variable values rather than 400/500/600/700.
+     ------------------------------------------------------------------------ */
+  --font-display: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  --seam: 1px;
+  --t-11: 0.6875rem;  --lh-11: 1rem;         /* ledger column heads ONLY */
+  --t-12: 0.75rem;    --lh-12: 1.125rem;     /* footer meta, source line */
+  --t-13: 0.8125rem;  --lh-13: 1.25rem;      /* control label, caption, tab, key */
+  --t-14: 0.875rem;   --lh-14: 1.375rem;     /* control HELP — was 12; help is content */
+  --t-15: 0.9375rem;  --lh-15: 1.5rem;       /* UI base, window values */
+  --t-16: 1rem;       --lh-16: 1.625rem;     /* blurb, story caption — was 15 */
+  --t-17: 1.0625rem;  --lh-17: 1.625rem;
+  --t-18: 1.125rem;   --lh-18: 1.625rem;     /* fact text, wordmark */
+  --t-20: 1.25rem;    --lh-20: 1.6875rem;    /* section titles */
+  --t-hero: 2.5rem;   --lh-hero: 2.75rem;    /* the measured value, Martian Mono */
+  /* clamp() appears EXACTLY ONCE in this file, and so does text-wrap: balance;
+     the two are deliberately not deployed as a set with a prose measure. */
+  --title-size: clamp(1.875rem, 1.2rem + 2.4vw, 2.625rem);
 
-  /* Motion. Two durations; there is no page-load choreography. */
-  --dur-1: 80ms;               /* hover, press, checked, the transport rule */
-  --dur-2: 160ms;              /* switch travel, the ball settling on a tab */
-  --ease-snap: cubic-bezier(0.2, 0, 0, 1);
-  --ease-flip: steps(1, start); /* instant inversion for keys */
+  --wght-body: 420;
+  --wght-ui: 460;
+  --wght-label: 560;
+  --wght-title: 620;
+  --wght-display: 700;
 
-  /* Focus */
-  --focus-ring: 2px solid var(--accent);
-  --focus-ring-on-accent: 2px solid var(--ink);
+  --wdth-wordmark: 125%;
+  --wdth-title: 96%;
+  --wdth-display: 100%;
+  --wdth-ui: 92%;            /* the axis, NOT uppercase + letter-spacing */
+  --wdth-mono: 100%;
+  --wdth-mono-dense: 87.5%;
+  --tracking-title: -0.021em;
+  --tracking-20: -0.011em;
+  --tracking-mono: -0.04em;  /* Martian Mono is unusually wide; without this the
+                                ledger's three ch-reserved columns sprawl and
+                                force the rail wider than it needs to be */
+  --num: tabular-nums lining-nums slashed-zero;
+
+  /* ------------------------------------------------------------------------
+     Motion. Five durations named by scope, four eases with directional intent,
+     and ONE restrained overshoot spent on one moment. Revision 2's
+     `--ease-flip: steps(1, start)` and the full ink inversion on press are
+     deleted: an instant black/white flip is not a fast transition, it is a 1998
+     toolbar button reporting "pressed".
+     ------------------------------------------------------------------------ */
+  --dur-1: 90ms;    /* colour and opacity: hover wash, press, ledger row hover */
+  --dur-2: 140ms;   /* transform and box-shadow: carriage, key depress, rings */
+  --dur-3: 200ms;   /* travel: switch knob, the peg swelling into the ball */
+  --dur-4: 280ms;   /* section change, the null-meter needle */
+  --dur-5: 420ms;   /* fact card enter */
+
+  --ease-std: cubic-bezier(0.2, 0, 0, 1);               /* moving in place */
+  --ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);          /* arriving */
+  --ease-in: cubic-bezier(0.3, 0, 0.8, 0.15);           /* leaving */
+  --ease-tactile: cubic-bezier(0.25, 0.46, 0.45, 0.94); /* keys and the carriage */
+  --ease-settle: cubic-bezier(0.5, 1, 0.75, 1.2);       /* THE BALL. Nowhere else. */
+
+  --hover-in: 0ms;             /* hover appears instantly … */
+  --hover-out: var(--dur-2);   /* … and fades out. The cheapest way to make
+                                  chrome feel responsive rather than laggy. */
+
+  /* ------------------------------------------------------------------------
+     Focus. ONE construction everywhere, with no per-context variant: a 2 px
+     --ink line inside a vermilion halo. --ink measures 15.03 / 16.29 / 13.58 /
+     17.85 on the four light grounds and 3.72:1 on the vermilion fill itself,
+     which is why the primary key needs no second ring — an all-vermilion
+     outline is invisible on a vermilion key by construction. In dark the line
+     is white: 15.8 on the page and 3.38 on the lifted accent.
+
+     The OUTLINE is what conforms; the halo is decoration layered on top, and it
+     is what keeps the ring reading as the brand.
+     ------------------------------------------------------------------------ */
+  --focus-line: light-dark(#14181b, #ffffff);
+  --focus-ring: 2px solid var(--focus-line);
   --focus-offset: 2px;
+  --focus-halo: 0 0 0 5px light-dark(rgb(213 54 25 / 0.30), rgb(239 91 51 / 0.32));
+  /* Controls with a WHITE face carry their ring and halo in the fixed canvas
+     vermilion, 4.80:1 on white in both schemes — the same architecture the
+     --window-* family already establishes, applied to focus. The dark chrome
+     accent is only 3.38:1 on white; this has 1.4 more of margin. */
+  --focus-window: #d53619;
+  --focus-halo-window: 0 0 0 5px color-mix(in oklab, #d53619 30%, transparent);
 
-  color-scheme: light;
   accent-color: var(--accent);
 }
 
-@media (min-width: 90rem) {
-  :root {
-    --rail-w: var(--rail-w-wide);
-  }
+/* The masthead toggle writes data-theme on <html> and wins over the OS in both
+   directions. Setting color-scheme is all it takes: every scheme-varying token
+   is a light-dark() pair. */
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+@media (min-width: 75rem) {
+  :root { --gutter: 2rem; }
 }
 
+@media (min-width: 90rem) {
+  :root { --rail-w: var(--rail-w-wide); --gutter: 2.5rem; }
+}
+
+/* Handheld: the gutter tightens and the plate mat halves. */
 @media (max-width: 37.4375rem) {
   :root {
     --gutter: 1rem;
+    --bench-gap: var(--s-5);
     --plate-pad: 8px;
-    --reg-mark: 8px;
-    --reg-inset: 4px;
-    --header-h: 2.5rem;
+    --reg-mark: 10px;
+    --reg-inset: 10px;
+    --mat-w: 6px;
+    --header-h: 3rem;
     --key-h: var(--key-h-touch);
-    --key-s: var(--key-h-touch);   /* SC 2.5.8: stepper keys reach 44 px on touch */
+    --key-s: var(--key-h-touch);
     --viz-max-h: min(70dvh, 720px);
+  }
+}
+
+/* Every interactive box reaches 44 x 44 on a finger without growing the ink on
+   a mouse. This one block plus the three ::after target extensions below is the
+   whole SC 2.5.5 / 2.5.8 requirement. */
+@media (pointer: coarse) {
+  :root {
+    --key-h: 2.75rem;
+    --key-s: 2.75rem;
+    --input-h: 2.75rem;
+    --tab-h: 2.75rem;
   }
 }
 
@@ -291,7 +540,7 @@ body {
   color: var(--ink);
   font-family: var(--font-body);
   font-size: var(--t-15);
-  font-weight: 400;
+  font-weight: var(--wght-body);
   line-height: var(--lh-15);
   font-stretch: var(--wdth-display);
   /* AFTER the font longhands, never before: any `font:` shorthand above this
@@ -327,7 +576,7 @@ var,
 .var {
   font-family: var(--font-body);
   font-style: italic;
-  font-weight: 400;
+  font-weight: var(--wght-body);
 }
 
 button,
@@ -355,8 +604,7 @@ canvas {
 }
 
 ::selection {
-  background: var(--ink);
-  color: var(--surface-raised);
+  background: light-dark(rgb(213 54 25 / 0.26), rgb(239 91 51 / 0.30));
 }
 
 :focus-visible {
@@ -368,6 +616,7 @@ canvas {
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: var(--num);
+  letter-spacing: var(--tracking-mono);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -378,25 +627,19 @@ canvas {
 
 /* --------------------------------------------------------------------------
    3  Page layout
-   The page is a vertical lattice: masthead / tabs / bench / footer with 1 px
-   seams between rows. Every row paints its own ground.
+   The page is a sheet of linen. Rows are separated by SPACE, not by seams:
+   revision 2's `gap: 1px` grids on `background: var(--line)` tiled the screen
+   edge to edge with abutting rectangles, which is the single biggest
+   Windows-98 tell there was. Deleting it cost nothing but deletions.
    -------------------------------------------------------------------------- */
 
 .page {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
-  row-gap: var(--seam);
   min-height: 100dvh;
   max-width: var(--page-max);
   margin-inline: auto;
-  background: var(--line);
-}
-
-/* The faceplate edge, visible only once the page is narrower than the viewport. */
-@media (min-width: 100rem) {
-  .page {
-    padding-inline: var(--seam);
-  }
+  background: var(--surface);
 }
 
 /* A row never widens the page: the tab strip in particular has a min-content
@@ -415,8 +658,7 @@ canvas {
   justify-content: space-between;
   gap: var(--s-4);
   min-height: var(--header-h);
-  padding: 0 var(--gutter);
-  background: var(--surface);
+  padding: var(--s-2) var(--gutter) 0;
 }
 
 .masthead__wordmark {
@@ -439,13 +681,13 @@ canvas {
 .masthead__credit {
   display: flex;
   align-items: baseline;
-  gap: var(--s-4);
+  gap: var(--s-3);
   font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: 500;
-  line-height: var(--lh-12);
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   white-space: nowrap;
 }
 
@@ -455,13 +697,12 @@ canvas {
 }
 
 .masthead__affil {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 /* The scheme toggle. Two states, aria-pressed, one glyph that fills as the
-   scheme darkens — the only way the dark block below is ever reached. It is a
-   .key.key--icon and takes all of its geometry from there; this rule exists so
-   the masthead can find it. */
+   scheme darkens. It is a .key.key--icon and takes all of its geometry from
+   there; this rule exists so the masthead can find it. */
 .theme-toggle {
   flex: none;
 }
@@ -476,49 +717,67 @@ canvas {
 
 /* --------------------------------------------------------------------------
    5  Tab bar
-   A peg row plus a pinned index. Every tab carries a peg on its bottom edge;
-   the vermilion ball rests on the active one. The strip scrolls with a VISIBLE
-   scrollbar, and the index — prev key, jump select, next key — is present at
-   every width, so nothing is ever undiscoverable. At 25 tabs the strip is
-   ~3300 px wide and the index still lists every one of them.
+   A peg row in a sunken trough, plus a pinned index. Every tab carries a peg on
+   its bottom edge; the vermilion ball rests on the active one. State is read
+   from ARIA alone — there is no class for the shell to desynchronise.
+
+   The strip's scrollbar is gone and an edge fade plus scroll snapping replaces
+   it: the index (prev key, jump select, next key) is present at every width, so
+   nothing is undiscoverable, and a chunky scrollbar inside a toolbar was itself
+   part of the look being removed.
    -------------------------------------------------------------------------- */
 
 .tabs {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--seam);
-  background: var(--line);
-}
-
-.tabs > * {
-  background: var(--surface-raised);
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--gutter) var(--s-5);
 }
 
 .tabs__strip {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
-  padding-inline: var(--gutter);
+  gap: 2px;
+  padding: 5px 10px;
+  border-radius: var(--radius-4);
+  background: var(--surface-sunk);
+  box-shadow: inset var(--ring);
   overflow-x: auto;
   overflow-y: hidden;
-  scroll-padding-inline: var(--gutter);
+  scroll-padding-inline: 10px;
   scroll-behavior: smooth;
-  /* Revision 1 hid this. Ten tabs already overflow a 1280 px viewport by
-     234 px, so the scrollbar is the affordance, not clutter. */
-  scrollbar-width: thin;
-  scrollbar-color: var(--stroke) var(--surface-raised);
+  scroll-snap-type: x proximity;
+  /* The scrollbar is gone and an edge fade replaces it. The fade is 10 px — the
+     width of the strip's own inline padding — so nothing sits in it at rest and
+     it only softens the clip when the row genuinely scrolls. The index beside
+     the strip lists every visualization at every width, so nothing here is the
+     sole affordance. */
+  scrollbar-width: none;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 10px,
+    #000 calc(100% - 10px),
+    transparent
+  );
+}
+
+.tabs__strip::-webkit-scrollbar {
+  display: none;
 }
 
 .tabs__group {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 2px;
   flex: none;
 }
 
+/* Space, not a seam. The group label is the separator cue. */
 .tabs__group + .tabs__group {
-  margin-inline-start: var(--s-2);
-  padding-inline-start: var(--s-2);
-  border-inline-start: var(--seam) solid var(--line);
+  margin-inline-start: var(--s-3);
 }
 
 /* Decoration only: role="presentation" on the run, aria-hidden on this label.
@@ -526,10 +785,10 @@ canvas {
    technology through each tab's aria-label instead. */
 .tabs__group-label {
   align-self: center;
-  padding: 0 var(--s-2) 0 var(--s-1);
+  padding-inline: var(--s-2) var(--s-1);
   font-family: var(--font-display);
   font-size: var(--t-12);
-  font-weight: 600;
+  font-weight: var(--wght-label);
   line-height: var(--lh-12);
   font-stretch: var(--wdth-ui);
   color: var(--ink-muted);
@@ -540,46 +799,53 @@ canvas {
   position: relative;
   display: inline-flex;
   align-items: center;
-  height: var(--tab-h);
+  flex: none;
+  min-height: var(--tab-h);
   padding: 0 14px;
   border: 0;
-  border-radius: var(--radius-0);
+  border-radius: var(--radius-3);   /* trough 16 − 5 padding = 11: concentric */
   background: transparent;
   color: var(--ink-muted);
   font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 600;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
   white-space: nowrap;
   cursor: pointer;
-  transition: color var(--dur-1) var(--ease-snap);
+  scroll-snap-align: center;
+  transition:
+    color var(--dur-1) var(--ease-std),
+    background-color var(--hover-out) var(--ease-std),
+    box-shadow var(--dur-2) var(--ease-tactile);
 }
 
 .tab__label {
   pointer-events: none;
 }
 
-/* The peg. */
+/* The peg. There is no separate ball element: this IS the peg, and on the
+   active tab it turns vermilion and swells into the ball. --ease-settle is used
+   here and nowhere else in the file. */
 .tab::after {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 5px;
+  bottom: 7px;
   width: 4px;
   height: 4px;
   margin-left: -2px;
-  border-radius: 50%;
+  border-radius: var(--radius-thumb);
   background: var(--tick);
   transition:
-    transform var(--dur-2) var(--ease-snap),
-    background-color var(--dur-2) var(--ease-snap);
+    transform var(--dur-3) var(--ease-settle),
+    background-color var(--dur-3) var(--ease-std);
 }
 
-/* The ball: the only vermilion in the bar. State is read from ARIA alone —
-   there is no .tab--active class for the shell to desynchronize. */
 .tab[aria-selected="true"] {
+  background: var(--surface-raised);
   color: var(--ink);
+  box-shadow: var(--ring), var(--e-1);
 }
 
 .tab[aria-selected="true"]::after {
@@ -588,17 +854,24 @@ canvas {
 }
 
 .tab:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: -4px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-halo);
+}
+
+.tab[aria-selected="true"]:focus-visible {
+  box-shadow: var(--ring), var(--e-1), var(--focus-halo);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .tab:hover {
     color: var(--ink);
+    background-color: var(--wash-1);
+    transition-duration: var(--hover-in);
   }
 
-  .tab:hover::after {
-    background: var(--ink);
+  .tab[aria-selected="true"]:hover {
+    background-color: var(--surface-raised);
   }
 }
 
@@ -608,12 +881,10 @@ canvas {
   grid-template-columns: auto minmax(7rem, 14rem) auto;
   align-items: center;
   gap: var(--s-2);
-  min-height: var(--tab-h);
-  padding: 0 var(--gutter) 0 var(--s-3);
 }
 
-/* .tabs__prev / .tabs__next are .key.key--icon and take their 40 px (44 px on
-   touch, via --key-h) from there. These rules only keep them from stretching. */
+/* .tabs__prev / .tabs__next are .key.key--icon and take their size from there.
+   These rules only keep them from stretching. */
 .tabs__prev,
 .tabs__next {
   flex: none;
@@ -622,33 +893,33 @@ canvas {
 .tabs__select {
   font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 600;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
 }
 
 /* --------------------------------------------------------------------------
    6  Bench, figure column, plate
+   Three elevated objects on the page — the plate, the rail panel, the fact
+   card. The sections inside the figure column have NO container fill, no ring
+   and no shadow: they are ledger-ruled bands separated by 24 px of linen. This
+   is the restraint that keeps the redesign from becoming a card grid.
    -------------------------------------------------------------------------- */
 
 .bench {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--rail-w);
-  gap: var(--seam);
-  background: var(--line);
+  gap: var(--bench-gap);
+  align-items: start;
+  padding-inline: var(--gutter);
   min-width: 0;
 }
 
 .figure {
   display: flex;
   flex-direction: column;
-  gap: var(--seam);
+  gap: var(--s-6);
   min-width: 0;
-  background: var(--line);
-}
-
-.figure > * {
-  background: var(--surface-raised);
 }
 
 .figure > :last-child {
@@ -656,16 +927,16 @@ canvas {
 }
 
 .figure__head {
-  padding: var(--s-4) var(--gutter);
+  padding-block: 0;
 }
 
 .figure__title {
   font-family: var(--font-display);
   font-size: var(--title-size);
-  font-weight: 700;
+  font-weight: var(--wght-display);
   line-height: 1.1;
   font-stretch: var(--wdth-title);
-  letter-spacing: var(--tracking-display);
+  letter-spacing: var(--tracking-title);
   color: var(--ink);
   max-width: 26ch;
   text-wrap: balance;
@@ -674,14 +945,16 @@ canvas {
 .figure__blurb {
   margin-top: var(--s-2);
   max-width: var(--measure);
-  font-size: var(--t-15);
-  line-height: var(--lh-15);
+  font-size: var(--t-16);
+  line-height: var(--lh-16);
   color: var(--ink-muted);
 }
 
-/* On a wide bench the blurb sits on the title's baseline row, which buys the
-   readouts 24 px of fold. */
-@media (min-width: 80rem) {
+/* From 1024 px the blurb sits on the title's baseline row rather than under it,
+   which buys the readouts back roughly 28 px of fold — the space the taller
+   masthead and hero spend. Revision 2 held this at 1280 px and paid for it at
+   exactly the width DESIGN §4 measures. */
+@media (min-width: 64rem) {
   .figure__head {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -695,10 +968,18 @@ canvas {
 }
 
 /* The plate: white bed, plotter margin, four L-shaped registration marks
-   painted as background gradients so they are never canvas pixels. The marks
-   are --grid-soft: they frame the experiment, they are not part of it. */
+   painted as background gradients so they are never canvas pixels, a 16 px
+   frame and a long soft cast. In dark it is matted in a #282d30 bezel through
+   --e-plate's spread layer, which takes the local step from 17.82:1 to 13.92:1.
+
+   THE RADIUS LIVES ON .plate, NEVER ON THE PIXELS. There is no `overflow:
+   hidden` here and there never should be: the canvas is already inset by
+   --plate-pad, so its corners never reach the radius and no datum can be
+   clipped. --reg-inset rises 6 → 14 px so all eight mark strokes fall on the
+   straight run outside the curve. */
 .plate {
   padding: var(--plate-pad);
+  border-radius: var(--radius-4);
   background-color: var(--canvas);
   background-image:
     linear-gradient(var(--grid-soft), var(--grid-soft)),
@@ -728,14 +1009,42 @@ canvas {
     calc(100% - var(--reg-inset)) calc(100% - var(--reg-inset)),
     calc(100% - var(--reg-inset)) calc(100% - var(--reg-inset));
   background-repeat: no-repeat;
+  box-shadow: var(--e-plate);
+
+  /* ------------------------------------------------------------------------
+     RULE 0 — the canvas contract, pinned UNCONDITIONALLY in both schemes.
+
+     core/canvas.ts reads these thirteen properties off the stage (which
+     inherits from .plate) with getComputedStyle and hands them to
+     ctx.fillStyle. An unregistered custom property is not resolved at
+     computed-value time, so a light-dark() or a color-mix() here would arrive
+     at the canvas as literal text and paint nothing. They are pinned rather
+     than restated under [data-theme="dark"] so the pens are scheme-independent
+     BY CONSTRUCTION rather than by a restatement someone has to remember.
+
+     These are exactly the values revision 2 certified, so the CVD validation
+     (adjacent-pair separation dE 18.7 protan, dE 24.4 normal vision, every pen
+     >= 3:1 on the white plate) carries over with nothing to re-run.
+     ------------------------------------------------------------------------ */
+  --canvas: #ffffff;
+  --ink: #171b1d;
+  --ink-muted: #4e5750;
+  --grid: #23292b;
+  --grid-soft: #8a938f;
+  --data-1: #d53619;
+  --data-2: #24467a;
+  --data-3: #7f8985;
+  --data-3-fill: #d2d6d4;
+  --accent: #d53619;
+  --canvas-label-font: 500 11px "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --canvas-line-width: 1;
+  --canvas-particle-radius: 2;
 }
 
 /* The canvas host. core/canvas.ts adds .stage and positions the two canvases;
    this rule only sizes the box. The width clamp keeps the declared aspect when
-   the height cap bites, so nothing is letterboxed or stretched. Narrow screens
-   take --viz-aspect-narrow when a visualization declares one — the real fix for
-   a portrait experiment, which a taller height cap never delivered because the
-   width binds first. */
+   the height cap bites, so nothing is letterboxed or stretched. The stage
+   carries NO radius — see the plate's note above. */
 .stage {
   --stage-aspect: var(--viz-aspect);
   position: relative;
@@ -761,16 +1070,19 @@ canvas {
 .caption {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: var(--s-1) var(--s-3);
-  padding: var(--s-2) var(--gutter);
+  /* Pulls the caption to 16 px under the plate — closer than the 24 px section
+     rhythm, because a caption belongs to its figure. It must stay clear of the
+     plate's 12 px mat, which is a shadow and takes no layout space. */
+  margin-top: calc(-1 * var(--s-2));
   font-size: var(--t-13);
   line-height: var(--lh-13);
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 .caption__figure {
-  font-weight: 600;
+  font-weight: var(--wght-label);
   color: var(--ink);
 }
 
@@ -780,36 +1092,53 @@ canvas {
 }
 
 .caption__copy {
+  position: relative;
   margin-inline-start: auto;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 10px;
   border: 0;
-  background: none;
+  border-radius: var(--radius-2);
+  background: transparent;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: 600;
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
   line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color var(--hover-out) var(--ease-std);
+}
+
+/* 32 px of ink, 44 px of target. */
+.caption__copy::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 .caption__copy[data-state="done"] {
-  color: var(--agree);
+  color: var(--accent-text);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .caption__copy:hover {
-    text-decoration-thickness: 2px;
+    background-color: var(--wash-1);
+    transition-duration: var(--hover-in);
   }
+}
+
+.caption__copy:active {
+  background-color: var(--wash-2);
 }
 
 /* --------------------------------------------------------------------------
    8  Readouts
-   One white hero window with a null meter, and a booktabs ledger for the rest.
+   One white hero window with a null meter, and a ledger for the rest. The
+   lattice is gone: no vertical rules, no inter-cell seams, no zebra. Exactly
+   one 1 px rule, under the head.
    -------------------------------------------------------------------------- */
 
 .readouts {
@@ -818,22 +1147,25 @@ canvas {
      long label claim 444 px, crushing the ledger at 1024–1280 px. */
   grid-template-columns: minmax(15rem, var(--hero-max)) minmax(0, 1fr);
   align-items: start;
-  gap: var(--s-4) var(--s-6);
-  padding: var(--s-4) var(--gutter) var(--s-6);
+  gap: var(--s-6);
 }
 
 /* Hero window: measured at 500, analytic at 300, same size, one baseline. */
 .hero {
   display: grid;
   align-content: center;
-  gap: var(--s-1);
+  gap: var(--s-2);
   min-height: var(--hero-h);
   max-width: var(--hero-max);
-  padding: var(--s-3) var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--radius-3);
   background: var(--canvas);
-  border: 1px solid var(--window-stroke);
-  border-radius: var(--radius-0);
+  box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   color: var(--window-ink);
+  /* A registered <number> is animatable, so the needle interpolates the VALUE
+     and nothing lays out. Revision 2 transitioned `left` and triggered layout
+     on every frame. */
+  transition: --err var(--dur-4) var(--ease-std);
 }
 
 .hero__row {
@@ -843,6 +1175,7 @@ canvas {
   gap: var(--s-4);
   font-family: var(--font-mono);
   font-stretch: var(--wdth-mono);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
 }
 
@@ -865,49 +1198,90 @@ canvas {
   font-weight: 400;
   font-size: var(--t-15);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   color: var(--window-ink-muted);
   margin-inline-start: 0.25em;
 }
 
 /* The null meter. A galvanometer, not a KPI delta chip: the needle rests dead
-   centre when the reading agrees with theory and walks out as it diverges.
-   The shell writes --err in [0, 1]; 0.5 is agreement. */
+   centre when the reading agrees with theory and walks out as it diverges. The
+   shell writes --err in [0, 1] on .hero; 0.5 is agreement. --band-w is fixed so
+   the needle can move on `translate` rather than on `left`. */
 .hero__band {
   position: relative;
-  height: 9px;
-  max-width: 12rem;
-  margin-top: var(--s-1);
+  width: var(--band-w);
+  max-width: 100%;
+  height: 10px;
 }
 
+/* Baseline and centre tick in ONE pseudo-element, so ::after is free to speak
+   in the empty state. */
 .hero__band::before {
   content: "";
   position: absolute;
-  inset-inline: 0;
-  top: 4px;
-  height: 1px;
-  background: var(--window-stroke);
-}
-
-.hero__band::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 0;
-  width: 1px;
-  height: 9px;
-  background: var(--window-stroke);
+  inset: 0 0 auto 0;
+  height: 10px;
+  background-image:
+    linear-gradient(var(--window-stroke), var(--window-stroke)),
+    linear-gradient(var(--window-stroke), var(--window-stroke));
+  background-size: 100% 1px, 1px 10px;
+  background-position: 0 4px, 50% 0;
+  background-repeat: no-repeat, no-repeat;
 }
 
 .hero__needle {
   position: absolute;
   top: 0;
-  left: clamp(0%, calc(var(--err) * 100%), 100%);
+  left: 50%;
   width: 2px;
-  height: 9px;
+  height: 10px;
   margin-left: -1px;
   background: var(--window-ink);
-  transition: left var(--dur-2) var(--ease-snap);
+  translate: calc((clamp(0, var(--err), 1) - 0.5) * var(--band-w)) 0;
+}
+
+/* No reading yet — a mean over zero samples. The needle is hidden rather than
+   parked, because dead centre on the null meter is the one position that means
+   "the reading agrees with theory". The UA's [hidden] rule loses to
+   .hero__needle's own `position`, so it is restated here. */
+.hero__needle[hidden] {
+  display: none;
+}
+
+/* The spoken empty state. .hero__band already carries aria-hidden="true", so
+   this sentence is added for sighted readers with zero duplication in the live
+   region — the shell already announces "not measured yet" there. Three cues:
+   the value goes quiet, the centreline goes dashed, and the meter says so. */
+.hero:has(.hero__needle[hidden]) .hero__band {
+  height: calc(10px + var(--lh-13));
+}
+
+.hero:has(.hero__needle[hidden]) .hero__band::before {
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      var(--window-stroke) 0 3px,
+      transparent 3px 6px
+    ),
+    linear-gradient(var(--window-stroke), var(--window-stroke));
+}
+
+.hero:has(.hero__needle[hidden]) .hero__band::after {
+  content: "waiting for the first sample";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 15px;
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: var(--wght-body);
+  line-height: var(--lh-13);
+  color: var(--window-ink-muted);
+  white-space: nowrap;
+}
+
+.hero:has(.hero__needle[hidden]) .hero__value {
+  color: var(--window-ink-muted);
 }
 
 .hero__meta {
@@ -916,9 +1290,9 @@ canvas {
   align-items: baseline;
   gap: var(--s-3);
   font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: 500;
-  line-height: var(--lh-12);
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-13);
   font-stretch: var(--wdth-display);
   font-variant-numeric: var(--num);
   color: var(--window-ink-muted);
@@ -926,12 +1300,14 @@ canvas {
 
 .hero__label {
   color: var(--window-ink);
+  font-weight: var(--wght-label);
 }
 
 .hero__error {
   font-family: var(--font-mono);
   font-weight: 400;
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   white-space: nowrap;
   text-decoration: underline dotted;
@@ -953,19 +1329,17 @@ canvas {
 .ledger-wrap {
   overflow-x: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--stroke) var(--surface-raised);
+  scrollbar-color: var(--stroke) transparent;
 }
 
 .ledger {
   width: 100%;
   border-collapse: collapse;
-  border-top: 2px solid var(--ink);
-  border-bottom: 2px solid var(--ink);
 }
 
 .ledger th,
 .ledger td {
-  padding: 6px var(--s-2);
+  padding: 10px var(--s-3);
   text-align: right;
   vertical-align: baseline;
 }
@@ -973,30 +1347,50 @@ canvas {
 .ledger th:first-child,
 .ledger td:first-child {
   text-align: left;
-  padding-inline-start: 0;
+  padding-inline-start: var(--s-3);
 }
 
-.ledger th:last-child,
-.ledger td:last-child {
-  padding-inline-end: 0;
-}
-
+/* The head BAND replaces revision 2's booktabs 2 px ink rules: the table is
+   identified by its band and its rhythm, and one 1 px rule closes it. */
 .ledger__head {
   font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: 600;
-  line-height: var(--lh-12);
-  font-stretch: var(--wdth-display);
+  font-size: var(--t-11);
+  font-weight: var(--wght-label);
+  line-height: var(--lh-11);
+  font-stretch: var(--wdth-ui);
   color: var(--ink-muted);
-  border-bottom: 1px solid var(--ink);
+  background: var(--surface-sunk);
+  border-bottom: 1px solid var(--line);
   white-space: nowrap;
+  padding-block: 8px;
+}
+
+.ledger__head:first-child {
+  border-start-start-radius: var(--radius-2);
+  border-end-start-radius: var(--radius-2);
+}
+
+.ledger__head:last-child {
+  border-start-end-radius: var(--radius-2);
+  border-end-end-radius: var(--radius-2);
+}
+
+.readout {
+  transition: background-color var(--hover-out) var(--ease-std);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .readout:hover {
+    background-color: var(--wash-1);
+    transition-duration: var(--hover-in);
+  }
 }
 
 .readout__label {
   font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: 500;
-  line-height: var(--lh-13);
+  font-size: var(--t-14);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-14);
   color: var(--ink);
 }
 
@@ -1006,6 +1400,7 @@ canvas {
   font-weight: 500;
   line-height: var(--lh-13);
   font-stretch: var(--wdth-mono);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   color: var(--ink);
   min-width: 10ch;
@@ -1025,6 +1420,7 @@ canvas {
   font-weight: 400;
   line-height: var(--lh-12);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   color: var(--ink-muted);
   min-width: 8ch;
@@ -1037,6 +1433,7 @@ canvas {
   font-weight: 400;
   line-height: var(--lh-12);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   color: var(--ink);
   min-width: 12ch;
@@ -1067,7 +1464,7 @@ canvas {
 
 .readout--none .readout__target,
 .readout--none .readout__error {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 .readout__state {
@@ -1077,7 +1474,11 @@ canvas {
   margin-inline-start: var(--s-2);
   vertical-align: 1px;
   border: 1px solid var(--stroke);
+  border-radius: 2px;
   background: transparent;
+  transition:
+    background-color var(--dur-2) var(--ease-std),
+    border-color var(--dur-2) var(--ease-std);
 }
 
 .readout[data-state="agree"] .readout__state {
@@ -1090,7 +1491,8 @@ canvas {
    -------------------------------------------------------------------------- */
 
 .story {
-  padding: var(--s-4) var(--gutter) var(--s-6);
+  display: grid;
+  gap: var(--s-2);
 }
 
 .story__tape {
@@ -1098,7 +1500,7 @@ canvas {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--s-2);
-  margin-bottom: var(--s-3);
+  margin-bottom: var(--s-2);
 }
 
 .story__steps {
@@ -1110,78 +1512,105 @@ canvas {
 }
 
 .story__step {
-  width: 28px;
-  height: 28px;
+  position: relative;
+  width: var(--key-s);
+  height: var(--key-s);
   padding: 0;
-  border: 1px solid var(--stroke);
-  border-radius: var(--radius-0);
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
   color: var(--ink-muted);
   font-family: var(--font-mono);
   font-size: var(--t-13);
   font-weight: 500;
   line-height: 1;
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
+  box-shadow: var(--ring);
   cursor: pointer;
   transition:
-    background-color var(--dur-1) var(--ease-flip),
-    color var(--dur-1) var(--ease-flip),
-    border-color var(--dur-1) var(--ease-flip);
+    background-color var(--hover-out) var(--ease-std),
+    color var(--dur-1) var(--ease-std),
+    box-shadow var(--dur-2) var(--ease-tactile);
+}
+
+/* 30 px of ink, 44 px of target. */
+.story__step::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
 }
 
 .story__step--visited {
-  border-color: var(--ink);
   color: var(--ink);
+  box-shadow: var(--ring-strong);
 }
 
 .story__step[aria-current="step"] {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-ink);
-}
-
-.story__step[aria-current="step"]:focus-visible {
-  outline-color: var(--ink);
+  box-shadow: var(--e-1);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .story__step:hover {
-    border-color: var(--ink);
     color: var(--ink);
+    background-color: var(--wash-1);
+    transition-duration: var(--hover-in);
   }
+
+  .story__step[aria-current="step"]:hover {
+    background-color: var(--accent-hover);
+  }
+}
+
+.story__step:active {
+  translate: 0 1px;
 }
 
 .story__label {
   font-family: var(--font-display);
-  font-size: var(--t-17);
-  font-weight: 600;
-  line-height: var(--lh-17);
+  font-size: var(--t-20);
+  font-weight: var(--wght-title);
+  line-height: var(--lh-20);
+  letter-spacing: var(--tracking-20);
   color: var(--ink);
-  margin-bottom: var(--s-1);
-  text-wrap: balance;
 }
 
 .story__caption {
   max-width: var(--measure);
-  font-size: var(--t-15);
-  line-height: var(--lh-15);
+  font-size: var(--t-16);
+  line-height: var(--lh-16);
   color: var(--ink);
 }
 
 /* --------------------------------------------------------------------------
-   10  Fact card — a data plate. The fact is the heading; no label above it.
+   10  Fact card — the second elevated object in the figure column. The fact is
+   the heading; there is no label above it.
    -------------------------------------------------------------------------- */
 
 .fact {
-  padding: var(--s-6) var(--gutter);
+  padding: var(--s-5);
+  border-radius: var(--radius-4);
+  background: var(--surface-raised);
+  box-shadow: var(--ring), var(--e-2);
+  opacity: 1;
+  transition: opacity var(--dur-5) var(--ease-out);
+}
+
+/* The one entrance animation in the file, and it fires once, on mount. */
+@starting-style {
+  .fact {
+    opacity: 0;
+  }
 }
 
 .fact__text {
   max-width: var(--measure);
   font-family: var(--font-display);
-  font-size: var(--t-17);
-  font-weight: 600;
-  line-height: var(--lh-17);
+  font-size: var(--t-18);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-18);
   color: var(--ink);
   text-wrap: pretty;
   margin-bottom: var(--s-2);
@@ -1194,14 +1623,15 @@ canvas {
   font-weight: 400;
   line-height: var(--lh-12);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   margin-bottom: var(--s-3);
   overflow-wrap: anywhere;
 }
 
 .fact__source a {
-  color: var(--ink);
+  color: var(--ink-muted);
 }
 
 .fact__next {
@@ -1213,69 +1643,112 @@ canvas {
    -------------------------------------------------------------------------- */
 
 .rail {
-  background: var(--surface-raised);
   min-width: 0;
+  /* The control grid restacks by the RAIL's own width rather than the
+     viewport's, which is the thing that actually matters when a reader zooms. */
+  container-type: inline-size;
+  container-name: rail;
 }
 
 .rail__panel {
   position: sticky;
-  top: 0;
+  top: var(--s-6);
   display: flex;
   flex-direction: column;
-  gap: var(--seam);
-  max-height: 100dvh;
-  overflow-y: auto;
-  background: var(--line);
-  scrollbar-width: thin;
-  scrollbar-color: var(--stroke) var(--surface-raised);
-}
-
-.rail__panel > * {
+  gap: var(--s-7);
+  max-height: calc(100dvh - var(--s-12));
+  padding: var(--s-5);
+  border-radius: var(--radius-4);
   background: var(--surface-raised);
+  box-shadow: var(--ring), var(--e-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke) transparent;
 }
 
-/* Transport cluster. The 2 px rule on top goes vermilion while running — the
-   only running indicator, read from data-running alone. */
+/* Transport. The cluster is a 5 px-padded group at --radius-4 holding 11 px
+   keys — concentric, and it makes the speed picker's separation read as intent
+   rather than as a gap in a strip. Revision 2's `margin-inline: -1px` shared
+   seams were a Motif idiom.
+
+   It WRAPS. Five 44 px controls plus a picker want 292 px and a 21rem rail
+   gives 296 px of panel; that is four pixels of headroom, and a font that
+   measures differently would push the picker out of the panel rather than onto
+   a second row. Wrapping is the only version of this that cannot overflow. */
 .transport {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: var(--s-3) var(--s-4);
-  border-top: 2px solid var(--ink);
-  background: var(--surface-raised);
-  transition: border-top-color var(--dur-1) var(--ease-snap);
+  gap: var(--s-1);
+  padding: 5px;
+  border-radius: var(--radius-4);
+  background: var(--surface-sunk);
+  box-shadow: inset var(--ring);
+  transition: box-shadow var(--dur-2) var(--ease-std);
 }
 
+/* The only running indicator, read from data-running alone. */
 .transport[data-running="true"] {
-  border-top-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-.transport .key + .key {
-  margin-inline-start: -1px;
+/* Inside the transport the four secondary keys are GHOSTS: no fill and no ring
+   at rest, so Play/Pause is the only filled, elevated, labelled object and a
+   newcomer can see where to start. */
+.transport .key:not(.key--primary) {
+  background: transparent;
+  box-shadow: none;
 }
 
-.transport .key:focus-visible,
-.transport .key:active {
-  position: relative;
-  z-index: 1;
+.transport .key {
+  flex: none;
+  height: var(--key-h-lg);
+  border-radius: var(--radius-3);   /* group 16 − 5 padding = 11: concentric */
+}
+
+.transport .key--icon {
+  width: var(--key-h-lg);
+}
+
+/* Fast-forward while held is aria-pressed; a ghost key needs the ring back to
+   say so. */
+.transport .key[aria-pressed="true"]:not(.key--primary) {
+  box-shadow: var(--ring-strong);
 }
 
 .transport__play {
   min-width: 5.5rem;
 }
 
-/* Generated controls: one lattice row per ParamSpec. */
+/* The speed picker sits apart from the key cluster — it sets a rate, it does
+   not transport anything. Two classes, because `.select` in §13 is a full-width
+   form control at the same specificity and later in the file; a single class
+   here loses and the picker grows to 300 px, which crushes the icon keys to
+   their glyphs. */
+.select.transport__speed {
+  flex: none;
+  width: auto;
+  min-width: 3.5rem;
+  height: var(--key-h-lg);
+  margin-inline-start: auto;
+  padding-inline: var(--s-2) 26px;
+  background-position: right 8px center;
+  border-radius: var(--radius-3);
+}
+
+/* Generated controls: one row per ParamSpec, separated by space. */
 .controls {
   display: flex;
   flex-direction: column;
-  gap: var(--seam);
+  gap: var(--s-5);
   margin: 0;
   padding: 0;
-  background: var(--line);
 }
 
 .control {
   display: grid;
-  grid-template-columns: var(--label-col) minmax(0, 1fr);
+  grid-template-columns: minmax(0, var(--label-col)) minmax(0, 1fr);
   grid-template-areas:
     "label value"
     "input input"
@@ -1283,18 +1756,16 @@ canvas {
     "help  help";
   align-items: center;
   column-gap: var(--s-3);
-  min-height: var(--row-control);
-  padding: var(--s-2) var(--s-4);
-  background: var(--surface-raised);
+  row-gap: var(--s-1);
 }
 
 .control__label {
   grid-area: label;
   font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 500;
+  font-weight: var(--wght-label);
   line-height: var(--lh-13);
-  font-stretch: var(--wdth-display);
+  font-stretch: var(--wdth-ui);
   color: var(--ink);
 }
 
@@ -1306,8 +1777,8 @@ canvas {
 .control__help {
   grid-area: help;
   margin-top: var(--s-1);
-  font-size: var(--t-12);
-  line-height: var(--lh-12);
+  font-size: var(--t-14);
+  line-height: var(--lh-14);
   color: var(--ink-muted);
 }
 
@@ -1315,17 +1786,17 @@ canvas {
   grid-area: scale;
   display: flex;
   justify-content: space-between;
-  height: 1rem;
   font-family: var(--font-mono);
   font-size: var(--t-11);
   font-weight: 500;
   line-height: var(--lh-11);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
-/* Centre the end numerals under the end majors. */
+/* Centre the end numerals under the carriage's end positions. */
 .control__min {
   margin-inline-start: calc(var(--thumb) / 2);
   transform: translateX(-50%);
@@ -1336,13 +1807,16 @@ canvas {
   transform: translateX(50%);
 }
 
-/* "The window being adjusted takes an accent border" — targeted at the window
-   primitive, so it is true for all five control kinds, not just the fader. */
-.control:focus-within :is(.window, .select) {
-  border-color: var(--accent);
+/* "The window being adjusted takes an accent ring" — targeted at the window
+   primitive, so it is true for all five control kinds, not just the fader. The
+   :not() keeps this off the element that is ITSELF focused, whose own
+   :focus-visible rule is less specific and would otherwise lose its halo. */
+.control:focus-within :is(.window, .select):not(:focus-visible) {
+  box-shadow: 0 0 0 1px var(--focus-window), var(--e-1);
 }
 
-.control--range .range {
+.control--range .range,
+.control--int .range {
   grid-area: input;
 }
 
@@ -1358,28 +1832,49 @@ canvas {
   justify-self: end;
 }
 
-/* Disabled rows must be targeted, not inherited: every child below sets its
-   own colour, so an inherited muted colour never reached any of them. */
+/* Disabled rows must be targeted, not inherited: every child below sets its own
+   colour, so an inherited muted colour never reached any of them. */
 .control:has(:disabled) :is(.control__label, .control__help, .control__scale, .control__value) {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
-/* Seed row: window + Randomize key sharing a seam. */
+/* Under 17rem of RAIL — a zoomed reader, not a narrow window — the label column
+   collapses and every control gets the full width. */
+@container rail (max-width: 17rem) {
+  .control {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "label"
+      "value"
+      "input"
+      "scale"
+      "help";
+  }
+
+  .control__value,
+  .control--int .stepper,
+  .control--toggle .switch-row {
+    justify-self: stretch;
+  }
+}
+
+/* Seed row: a window and a ghost key 8 px apart, not sharing a seam. */
 .seed {
   display: grid;
-  grid-template-columns: minmax(8ch, 1fr) max-content;
+  grid-template-columns: minmax(7ch, 1fr) max-content;
+  gap: var(--s-2);
 }
 
-/* Both halves grow to 44 px on touch, where --key-s does. */
 input.seed__input {
   height: max(var(--input-h), var(--key-s));
   text-align: right;
-  min-width: 0;
+  min-width: 7ch;
+  field-sizing: content;
 }
 
 .key.seed__random {
+  position: relative;
   height: max(var(--input-h), var(--key-s));
-  margin-inline-start: -1px;
   padding: 0 var(--s-3);
 }
 
@@ -1387,27 +1882,29 @@ input.seed__input {
    12  Windows and keys
    -------------------------------------------------------------------------- */
 
-/* A display window: white, 1 px stroke, zero radius, tabular mono digits.
-   Its border and hover use the --window-* tokens, which stay dark in the dark
-   scheme because the window itself stays white. */
+/* A display window: white, one hairline ring, tabular mono digits. Its ring and
+   hover use the --window-* tokens, which do not vary by scheme because the
+   window itself stays white. */
 .window {
   display: inline-block;
   min-width: 7ch;
   height: var(--window-h);
-  padding: 0 6px;
+  padding: 0 var(--s-2);
+  border: 0;
+  border-radius: var(--radius-2);
   font-family: var(--font-mono);
   font-size: var(--t-13);
   font-weight: 500;
-  line-height: var(--lh-13);
+  line-height: var(--window-h);
   font-stretch: var(--wdth-mono);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
   text-align: right;
   color: var(--window-ink);
   background: var(--canvas);
-  border: 1px solid var(--window-stroke);
-  border-radius: var(--radius-0);
+  box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   white-space: nowrap;
-  transition: border-color var(--dur-1) var(--ease-snap);
+  transition: box-shadow var(--dur-2) var(--ease-tactile);
 }
 
 .window__unit {
@@ -1417,82 +1914,116 @@ input.seed__input {
 }
 
 /* An interactive window is a target, so it takes the 44 px touch height where
-   --key-s rises; a read-only window stays 22 px because nothing hits it. */
+   --key-s rises; a read-only window stays 28 px because nothing hits it. */
 input.window,
 .window--input {
   height: max(var(--input-h), var(--key-s));
-  padding: 0 var(--s-2);
+  line-height: normal;
+  padding: 0 var(--s-3);
   width: 100%;
-  outline-offset: 2px;
+}
+
+input.window:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 1px var(--focus-window), var(--focus-halo-window);
 }
 
 input.window:disabled {
-  background: var(--surface);
-  color: var(--ink-muted);
-  border-color: var(--stroke);
+  background: var(--surface-sunk);
+  color: var(--ink-soft);
+  box-shadow: 0 0 0 1px var(--stroke);
   cursor: not-allowed;
 }
 
 @media (hover: hover) and (pointer: fine) {
   input.window:hover:not(:disabled) {
-    border-color: var(--window-stroke-hover);
+    box-shadow: 0 0 0 1px var(--window-stroke-hover), var(--e-1);
   }
 }
 
-/* Keys. The secondary key inverts on press; the primary key is the only
-   vermilion key on the page. Nothing lifts, scales, or glows. */
+/* Keys. One filled, elevated primary; everything else is a quiet raised key
+   that washes on hover and depresses 1 px on press. Nothing inverts: an instant
+   black/white flip is how a 1998 toolbar button reported "pressed". */
 .key {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   height: var(--key-h);
   padding: 0 var(--s-3);
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-0);
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: var(--radius-3);
+  background-color: var(--surface-raised);
+  background-image: none;
   color: var(--ink);
   font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 600;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
   white-space: nowrap;
   cursor: pointer;
+  box-shadow: var(--ring-ctl), var(--e-1);
   transition:
-    background-color var(--dur-1) var(--ease-flip),
-    color var(--dur-1) var(--ease-flip),
-    border-color var(--dur-1) var(--ease-flip);
+    background-color var(--hover-out) var(--ease-std),
+    background-image var(--hover-out) var(--ease-std),
+    color var(--dur-1) var(--ease-std),
+    box-shadow var(--dur-2) var(--ease-tactile),
+    translate var(--dur-2) var(--ease-tactile);
 }
 
-.key:active,
+.key:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  box-shadow: var(--ring-ctl), var(--e-1), var(--focus-halo);
+}
+
+.key:active:not(:disabled):not([aria-disabled="true"]) {
+  background-image: linear-gradient(var(--wash-2), var(--wash-2));
+  translate: 0 1px;
+  box-shadow: var(--ring-ctl), 0 1px 1px var(--shade-1);
+}
+
 .key[aria-pressed="true"] {
-  background: var(--ink);
-  color: var(--surface-raised);
+  background-image: linear-gradient(var(--wash-2), var(--wash-2));
+  box-shadow: var(--ring-strong), 0 1px 1px var(--shade-1);
 }
 
 .key:disabled,
 .key[aria-disabled="true"] {
-  color: var(--ink-muted);
-  border-color: var(--line);
-  background: var(--surface-raised);
+  color: var(--ink-soft);
+  background-color: transparent;
+  background-image: none;
+  box-shadow: var(--ring);
   cursor: not-allowed;
 }
 
+/* THE one primary key. It is the only filled, elevated, labelled object in the
+   transport; the other four are ghosts. */
 .key--primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background-color: var(--accent);
   color: var(--accent-ink);
-}
-
-.key--primary:active {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--surface-raised);
+  box-shadow:
+    0 0 0 1px var(--accent-press),
+    0 1px 2px var(--shade-4),
+    var(--bevel);
 }
 
 .key--primary:focus-visible {
-  outline: var(--focus-ring-on-accent);
+  box-shadow:
+    0 0 0 1px var(--accent-press),
+    0 1px 2px var(--shade-4),
+    var(--bevel),
+    var(--focus-halo);
+}
+
+.key--primary:active:not(:disabled) {
+  background-color: var(--accent-press);
+  background-image: none;
+  translate: 0 1px;
+  box-shadow: 0 0 0 1px var(--accent-press), 0 1px 1px var(--shade-2);
 }
 
 .key--icon {
@@ -1501,10 +2032,17 @@ input.window:disabled {
 }
 
 .key--small {
-  height: 28px;
+  height: 2rem;
   padding: 0 10px;
-  font-size: var(--t-12);
-  line-height: var(--lh-12);
+  font-size: var(--t-13);
+  line-height: var(--lh-13);
+}
+
+/* 32 px of ink, 44 px of target. */
+.key--small::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 /* Solid glyphs. A 1.5 px round-capped stroke at 16 px is the Feather/Lucide
@@ -1518,213 +2056,243 @@ input.window:disabled {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .key:hover:not(:disabled) {
-    background: var(--ink);
-    color: var(--surface-raised);
-    border-color: var(--ink);
+  .key:hover:not(:disabled):not([aria-disabled="true"]) {
+    background-image: linear-gradient(var(--wash-1), var(--wash-1));
+    box-shadow: var(--ring-ctl), var(--e-1), var(--e-hover);
+    transition-duration: var(--hover-in);
+  }
+
+  /* Ghost keys in the transport materialise on hover instead of lifting. */
+  .transport .key:not(.key--primary):hover:not(:disabled):not([aria-disabled="true"]) {
+    box-shadow: none;
   }
 
   .key--primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
+    background-color: var(--accent-hover);
+    background-image: none;
     color: var(--accent-ink);
+    box-shadow:
+      0 0 0 1px var(--accent-press),
+      0 1px 2px var(--shade-4),
+      var(--bevel),
+      var(--e-hover);
   }
+
+  /* A key at the end of its range is inoperable, not removed from the tab
+     order: `disabled` on the key that just fired the move drops focus to <body>
+     under the reader's own keypress. These rules stop the hover and pressed
+     states from claiming it still does something. */
+  .key[aria-disabled="true"]:hover {
+    background-color: transparent;
+    background-image: none;
+    color: var(--ink-soft);
+    box-shadow: var(--ring);
+  }
+}
+
+.key[aria-disabled="true"]:active {
+  background-color: transparent;
+  background-image: none;
+  color: var(--ink-soft);
+  translate: none;
+  box-shadow: var(--ring);
 }
 
 /* --------------------------------------------------------------------------
    13  Native controls
+   Every engine pseudo-element gets its OWN rule — never comma-joined: one
+   unrecognised selector invalidates the whole rule in both engines.
    -------------------------------------------------------------------------- */
 
-/* 13.1  Range — the graduated fader.
-   A 2 px track with no fill, a 22 px ring thumb with a 2 x 7 px vermilion index
-   line pointing up at an engraved scale. The scale is drawn with background
-   gradients sized to the thumb's REAL travel (100% − thumb): three 8 px majors
-   at 0 / 50 / 100 % and 5 px minors every 1/--ticks of travel. The shell writes
-   --ticks when (max − min) / step <= 20 so the ruler never lies about a coarse
-   slider; the registered initial value is 10.
-   Every engine pseudo-element gets its own rule — never comma-joined. */
+/* 13.1  Range — the fader.
+
+   A 14 px channel with a VERMILION FILLED PORTION and a 20 x 12 carriage riding
+   in it. Revision 2's 2 px unfilled hairline with engraved major/minor
+   graduations was `JSlider.setPaintTicks(true)`; the graduations survive as one
+   quiet row of 3 px marks below the channel, sized to the real travel.
+
+   The fill needs no JavaScript: a negative-offset box-shadow on the WebKit
+   thumb, plus ::-moz-range-progress in Firefox. Two consequences follow from
+   the `overflow: hidden` that confines it, and both are load-bearing:
+
+     1. The CLIP EDGE is the input's PADDING box, not the track. `border-block`
+        of transparent makes the padding box exactly --channel tall while the
+        hit box stays 44 px, so the fill is confined to the channel instead of
+        painting as a 44 px slab.
+     2. A ring drawn on the THUMB is sliced flat top and bottom. The focus ring
+        therefore lives on the INPUT, where it renders complete and follows the
+        input's radius. This supersedes the revision-2 spec.
+
+   The thumb is a CARRIAGE, not a circle: that leaves exactly one circle in the
+   system, and it is the Galton ball on the active tab. */
 .range {
   appearance: none;
   -webkit-appearance: none;
   display: block;
   width: 100%;
-  height: var(--range-h);
+  block-size: var(--range-h);
+  border-block: var(--range-inset) solid transparent;
+  border-inline-width: 0;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
   margin: 0;
   padding: 0;
   background-color: transparent;
-  background-image:
-    linear-gradient(var(--tick), var(--tick)),
-    linear-gradient(var(--tick), var(--tick)),
-    linear-gradient(var(--tick), var(--tick)),
-    repeating-linear-gradient(
-      to right,
-      var(--tick) 0 1px,
-      transparent 1px calc((100% - 1px) / var(--ticks))
-    );
-  background-size:
-    1px var(--major-h),
-    1px var(--major-h),
-    1px var(--major-h),
-    calc(100% - var(--thumb) + 1px) var(--minor-h);
-  background-position:
-    calc(var(--thumb) / 2 - 0.5px) 0,
-    50% 0,
-    calc(100% - var(--thumb) / 2 + 0.5px) 0,
-    calc(var(--thumb) / 2 - 0.5px) calc(var(--major-h) - var(--minor-h));
+  /* The graduations. --ticks is still written by the shell; it renders as one
+     row of 1 x 3 px marks below the channel, sized to the carriage's real
+     travel, not as an engraved faceplate scale. background-origin is border-box
+     so the position is measured from the 44 px box, not the 14 px padding box —
+     and an element's own background is not clipped by its own `overflow`. */
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--tick) 0 1px,
+    transparent 1px calc((100% - 1px) / var(--ticks))
+  );
+  background-size: calc(100% - var(--thumb) + 1px) var(--tick-h);
+  background-position: calc(var(--thumb) / 2 - 0.5px) calc(var(--range-h) / 2 + 9px);
   background-repeat: no-repeat;
+  background-origin: border-box;
+  background-clip: border-box;
   cursor: grab;
   touch-action: pan-y;
-}
-
-/* A log fader has no meaningful midpoint: majors at the ends only, minors at
-   the decades (the shell sets --ticks to log10(max / min)). */
-.control--log .range {
-  background-image:
-    linear-gradient(var(--tick), var(--tick)),
-    linear-gradient(var(--tick), var(--tick)),
-    repeating-linear-gradient(
-      to right,
-      var(--tick) 0 1px,
-      transparent 1px calc((100% - 1px) / var(--ticks))
-    );
-  background-size:
-    1px var(--major-h),
-    1px var(--major-h),
-    calc(100% - var(--thumb) + 1px) var(--minor-h);
-  background-position:
-    calc(var(--thumb) / 2 - 0.5px) 0,
-    calc(100% - var(--thumb) / 2 + 0.5px) 0,
-    calc(var(--thumb) / 2 - 0.5px) calc(var(--major-h) - var(--minor-h));
 }
 
 .range:focus {
   outline: none;
 }
 
+.range:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-halo);
+}
+
 .range:active {
   cursor: grabbing;
 }
 
+/* Disabled: the fill goes graphite rather than translucent, so the control
+   still reads as a fader at a glance. */
 .range:disabled {
-  opacity: 0.5;
+  --accent: var(--tick);
   cursor: not-allowed;
+  opacity: 0.75;
 }
 
-/* Track */
+/* Track. The inset ring is what makes the channel a conformant graphical
+   object: the sunk fill alone is 1.20:1 on the panel, the ring is 3.16:1, and
+   the vermilion fill is 3.66:1 against the channel it sits in. */
 .range::-webkit-slider-runnable-track {
-  height: var(--track-h);
-  background: var(--stroke);
+  height: var(--channel);
   border: 0;
-  border-radius: var(--radius-0);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--stroke);
 }
 
 .range::-moz-range-track {
-  height: var(--track-h);
-  background: var(--stroke);
+  height: var(--channel);
   border: 0;
-  border-radius: var(--radius-0);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: inset 0 0 0 1px var(--stroke);
 }
 
 .range::-moz-range-progress {
-  height: var(--track-h);
-  background: var(--stroke);
+  height: var(--channel);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }
 
-/* Thumb */
+/* Carriage. The shadow's right edge lands at
+   thumbLeft + thumb − W + (W − thumb/2) = thumbLeft + thumb/2, i.e. exactly the
+   carriage's centre line. No gap, no bleed, no JavaScript. */
 .range::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
   width: var(--thumb);
-  height: var(--thumb);
+  height: var(--thumb-h);
   margin-top: var(--thumb-margin);
-  border: 2px solid var(--ink);
-  border-radius: var(--radius-thumb);
+  border: 1px solid var(--window-stroke);
+  border-radius: var(--carriage-r);
   background:
-    linear-gradient(var(--accent), var(--accent)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--surface-raised);
+    linear-gradient(var(--accent), var(--accent)) 50% 50% / var(--index-w) var(--index-h) no-repeat,
+    var(--canvas);
+  box-shadow:
+    calc(-1 * var(--range-w)) 0 0 calc(var(--range-w) - var(--thumb) / 2) var(--accent),
+    0 1px 2px var(--shade-4),
+    var(--bevel);
   cursor: grab;
+  transition: scale var(--dur-2) var(--ease-tactile);
 }
 
 .range::-moz-range-thumb {
   box-sizing: border-box;
   width: var(--thumb);
-  height: var(--thumb);
-  border: 2px solid var(--ink);
-  border-radius: var(--radius-thumb);
+  height: var(--thumb-h);
+  border: 1px solid var(--window-stroke);
+  border-radius: var(--carriage-r);
   background:
-    linear-gradient(var(--accent), var(--accent)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--surface-raised);
+    linear-gradient(var(--accent), var(--accent)) 50% 50% / var(--index-w) var(--index-h) no-repeat,
+    var(--canvas);
+  box-shadow: 0 1px 2px var(--shade-4), var(--bevel);
   cursor: grab;
+  transition: scale var(--dur-2) var(--ease-tactile);
 }
 
-/* Dragging: the thumb inverts, the index line goes white. */
 .range:active::-webkit-slider-thumb {
-  background:
-    linear-gradient(var(--canvas), var(--canvas)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--ink);
+  scale: 1.06;
   cursor: grabbing;
 }
 
 .range:active::-moz-range-thumb {
-  background:
-    linear-gradient(var(--canvas), var(--canvas)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--ink);
+  scale: 1.06;
   cursor: grabbing;
 }
 
-/* Keyboard focus: a round ring on the thumb, identical in both engines. */
-.range:focus-visible::-webkit-slider-thumb {
-  box-shadow:
-    0 0 0 2px var(--surface-raised),
-    0 0 0 4px var(--accent);
-}
-
-.range:focus-visible::-moz-range-thumb {
-  box-shadow:
-    0 0 0 2px var(--surface-raised),
-    0 0 0 4px var(--accent);
-}
-
 .range:disabled::-webkit-slider-thumb {
-  background:
-    linear-gradient(var(--ink-muted), var(--ink-muted)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--surface-raised);
   cursor: not-allowed;
 }
 
 .range:disabled::-moz-range-thumb {
-  background:
-    linear-gradient(var(--ink-muted), var(--ink-muted)) 50% 2px / var(--index-w) var(--index-h) no-repeat,
-    var(--surface-raised);
   cursor: not-allowed;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .range:hover:not(:disabled)::-webkit-slider-thumb {
-    box-shadow: inset 0 0 0 1px var(--ink);
+    scale: 1.06;
   }
 
   .range:hover:not(:disabled)::-moz-range-thumb {
-    box-shadow: inset 0 0 0 1px var(--ink);
+    scale: 1.06;
   }
 }
 
-/* 13.2  Stepper — integer parameters: [−] window [+] sharing seams. */
+/* 13.2  Stepper — integer parameters. A group container holding a window and
+   two ghost keys, 3 px apart; no shared seams, which were a Motif idiom.
+   11 − 3 padding = 8: the inner radius is concentric. */
 .stepper {
   display: inline-grid;
-  grid-template-columns: var(--key-s) minmax(6ch, 1fr) var(--key-s);
+  grid-template-columns: var(--key-s) minmax(5ch, 1fr) var(--key-s);
+  gap: 3px;
   width: 100%;
   max-width: 12rem;
+  padding: 3px;
+  border-radius: var(--radius-3);
+  background: var(--surface-sunk);
+  box-shadow: inset var(--ring);
 }
 
 .stepper__key {
+  position: relative;
   width: var(--key-s);
-  height: max(var(--input-h), var(--key-s));
+  height: max(calc(var(--input-h) - 6px), var(--key-s));
   padding: 0;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-0);
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: var(--radius-2);
+  background-color: transparent;
+  background-image: none;
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: var(--t-15);
@@ -1732,25 +2300,33 @@ input.window:disabled {
   line-height: 1;
   font-variant-numeric: var(--num);
   cursor: pointer;
+  transition:
+    background-color var(--hover-out) var(--ease-std),
+    background-image var(--hover-out) var(--ease-std),
+    translate var(--dur-2) var(--ease-tactile);
 }
 
-.stepper__key:active {
-  background: var(--ink);
-  color: var(--surface-raised);
+/* 30 px of ink, 44 px of target. */
+.stepper__key::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.stepper__key:active:not(:disabled) {
+  background-image: linear-gradient(var(--wash-2), var(--wash-2));
+  translate: 0 1px;
 }
 
 .stepper__key:disabled {
-  color: var(--ink-muted);
-  border-color: var(--line);
-  background: var(--surface-raised);
+  color: var(--ink-soft);
   cursor: not-allowed;
 }
 
 .stepper__input {
-  height: max(var(--input-h), var(--key-s));
+  height: max(calc(var(--input-h) - 6px), var(--key-s));
   width: 100%;
   min-width: 0;
-  margin-inline: -1px;
   padding: 0 var(--s-1);
   text-align: center;
   appearance: textfield;
@@ -1763,6 +2339,7 @@ input.window:disabled {
   margin: 0;
 }
 
+/* The focused child rises above its neighbours' rings. */
 .stepper__input:focus-visible,
 .stepper__key:focus-visible {
   position: relative;
@@ -1771,42 +2348,52 @@ input.window:disabled {
 
 @media (hover: hover) and (pointer: fine) {
   .stepper__key:hover:not(:disabled) {
-    background: var(--ink);
-    color: var(--surface-raised);
+    background-image: linear-gradient(var(--wash-1), var(--wash-1));
+    transition-duration: var(--hover-in);
   }
 }
 
-/* 13.3  Select — a display window with an engraved index mark. The mark is a
-   solid 9 x 5 triangle, not the 1.5 px round-capped chevron every component
-   library ships. */
+/* 13.3  Select — a display window with a solid index mark. The mark is a filled
+   10 x 6 triangle: the deliberate opposite of the 12 px, 1.5 px, round-cap,
+   round-join chevron that is the Radix / Lucide / Feather house mark. It is a
+   data URI rather than currentColor because a select's face is white in BOTH
+   schemes, so the mark's colour is a constant by construction. */
 .select {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
   min-width: 0;
   height: max(var(--input-h), var(--key-s));
-  padding: 0 28px 0 10px;
+  padding: 0 32px 0 var(--s-3);
+  border: 0;
+  border-radius: var(--radius-3);
   font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 500;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-13);
-  font-stretch: var(--wdth-display);
+  font-stretch: var(--wdth-ui);
   color: var(--window-ink);
   background-color: var(--canvas);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 5'%3E%3Cpath fill='%23171B1D' d='M0 0h9L4.5 5z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23171B1D' d='M0 0h10L5 6z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 9px center;
-  background-size: 9px 5px;
-  border: 1px solid var(--window-stroke);
-  border-radius: var(--radius-0);
+  background-position: right 11px center;
+  background-size: 10px 6px;
+  box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease-snap);
+  transition: box-shadow var(--dur-2) var(--ease-tactile);
+}
+
+.select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 1px var(--focus-window), var(--focus-halo-window);
 }
 
 .select:disabled {
-  background-color: var(--surface);
-  color: var(--ink-muted);
-  border-color: var(--stroke);
+  background-color: var(--surface-sunk);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%234E5750' d='M0 0h10L5 6z'/%3E%3C/svg%3E");
+  color: var(--ink-soft);
+  box-shadow: 0 0 0 1px var(--stroke);
   cursor: not-allowed;
 }
 
@@ -1818,18 +2405,19 @@ input.window:disabled {
 }
 
 .select optgroup {
-  font-weight: 600;
+  font-weight: var(--wght-label);
   font-style: normal;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .select:hover:not(:disabled) {
-    border-color: var(--window-stroke-hover);
+    box-shadow: 0 0 0 1px var(--window-stroke-hover), var(--e-1);
   }
 }
 
 /* Where the engine themes the picker, it stays a white display window in both
-   schemes, like every other window on the bench. */
+   schemes, like every other window on the bench, and it opens on a 140 ms fade
+   that @starting-style and allow-discrete make possible with no JavaScript. */
 @supports (appearance: base-select) {
   .select,
   .select::picker(select) {
@@ -1841,31 +2429,46 @@ input.window:disabled {
   }
 
   .select::picker(select) {
-    margin: 0;
-    padding: 0;
+    margin-block-start: var(--s-1);
+    padding: 4px;
+    border: 0;
+    border-radius: var(--radius-3);
     background: var(--canvas);
-    border: 1px solid var(--window-stroke);
-    border-radius: var(--radius-0);
-    box-shadow: none;
+    box-shadow: 0 0 0 1px var(--window-stroke), var(--e-3);
+    opacity: 0;
+    transition:
+      opacity var(--dur-2) var(--ease-out),
+      overlay var(--dur-2) allow-discrete,
+      display var(--dur-2) allow-discrete;
   }
 
-  .select:open {
-    border-color: var(--window-stroke-hover);
+  .select:open::picker(select) {
+    opacity: 1;
   }
 
+  @starting-style {
+    .select:open::picker(select) {
+      opacity: 0;
+    }
+  }
+
+  /* optgroup is the grouping mechanism the tab index leans on and it was styled
+     nowhere before. */
   .select optgroup {
-    padding: 6px 10px 2px;
+    padding: var(--s-2) var(--s-3) var(--s-1);
     font-size: var(--t-12);
-    font-weight: 600;
+    font-weight: var(--wght-label);
     font-stretch: var(--wdth-ui);
     color: var(--window-ink-muted);
     background: var(--canvas);
   }
 
   .select option {
-    padding: 6px 10px;
+    min-height: var(--input-h);
+    padding: var(--s-2) var(--s-3);
+    border-radius: var(--radius-2);
     font-size: var(--t-13);
-    font-weight: 500;
+    font-weight: var(--wght-ui);
     line-height: var(--lh-13);
     font-stretch: var(--wdth-display);
     color: var(--window-ink);
@@ -1877,28 +2480,26 @@ input.window:disabled {
     color: var(--canvas);
   }
 
-  .select option:active {
-    background: var(--wash-2);
-  }
-
   .select option::checkmark {
+    content: none;
     display: none;
   }
 
   @media (hover: hover) and (pointer: fine) {
     .select option:hover {
-      background: var(--wash-1);
+      background: rgb(23 27 29 / 0.06);
     }
   }
 }
 
 /* 13.4  Switch — <input type="checkbox" role="switch"> inside a <label>, so the
-   whole 44 px row is the hit target, which the design has always claimed. */
+   whole 44 px row is the hit target, which the design has always claimed. The
+   track is 44 x 26: revision 2's 36 x 18 failed SC 2.5.8 on its short axis. */
 .switch-row {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--s-2);
+  gap: var(--s-4);
   min-height: var(--row-control);
   cursor: pointer;
 }
@@ -1911,47 +2512,71 @@ input.window:disabled {
   width: var(--switch-w);
   height: var(--switch-h);
   margin: 0;
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-0);
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  /* The OFF state is where most toggles fail: this ring is 3.16:1, so the
+     control is identifiable when it is off. */
+  box-shadow: inset 0 0 0 1px var(--stroke);
   cursor: pointer;
-  transition: background-color var(--dur-2) var(--ease-snap);
+  transition:
+    background-color var(--dur-3) var(--ease-std),
+    box-shadow var(--dur-2) var(--ease-tactile);
 }
 
 .switch::before {
   content: "";
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  background: var(--ink);
+  top: 3px;
+  left: 3px;
+  width: var(--switch-knob);
+  height: var(--switch-knob);
+  border-radius: var(--radius-thumb);
+  background: var(--canvas);
+  box-shadow: 0 0 0 1px var(--ring-c-2), 0 1px 2px var(--shade-3);
+  /* TRANSLATE, never `left`. */
   transition:
-    transform var(--dur-2) var(--ease-snap),
-    background-color var(--dur-2) var(--ease-snap);
+    translate var(--dur-3) var(--ease-std),
+    width var(--dur-2) var(--ease-tactile);
 }
 
+/* State is carried by position AND fill, so colour is never the sole cue. */
 .switch:checked {
-  background: var(--ink);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-press);
 }
 
 .switch:checked::before {
-  transform: translateX(18px);
-  background: var(--surface-raised);
+  translate: var(--switch-travel) 0;
+}
+
+/* The knob stretches under the finger. */
+.switch:active::before {
+  width: calc(var(--switch-knob) + 4px);
+}
+
+.switch:checked:active::before {
+  translate: calc(var(--switch-travel) - 4px) 0;
+}
+
+.switch:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .switch:disabled {
-  border-color: var(--ink-muted);
   cursor: not-allowed;
-}
-
-.switch:disabled::before {
-  background: var(--ink-muted);
+  opacity: 0.6;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .switch:hover:not(:disabled) {
-    box-shadow: inset 0 0 0 1px var(--ink);
+    box-shadow: inset 0 0 0 1px var(--ink-muted);
+  }
+
+  .switch:checked:hover:not(:disabled) {
+    background: var(--accent-hover);
+    box-shadow: inset 0 0 0 1px var(--accent-press);
   }
 }
 
@@ -1961,9 +2586,9 @@ input.window:disabled {
 
 .footer {
   display: grid;
-  gap: var(--s-4);
-  padding: var(--s-6) var(--gutter) var(--s-8);
-  background: var(--surface);
+  gap: var(--s-5);
+  margin-top: var(--s-8);
+  padding: var(--s-8) var(--gutter) var(--s-10);
 }
 
 .sources {
@@ -1972,35 +2597,34 @@ input.window:disabled {
 
 .sources__title {
   font-family: var(--font-display);
-  font-size: var(--t-17);
-  font-weight: 600;
-  line-height: var(--lh-17);
+  font-size: var(--t-20);
+  font-weight: var(--wght-title);
+  line-height: var(--lh-20);
+  letter-spacing: var(--tracking-20);
   color: var(--ink);
-  margin-bottom: var(--s-2);
+  margin-bottom: var(--s-3);
 }
 
 .sources__list {
   display: flex;
   flex-direction: column;
-  gap: var(--seam);
+  gap: var(--s-2);
   margin: 0;
   padding: 0;
   list-style: none;
   max-width: 80ch;
-  background: var(--line);
 }
 
 .sources__item {
-  padding: 6px 0;
-  background: var(--surface);
-  font-size: var(--t-13);
-  line-height: var(--lh-13);
-  color: var(--ink);
+  font-size: var(--t-14);
+  line-height: var(--lh-14);
+  color: var(--ink-muted);
   overflow-wrap: anywhere;
 }
 
 .sources__viz {
-  color: var(--ink-muted);
+  color: var(--ink);
+  font-weight: var(--wght-label);
   margin-inline-end: var(--s-2);
 }
 
@@ -2011,21 +2635,23 @@ input.window:disabled {
   gap: var(--s-3) var(--s-6);
   font-family: var(--font-mono);
   font-size: var(--t-12);
-  font-weight: 500;
+  font-weight: 400;
   line-height: var(--lh-12);
   font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
   font-variant-numeric: var(--num);
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 /* SC 2.1.4: the single-character shortcuts can be turned off, here. */
 .footer__shortcuts {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: var(--s-3);
+  min-height: var(--row-control);
   font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: 500;
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
   font-stretch: var(--wdth-ui);
   color: var(--ink);
   cursor: pointer;
@@ -2049,10 +2675,10 @@ input.window:disabled {
    >= 1100px: bench (figure + sticky rail) with hero and ledger side by side.
    1024–1099: bench, readouts stacked.  600–1023: one column, the rail's
    sections interleave with the figure's.  <= 599: handheld meter — index-only
-   navigation, fixed transport deck, almanac readouts.
+   navigation, floating transport deck, almanac readouts.
    -------------------------------------------------------------------------- */
 
-/* The squeeze band where a 22rem hero and a 360 px ledger fought over a 688 px
+/* The squeeze band where a 23rem hero and a 360 px ledger fought over one
    track. They stack instead. */
 @media (max-width: 68.75rem) {
   .readouts {
@@ -2068,16 +2694,17 @@ input.window:disabled {
   .bench {
     display: flex;
     flex-direction: column;
+    /* `align-items: start` on the two-column bench keeps the rail from
+       stretching so it can be sticky. In a COLUMN it means "shrink to content",
+       which collapses the plate to the stage's intrinsic width. Restated. */
+    align-items: stretch;
+    gap: var(--s-6);
   }
 
   .figure,
   .rail,
   .rail__panel {
     display: contents;
-  }
-
-  .bench > * {
-    background: var(--surface-raised);
   }
 
   .figure__head {
@@ -2090,6 +2717,7 @@ input.window:disabled {
 
   .caption {
     order: 3;
+    margin-top: 0;
   }
 
   .transport {
@@ -2115,12 +2743,21 @@ input.window:disabled {
 }
 
 @media (max-width: 37.4375rem) {
+  /* Portrait experiments get a portrait aspect, not a taller cap: `width:
+     min(100%, …)` binds first at 360 px, so a height cap never engages for any
+     aspect >= 1. --viz-aspect-narrow is deliberately unregistered so this
+     var() can fall back. */
+  .stage {
+    --stage-aspect: var(--viz-aspect-narrow, var(--viz-aspect));
+  }
+
   .masthead__credit {
     display: none;
   }
 
   .tabs {
     grid-template-columns: minmax(0, 1fr);
+    padding-block: var(--s-2) var(--s-4);
   }
 
   .tabs__strip {
@@ -2129,31 +2766,38 @@ input.window:disabled {
 
   .tabs__index {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    padding-inline: var(--gutter);
   }
 
-  /* Transport becomes a fixed bottom deck. */
+  /* Transport becomes a floating bottom deck. */
   body {
-    padding-bottom: calc(var(--deck-h) + var(--s-2));
+    padding-bottom: calc(var(--deck-h) + var(--s-6));
   }
 
   .transport {
     position: fixed;
-    inset-inline: 0;
-    bottom: 0;
+    inset-inline: var(--s-2);
+    bottom: calc(var(--s-2) + env(safe-area-inset-bottom, 0px));
     z-index: 20;
     order: 0;
     height: var(--deck-h);
-    padding: 0 var(--gutter);
+    padding-inline: var(--s-2);
+    border-radius: var(--radius-5);
+    background: var(--surface-raised);
+    box-shadow: var(--e-float);
     justify-content: center;
   }
 
-  .transport .key {
-    height: var(--key-h-touch);
+  .transport[data-running="true"] {
+    box-shadow: var(--e-float), inset 0 0 0 1px var(--accent);
   }
 
-  .transport .key--icon {
-    width: var(--key-h-touch);
+  .transport__play {
+    min-width: 5.5rem;
+  }
+
+  .select.transport__speed {
+    min-width: 4rem;
+    margin-inline-start: var(--s-1);
   }
 
   /* Almanac readouts: label … value, then analytic | error beneath. */
@@ -2223,16 +2867,16 @@ input.window:disabled {
     text-align: left;
   }
 
-  /* Keyed on the row's state, never on :empty — templated markup with a
-     newline inside the cell is not empty and the label leaked. */
+  /* Keyed on the row's state, never on :empty — templated markup with a newline
+     inside the cell is not empty and the label leaked. */
   .readout:not(.readout--none) .readout__target::before {
     content: "analytic ";
     font-family: var(--font-display);
     font-stretch: var(--wdth-display);
   }
 
-  /* The analytic value and the signed error ran together as one string.
-     A ruled edge says where the reference stops and the deviation starts. */
+  /* The analytic value and the signed error ran together as one string. A ruled
+     edge says where the reference stops and the deviation starts. */
   .readout__error {
     grid-area: error;
     text-align: right;
@@ -2240,8 +2884,7 @@ input.window:disabled {
     border-inline-start: 1px solid var(--line);
   }
 
-  /* A readout with no analytic target is one line: label … value. The shell
-     emits no target and no error cell content at all. */
+  /* A readout with no analytic target is one line: label … value. */
   .readout--none .readout__target,
   .readout--none .readout__error {
     display: none;
@@ -2266,18 +2909,20 @@ input.window:disabled {
 
 /* --------------------------------------------------------------------------
    16a  Reduced motion
-   Durations collapse to zero and the strip stops smooth-scrolling. The shell
-   does the rest: every visualization opens on the completed state of its
-   default configuration and waits for Play; Fast-forward renders batches
-   without intermediate frames.
+
+   Durations collapse but COLOUR, BACKGROUND and BOX-SHADOW state changes are
+   preserved: hover, focus and pressed feedback all survive, they simply arrive
+   instantly. A blanket `transition: none !important` would be a regression, not
+   a fix. 0.01ms rather than 0ms so `transitionend` still fires and nothing that
+   listens for it hangs.
+
+   Every state in the design is legible with all motion removed, by
+   construction: the active tab is fill + ring + shadow + ink weight, not the
+   ball's arrival; the switch is knob position + fill; the fader is the filled
+   channel; the needle is its position.
    -------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    --dur-1: 0ms;
-    --dur-2: 0ms;
-  }
-
   .tabs__strip {
     scroll-behavior: auto;
   }
@@ -2285,42 +2930,88 @@ input.window:disabled {
   *,
   *::before,
   *::after {
-    transition-duration: 0ms !important;
+    transition-duration: 0.01ms !important;
     transition-delay: 0ms !important;
-    animation-duration: 0ms !important;
+    animation-duration: 0.01ms !important;
     animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
   }
 }
 
 /* --------------------------------------------------------------------------
    16b  Forced colors (Windows High Contrast)
-   Every state here is carried by a background colour or a background image,
-   and forced-colors drops both. The chrome is remapped to system keywords in
-   one block, because it is all token-driven; the plate opts out entirely so
-   the bed stays white and the pens keep the ratios §3 certifies. The canvas
-   contract tokens are re-stated as literals on .plate — readCanvasTheme()
-   hands them to ctx.fillStyle, which cannot be given a system keyword.
+
+   box-shadow is NOT rendered in forced-colors mode, and this design draws every
+   boundary as a ring. Boundaries are therefore handed back to `border` here,
+   and the focus OUTLINE — which does survive — is why it was made load-bearing
+   in the first place. The chrome is remapped to system keywords in one block;
+   the plate opts out entirely so the bed stays white and the pens keep their
+   certified ratios, with the canvas contract restated as literals because
+   ctx.fillStyle cannot be given a system keyword.
    -------------------------------------------------------------------------- */
 
 @media (forced-colors: active) {
   :root {
     --surface: Canvas;
     --surface-raised: Canvas;
+    --surface-sunk: Canvas;
+    --mat: Canvas;
     --line: CanvasText;
     --stroke: CanvasText;
     --tick: CanvasText;
     --ink: CanvasText;
     --ink-muted: CanvasText;
+    --ink-soft: CanvasText;
     --accent: Highlight;
-    --accent-ink: Canvas;
     --accent-hover: Highlight;
+    --accent-press: Highlight;
+    --accent-ink: Canvas;
+    --accent-text: LinkText;
     --agree: LinkText;
+    --focus-line: Highlight;
     --window-ink: CanvasText;
     --window-ink-muted: CanvasText;
     --window-stroke: CanvasText;
     --window-stroke-hover: CanvasText;
     --window-agree: LinkText;
+    --wash-1: transparent;
+    --wash-2: transparent;
+  }
+
+  :focus-visible {
+    outline-color: Highlight;
+    box-shadow: none;
+  }
+
+  /* Every ring becomes a border, because box-shadow is dropped. box-sizing is
+     border-box everywhere, so nothing changes size. */
+  .key,
+  .window,
+  .select,
+  .hero,
+  .fact,
+  .rail__panel,
+  .transport,
+  .stepper,
+  .story__step,
+  .tabs__strip {
+    border: 1px solid CanvasText;
+  }
+
+  /* Its OWN rule, never comma-joined with the list above: one unrecognised
+     vendor pseudo-element invalidates the whole rule in both engines, and that
+     rule is every boundary on the page. */
+  .range::-webkit-slider-thumb {
+    border: 1px solid CanvasText;
+  }
+
+  .range::-moz-range-thumb {
+    border: 1px solid CanvasText;
+  }
+
+  .tab[aria-selected="true"] {
+    border: 1px solid Highlight;
   }
 
   /* `background` is a SHORTHAND: it resets background-image to none, and on
@@ -2334,26 +3025,37 @@ input.window:disabled {
     color: CanvasText;
   }
 
-  /* The triangle is a data URI, so its fill is a literal — near-black on a black
-     Canvas in a dark high-contrast theme, and unreachable by a system keyword.
-     The honest answer at this width is the platform control: `appearance: auto`
-     restores the native select, whose arrow the engine paints in the user's own
-     colours. It also wins over the @supports (appearance: base-select) branch
-     above, which hides ::picker-icon and relies on the same image. */
+  /* The triangle is a data URI, so its fill is a literal — near-black on a
+     black Canvas in a dark high-contrast theme, and unreachable by a system
+     keyword. `appearance: auto` restores the platform control, whose arrow the
+     engine paints in the user's own colours. */
   .select {
     appearance: auto;
     -webkit-appearance: auto;
     background-image: none;
-    padding-inline-end: 10px;
+    padding-inline-end: var(--s-3);
   }
 
-  /* Marks that must survive: their backgrounds are the whole message. */
+  /* Marks whose backgrounds are the whole message. Vendor pseudo-elements get
+     their own rules below, for the reason given above. */
   .tab::after,
   .switch,
   .switch::before,
   .readout__state,
   .hero__needle,
   .range {
+    forced-color-adjust: none;
+  }
+
+  .range::-webkit-slider-runnable-track {
+    forced-color-adjust: none;
+  }
+
+  .range::-moz-range-track {
+    forced-color-adjust: none;
+  }
+
+  .range::-moz-range-progress {
     forced-color-adjust: none;
   }
 
@@ -2369,18 +3071,21 @@ input.window:disabled {
     --tick: ButtonText;
     --stroke: ButtonText;
     --ink: ButtonText;
-    --surface-raised: ButtonFace;
+    --surface-sunk: ButtonFace;
     --accent: Highlight;
     --canvas: ButtonFace;
+    --window-stroke: ButtonText;
   }
 
   .switch {
     background: ButtonFace;
-    border-color: ButtonText;
+    box-shadow: none;
+    border: 1px solid ButtonText;
   }
 
   .switch::before {
     background: ButtonText;
+    box-shadow: none;
   }
 
   .switch:checked {
@@ -2391,8 +3096,8 @@ input.window:disabled {
     background: ButtonFace;
   }
 
-  .key:active,
   .key[aria-pressed="true"],
+  .key--primary,
   .story__step[aria-current="step"] {
     background: Highlight;
     color: HighlightText;
@@ -2400,7 +3105,7 @@ input.window:disabled {
   }
 
   .transport[data-running="true"] {
-    border-top-color: Highlight;
+    border-color: Highlight;
   }
 
   .readout__state {
@@ -2431,14 +3136,17 @@ input.window:disabled {
 /* --------------------------------------------------------------------------
    16c  Print
    The page is a titled figure, a numbered caption, a table of measurements
-   against analytic targets, and a sources list. That is a handout. Everything
-   a reader cannot operate on paper comes off, and the permalink is printed.
+   against analytic targets, and a sources list. That is a handout. Everything a
+   reader cannot operate on paper comes off, and the permalink is printed.
    -------------------------------------------------------------------------- */
 
 @media print {
   :root {
+    color-scheme: light;
     --surface: #ffffff;
     --surface-raised: #ffffff;
+    --surface-sunk: #ffffff;
+    --mat: transparent;
     --line: #000000;
     --viz-max-h: 4in;
   }
@@ -2465,6 +3173,13 @@ input.window:disabled {
     max-height: none;
     overflow: visible;
     position: static;
+    box-shadow: none;
+  }
+
+  .plate,
+  .fact,
+  .hero {
+    box-shadow: 0 0 0 1px #000000;
   }
 
   .plate,
@@ -2483,118 +3198,4 @@ input.window:disabled {
   .ledger-wrap {
     overflow: visible;
   }
-}
-
-/* --------------------------------------------------------------------------
-   16d  Dark scheme — opt-in, through the masthead toggle, which writes
-   data-theme on <html> and persists it. Never selected from
-   prefers-color-scheme: the light faceplate is the identity, and a toggle is
-   the recourse. data-theme="light" is honoured too, so the toggle wins in both
-   directions.
-
-   The plate, the pens, the grid and every display window do not change, so no
-   canvas ratio needs revalidating. Only the chrome inverts — and the chrome
-   never paints --ink or --stroke onto a white window, which is what made the
-   revision-1 hover states vanish here.
-   -------------------------------------------------------------------------- */
-
-:root[data-theme="dark"] {
-  --surface: #191d1f;
-  --surface-raised: #282e30;
-  --line: #4a5255;
-  --stroke: #8a948f;
-  --tick: #6e7873;
-  --ink: #ecefed;
-  --ink-muted: #aeb7b2;
-  --accent: #e8502f;
-  --accent-hover: #f2694a;
-  --accent-ink: #171b1d;
-  --agree: #8fb4e8;
-  /* --wash-1 / --wash-2 are NOT re-declared: they tint the select picker, which
-     stays a white window in both schemes, so the dark-on-white values still
-     apply. Neither is --window-*, for the same reason.
-
-     Three tokens above ARE canvas-contract tokens — --ink, --ink-muted and
-     --accent are all entries in CANVAS_THEME_VARS — so the plate restates them
-     below. Inverting the chrome must not reach the bed. */
-  color-scheme: dark;
-}
-
-/* The plate does not invert (§10), so the canvas contract must not either.
-   readCanvasTheme() reads these off .plate and hands them to ctx.fillStyle: with
-   the chrome's dark --ink inherited, Buffon's live π window painted #ecefed on a
-   #ffffff bed — 1.16:1, invisible — and Galton's bin numerals dropped from
-   5.11:1 to 2.06:1. Restated here exactly as the forced-colors block restates
-   them, and for the same reason: the pens are certified against a white plate in
-   both schemes, so no ratio in §3 needs revalidating and nothing has to re-read
-   the theme on the toggle. */
-:root[data-theme="dark"] .plate {
-  --ink: #171b1d;
-  --ink-muted: #4e5750;
-  --accent: #d53619;
-}
-
-/* --------------------------------------------------------------------------
-   17  Component layer additions
-   Appended, not woven in: the two transport-adjacent elements §5 describes in
-   prose rather than in its markup blocks — the int row's fader and the speed
-   picker — and the end-of-range and no-reading states, and nothing above
-   changes.
-   -------------------------------------------------------------------------- */
-
-/* An int row carries both halves of §5's stepper story: the graduated fader —
-   §1, "every quantity a person can turn is a fader with an engraved scale" — in
-   the input row, and the stepper as its numeric mirror in the value column,
-   which already has its grid-area. This gives the fader the other one. */
-.control--int .range {
-  grid-area: input;
-}
-
-/* The transport's speed picker. `.select` is a full-width form control; in the
-   transport's flex row it has to be intrinsic, and it sits apart from the key
-   cluster rather than sharing its seams — it selects a rate, it does not
-   transport anything. */
-.transport__speed {
-  flex: none;
-  width: auto;
-  min-width: 5rem;
-  height: var(--key-h);
-  margin-inline-start: auto;
-}
-
-/* On the fixed deck the cluster is centred, and an auto margin would shove the
-   keys off to the left to make room for it. */
-@media (max-width: 37.4375rem) {
-  .transport__speed {
-    margin-inline-start: var(--s-3);
-  }
-}
-
-/* A key at the end of its range — the tab index's Previous / Next, the story
-   tape's Prev / Next — is inoperable, not removed from the tab order. `disabled`
-   on the key that just fired the move drops focus to <body> under the reader's
-   own keypress and the next Tab restarts from the top of the document, which
-   below 600 px means past the whole tab index. `.key[aria-disabled="true"]`
-   already carries the resting look; these two rules stop the hover and pressed
-   inversions from claiming the key still does something. */
-@media (hover: hover) and (pointer: fine) {
-  .key[aria-disabled="true"]:hover {
-    background: var(--surface-raised);
-    color: var(--ink-muted);
-    border-color: var(--line);
-  }
-}
-
-.key[aria-disabled="true"]:active {
-  background: var(--surface-raised);
-  color: var(--ink-muted);
-  border-color: var(--line);
-}
-
-/* No reading yet — a mean over zero samples. The needle is hidden rather than
-   parked, because dead centre on the null meter is the one position that means
-   "the reading agrees with theory". The UA's [hidden] rule loses to
-   .hero__needle's own `position`, so it is restated here. */
-.hero__needle[hidden] {
-  display: none;
 }
