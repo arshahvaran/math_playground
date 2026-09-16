@@ -19,18 +19,51 @@ import {
   layoutBoard,
   pegPosition,
   progressToPy,
+  restSlot,
   type BoardGeometry,
   type GaltonParams,
 } from './sim';
 
 /** Hard ceiling on balls; the `balls` slider tops out here too. */
-const MAX_BALLS = 20_000;
+const MAX_BALLS = 5_000;
+
+/**
+ * Most rows the control offers. The simulation packs routes into 32-bit
+ * masks and takes twenty; sixteen is where the bins are still wide enough on
+ * a phone to read their index, and where the bell is already indistinguishable
+ * from the curve drawn over it.
+ */
+const ROWS_MAX = 16;
 
 const DEFAULT_ROWS = 12;
-const DEFAULT_P = 0.5;
-const DEFAULT_BALLS = 2_000;
-const DEFAULT_DROP_RATE = 40;
+const DEFAULT_BALLS = 500;
 const DEFAULT_SEED = 42;
+
+/**
+ * Probability of going right at a peg. Not a control: the tool is for
+ * students meeting the bell for the first time, and a fair coin is the
+ * experiment. The simulation and the targets below stay general in `p` so
+ * the mathematics is still there if it is ever wanted back.
+ */
+const BIAS = 0.5;
+
+/**
+ * The stream is paced so a run takes about this long whatever the ball
+ * count, between a floor that keeps a handful of balls from trickling and a
+ * ceiling that keeps five thousand from becoming a blur.
+ */
+const RUN_SECONDS = 12;
+const MIN_DROP_RATE = 2;
+const MAX_DROP_RATE = 400;
+
+/**
+ * What is drawn over the pile. These were controls; they are fixed now, with
+ * the code paths kept: the curve is the lesson, the exact binomial marks are
+ * a second thing to explain, and the trails are what makes the motion legible.
+ */
+const SHOW_NORMAL: boolean = true;
+const SHOW_BINOMIAL: boolean = false;
+const SHOW_TRAILS: boolean = true;
 
 /**
  * Alpha removed from the foreground each frame when trails are on. A trail
@@ -56,15 +89,14 @@ const LABEL_GAP = 3;
 /**
  * Most resting balls drawn as individual dots per frame, across all bins. A
  * tall pile is drawn as dots up to its share of this and as a bar above that.
- * Four thousand small arcs in one path is about a millisecond; twenty
- * thousand would be most of the frame budget for a pile that never moves.
+ * Four thousand small arcs in one path is about a millisecond.
  */
 const DOT_BUDGET = 4_000;
 
 /**
  * Room above the expected tallest pile, as a factor. The tallest bin count
  * fluctuates about balls·pmax with standard deviation √(balls·pmax(1−pmax)) —
- * under 2% of the expectation at 20,000 balls — so the pile stays inside the
+ * under 4% of the expectation at 5,000 balls — so the pile stays inside the
  * bin and the normal overlay keeps a margin under the peg rows.
  */
 const HEADROOM = 1.15;
@@ -77,19 +109,9 @@ const params: readonly ParamSpec[] = [
     key: 'rows',
     label: 'Rows',
     min: 3,
-    max: MAX_ROWS,
+    max: ROWS_MAX,
     default: DEFAULT_ROWS,
     help: 'Peg rows. Each ball makes one left-or-right choice per row, so there are rows + 1 bins.',
-  },
-  {
-    kind: 'range',
-    key: 'p',
-    label: 'Bias',
-    min: 0,
-    max: 1,
-    step: 0.01,
-    default: DEFAULT_P,
-    help: 'Probability of going right at a peg. ½ is a fair coin.',
   },
   {
     kind: 'range',
@@ -102,51 +124,12 @@ const params: readonly ParamSpec[] = [
     log: true,
     help: 'Balls released before the stream stops.',
   },
-  {
-    kind: 'range',
-    key: 'dropRate',
-    label: 'Drop rate',
-    min: 1,
-    max: 400,
-    step: 1,
-    default: DEFAULT_DROP_RATE,
-    unit: '/s',
-    help: 'Balls released per second of simulation time. Changes take effect without restarting.',
-  },
-  {
-    kind: 'toggle',
-    key: 'showNormal',
-    label: 'Normal overlay',
-    default: true,
-    help: [
-      'Draw N(', { v: 'n' }, '·', { v: 'p' }, ', ', { v: 'n' }, '·', { v: 'p' }, '·(1−', { v: 'p' }, ')) ',
-      '— the curve de Moivre found as the limit of this pile — at the scale of the finished pile.',
-    ],
-  },
-  {
-    kind: 'toggle',
-    key: 'showBinomial',
-    label: 'Binomial bars',
-    default: false,
-    help: [
-      'Mark the exact expected count in each bin, balls · C(', { v: 'n' }, ',', { v: 'k' }, ') · ',
-      { v: 'p' }, 'ᵏ(1−', { v: 'p' }, ')ⁿ⁻ᵏ.',
-    ],
-  },
-  {
-    kind: 'toggle',
-    key: 'showTrails',
-    label: 'Trails',
-    default: true,
-    help: 'Let each ball leave a fading trace of its route.',
-  },
-  {
-    kind: 'seed',
-    key: 'seed',
-    label: 'Seed',
-    default: DEFAULT_SEED,
-    help: 'Same seed, same routes, same pile.',
-  },
+  // Not a control: the rail skips seed specs, and "the same experiment,
+  // another draw" is the transport's Shuffle key. It is declared all the same
+  // because coerceParams() only reads a permalink key that has a spec —
+  // without it `?seed=7` is dropped on the way in and every shared link
+  // replays the default run.
+  { kind: 'seed', key: 'seed', label: 'Seed', default: DEFAULT_SEED },
 ];
 
 const presets: readonly Preset[] = [
@@ -154,40 +137,34 @@ const presets: readonly Preset[] = [
     id: 'one-ball',
     label: 'One ball',
     caption: 'One ball, one route: a coin decides left or right at every peg, and the bin it reaches is the number of rights.',
-    values: { rows: 12, p: 0.5, balls: 1, dropRate: 1, showNormal: false, showBinomial: false },
+    values: { rows: 12, balls: 1 },
   },
   {
     id: 'a-hundred',
     label: 'A hundred',
     caption: 'A hundred balls already crowd the middle: 924 routes lead to the centre bin and a single route to each edge.',
-    values: { rows: 12, p: 0.5, balls: 100, dropRate: 40, showNormal: false, showBinomial: false },
+    values: { rows: 12, balls: 100 },
   },
   {
-    id: 'ten-thousand',
-    label: 'Ten thousand',
+    id: 'five-thousand',
+    label: 'Five thousand',
     caption: [
-      'Ten thousand balls fill in the bell, and a normal curve drawn from nothing but ',
+      'Five thousand balls fill in the bell, and a normal curve drawn from nothing but ',
       { v: 'n' }, '·', { v: 'p' }, ' and ', { v: 'n' }, '·', { v: 'p' }, '·(1−', { v: 'p' }, ') sits on the pile.',
     ],
-    values: { rows: 12, p: 0.5, balls: 10_000, dropRate: 400, showNormal: true, showBinomial: false },
-  },
-  {
-    id: 'bias',
-    label: 'Bias it',
-    caption: 'Weight every peg 70:30 and the whole bell slides right without losing its shape — the curve was never about fairness.',
-    values: { rows: 12, p: 0.7, balls: 10_000, dropRate: 400, showNormal: true, showBinomial: false },
+    values: { rows: 12, balls: 5_000 },
   },
   {
     id: 'three-rows',
     label: 'Three rows',
     caption: 'Three rows give a triangle in the ratio 1 : 3 : 3 : 1 — a row of Pascal’s triangle, not yet a bell.',
-    values: { rows: 3, p: 0.5, balls: 5_000, dropRate: 400, showNormal: false, showBinomial: true },
+    values: { rows: 3, balls: 5_000 },
   },
   {
-    id: 'twenty-rows',
-    label: 'Twenty rows',
-    caption: 'Twenty rows and twenty thousand balls: the binomial marks and the normal curve are now indistinguishable.',
-    values: { rows: 20, p: 0.5, balls: 20_000, dropRate: 400, showNormal: true, showBinomial: true },
+    id: 'sixteen-rows',
+    label: 'Sixteen rows',
+    caption: 'Sixteen rows and five thousand balls: the pile and the curve drawn over it are now hard to tell apart.',
+    values: { rows: 16, balls: 5_000 },
   },
 ];
 
@@ -232,22 +209,23 @@ function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
 }
 
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
-}
-
 /** Balls this run will drop, clamped the way the sim clamps its own target. */
 function ballTarget(values: ParamValues): number {
   return Math.max(1, Math.min(MAX_BALLS, Math.floor(num(values, 'balls', DEFAULT_BALLS))));
 }
 
+/** Balls per second that finish a run of `balls` in about RUN_SECONDS. */
+export function dropRateFor(balls: number): number {
+  return Math.min(MAX_DROP_RATE, Math.max(MIN_DROP_RATE, balls / RUN_SECONDS));
+}
+
 function simParams(values: ParamValues): GaltonParams {
+  const balls = ballTarget(values);
   return {
     rows: num(values, 'rows', DEFAULT_ROWS),
-    p: num(values, 'p', DEFAULT_P),
-    balls: num(values, 'balls', DEFAULT_BALLS),
-    dropRate: num(values, 'dropRate', DEFAULT_DROP_RATE),
+    p: BIAS,
+    balls,
+    dropRate: dropRateFor(balls),
   };
 }
 
@@ -291,9 +269,7 @@ export function pileMetrics(g: BoardGeometry, p: number, balls: number, particle
   // against the binomial mode alone. The overlay peaks at balls·pdf(μ) =
   // balls/(σ√2π), and below about five rows that density is the larger of the
   // two — 0.4606 against a mode of 0.375 at three rows — so headroom bought for
-  // the bars sawed the top off the curve. Not conditioned on `showNormal`: that
-  // toggle is absorbed live, and a scale that moved with it would rescale the
-  // whole histogram under a cosmetic switch.
+  // the bars sawed the top off the curve.
   const peak = sigma > 0 ? Math.max(pmax, normalPdf(mu, mu, sigma)) : pmax;
   const tallest = Math.max(1, balls * peak * HEADROOM);
   const depth = Math.max(1, g.binBottom - g.binTop);
@@ -303,17 +279,17 @@ export function pileMetrics(g: BoardGeometry, p: number, balls: number, particle
   radius = Math.min(particleRadius, Math.max(0.5, radius));
   const cols = Math.max(1, Math.floor(g.pegSpacing / (2 * radius)));
   // The dot pitch 2r/cols is the area derivation only while the radius is the
-  // one it produced. Clamping r — up to the 0.5 px floor at twenty rows and
-  // twenty thousand balls, down to the in-flight ball size on a large plate —
-  // makes that pitch disagree with depth/tallest, which is the scale that puts
-  // the expected tallest pile at depth/HEADROOM by construction. Take the
-  // smaller of the two and then lay the dot grid out from it rather than the
-  // other way round: a row of `cols` dots is cols·unit tall, so the dot is half
-  // that. Drawing the dots at their own pitch instead stood a tail pile at up
-  // to 2.5× the height of the bar, the silhouette and the marks that measure
-  // the same balls, and sent an arriving ball to a resting place tens of pixels
-  // above its own bar. The seam where the bar takes over from the dots is now
-  // the partial top row, at most one dot high.
+  // one it produced. Clamping r — up to the 0.5 px floor, down to the
+  // in-flight ball size on a large plate — makes that pitch disagree with
+  // depth/tallest, which is the scale that puts the expected tallest pile at
+  // depth/HEADROOM by construction. Take the smaller of the two and then lay
+  // the dot grid out from it rather than the other way round: a row of `cols`
+  // dots is cols·unit tall, so the dot is half that. Drawing the dots at their
+  // own pitch instead stood a tail pile at up to 2.5× the height of the bar,
+  // the silhouette and the marks that measure the same balls, and sent an
+  // arriving ball to a resting place tens of pixels above its own bar. The
+  // seam where the bar takes over from the dots is now the partial top row,
+  // at most one dot high.
   const unit = Math.min((2 * radius) / cols, depth / tallest);
   return {
     radius: (cols * unit) / 2,
@@ -330,22 +306,11 @@ function create(ctx: VizContext): VizInstance {
   const sim = createSim(ctx.rng, simParams(ctx.params), MAX_BALLS);
 
   let geometry = layoutBoard(ctx.width, ctx.height, sim.rows);
-  let pile = pileMetrics(geometry, DEFAULT_P, DEFAULT_BALLS, ctx.theme.particleRadius);
+  let pile = pileMetrics(geometry, BIAS, DEFAULT_BALLS, ctx.theme.particleRadius);
 
   // This frame's bar heights, so the wash and its silhouette cannot disagree by
   // a pixel. Allocated once at the row ceiling rather than per frame.
   const barH = new Float64Array(MAX_ROWS + 1);
-
-  // Cosmetic parameters, absorbed live.
-  let showNormal = true;
-  let showBinomial = false;
-  let showTrails = true;
-
-  function syncLive(): void {
-    showNormal = flag(ctx.params, 'showNormal', true);
-    showBinomial = flag(ctx.params, 'showBinomial', false);
-    showTrails = flag(ctx.params, 'showTrails', true);
-  }
 
   function syncLayout(): void {
     // From the parameters, not from the sim: the contract does not fix whether
@@ -355,52 +320,66 @@ function create(ctx: VizContext): VizInstance {
     const sp = simParams(ctx.params);
     geometry = layoutBoard(ctx.width, ctx.height, sp.rows);
     pile = pileMetrics(geometry, sp.p, ballTarget(ctx.params), ctx.theme.particleRadius);
+    // The physics needs the plate: the pitch sets its length and time scale,
+    // the peg and ball radii say where a strike happens, and the pile metrics
+    // say where an arriving ball lands. Same numbers the pile is painted from.
+    sim.setBoard({
+      pitch: geometry.pegSpacing,
+      contact: geometry.pegRadius + ctx.theme.particleRadius,
+      binDepth: geometry.binBottom - geometry.binTop,
+      dotRadius: pile.radius,
+      cols: pile.cols,
+    });
   }
 
-  /** Resting place of the ball that arrived `stack`-th in bin `k`. */
+  /** Resting place of the ball that arrived `stack`-th in bin `k`, CSS px. */
   function restX(k: number, stack: number): number {
-    return binCentreX(geometry, k) + (2 * (stack % pile.cols) + 1 - pile.cols) * pile.radius;
+    return binCentreX(geometry, k) + restSlot(pile.cols, pile.radius, geometry.binBottom - geometry.binTop, stack).dx;
   }
-  /** Rows of dots are 2·radius apart, which is cols·unit: the pile stands on the same scale as its bar. */
   function restY(stack: number): number {
-    const r = pile.radius;
-    return Math.max(geometry.binTop + r, geometry.binBottom - r - Math.floor(stack / pile.cols) * 2 * r);
+    return geometry.binTop + restSlot(pile.cols, pile.radius, geometry.binBottom - geometry.binTop, stack).depth;
   }
 
   function readouts(tallest: number, mode: number): Readout[] {
     const { mean, variance } = sim.stats();
     const rows = sim.rows;
-    const p = num(ctx.params, 'p', DEFAULT_P);
+    const meanTarget = rows * BIAS;
+    const varianceTarget = rows * BIAS * (1 - BIAS);
     return [
-      { key: 'landed', label: 'Balls landed', value: sim.landed, digits: 6 },
+      { key: 'landed', label: 'Balls landed', value: sim.landed, digits: 6, plain: 'balls landed' },
       // §5: the hero prints "analytic" and the closed form the target came
       // from. n is the row count, p the bias — both italic, both variables.
       {
         key: 'mean',
         label: 'Mean bin',
         value: mean,
-        target: rows * p,
+        target: meanTarget,
         formula: [{ v: 'n' }, '·', { v: 'p' }],
+        plain: 'average landing spot',
+        headline: true,
+        hint: `the maths says it should be ${meanTarget}`,
       },
       {
         key: 'variance',
         label: 'Variance',
         value: variance,
-        target: rows * p * (1 - p),
+        target: varianceTarget,
         // A variance is a noisier estimator than a mean, and the ledger's 1%
         // default is the wrong bet for it: the sample variance of n bin indices
         // has standard error √((μ₄ − σ⁴)/n), which for a distribution close to
-        // normal is σ²·√(2/n) — a relative error of √(2/n), 3.2% at the
-        // 2,000-ball default, so a finished and statistically perfect run read
+        // normal is σ²·√(2/n) — a relative error of √(2/n), 6.3% at the
+        // 500-ball default, so a finished and statistically perfect run read
         // "not yet converged" for most seeds. Three of those standard errors,
         // measured at the ball count the run is going to reach rather than at
         // the count so far, so the row still starts off and arrives at agreement
         // as the balls come down instead of being true from the first landing.
         tolerance: 3 * Math.sqrt(2 / ballTarget(ctx.params)),
+        plain: 'spread of the pile',
+        hint: `the maths says it should be ${varianceTarget}`,
       },
-      { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6 },
-      { key: 'mode', label: 'Tallest bin index', value: mode, digits: 2 },
-      { key: 'bins', label: 'Bins', value: rows + 1, digits: 2 },
+      { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6, expertOnly: true },
+      { key: 'mode', label: 'Tallest bin index', value: mode, digits: 2, expertOnly: true },
+      { key: 'bins', label: 'Bins', value: rows + 1, digits: 2, expertOnly: true },
     ];
   }
 
@@ -418,7 +397,7 @@ function create(ctx: VizContext): VizInstance {
       const rows = g.rows;
       bg.clearRect(0, 0, width, height);
 
-      // Pegs: one path, one fill. 210 arcs at twenty rows.
+      // Pegs: one path, one fill. 136 arcs at sixteen rows.
       bg.fillStyle = theme.grid;
       bg.beginPath();
       for (let r = 0; r < rows; r++) {
@@ -471,7 +450,7 @@ function create(ctx: VizContext): VizInstance {
       const bins = sim.bins;
       const settled = sim.settledBins;
 
-      if (showTrails && !ctx.reducedMotion) {
+      if (SHOW_TRAILS && !ctx.reducedMotion) {
         // The foreground is a transparent layer over the pegs, so fading it
         // means removing alpha, not painting the canvas colour over it — that
         // would bury the background layer within a few dozen frames.
@@ -491,9 +470,8 @@ function create(ctx: VizContext): VizInstance {
       // The bins are redrawn in full every frame — wash, silhouette, pile, marks
       // and curve are all clamped to `depth` — so clear the band rather than
       // fade it. Under a fade every one of those marks would still be on the
-      // layer from the frame before: a toggled-off overlay would ghost for a few
-      // dozen frames, and the curve would smear a band as wide as its own
-      // travel. Trails still live in the peg region above.
+      // layer from the frame before, and the curve would smear a band as wide
+      // as its own travel. Trails still live in the peg region above.
       // Three line widths of margin: the widest thing painted in the band is the
       // curve's halo at lineWidth + 4, which reaches three CSS px either side of
       // a path that runs along the band's own edge when the peak is clamped.
@@ -535,21 +513,13 @@ function create(ctx: VizContext): VizInstance {
           fg.arc(x, y, rd, 0, TAU);
         }
       }
+      // A moving ball is wherever the physics put it, in flight, in its bin
+      // or bouncing on the pile: one mapping for all three, because the bin
+      // continues the lattice's own vertical scale.
       const R = theme.particleRadius;
       sim.forEachActive((b) => {
-        let x: number;
-        let y: number;
-        if (b.y < rows) {
-          x = lateralToPx(g, b.x);
-          y = progressToPy(g, b.y);
-        } else {
-          // Settling: from the bin mouth to the resting place, accelerating.
-          const cx = binCentreX(g, b.bin);
-          const t = Math.min(1, b.y - rows);
-          const e = t * t;
-          x = cx + (restX(b.bin, b.stack) - cx) * e;
-          y = g.binTop + (restY(b.stack) - g.binTop) * e;
-        }
+        const x = lateralToPx(g, b.x);
+        const y = progressToPy(g, b.y);
         fg.moveTo(x + R, y);
         fg.arc(x, y, R, 0, TAU);
       });
@@ -558,10 +528,9 @@ function create(ctx: VizContext): VizInstance {
       if (tallest > 0) {
         // The silhouette goes on last, over the wash and the dots both: it is
         // the mark that carries the shape, so nothing may paint over it. One
-        // stepped outline across the whole band, where fourteen full-height
-        // dividers used to be a cage — the risers between bins belong to the
-        // outline. Its ends drop to the floor, which the floor line already
-        // draws, so the base needs no stroke of its own.
+        // stepped outline across the whole band — the risers between bins
+        // belong to the outline. Its ends drop to the floor, which the floor
+        // line already draws, so the base needs no stroke of its own.
         fg.strokeStyle = theme.data3;
         fg.lineWidth = 2 * theme.lineWidth;
         fg.lineJoin = 'miter';
@@ -581,7 +550,7 @@ function create(ctx: VizContext): VizInstance {
       // — the graphite pen is the worst in the rack for the thinnest mark,
       // 1.51:1 where these land, on the wash. Each one sits on the pile it
       // measures, so each one takes the halo: +2 for a mark, +4 for a curve.
-      if (showBinomial) {
+      if (SHOW_BINOMIAL) {
         fg.beginPath();
         for (let k = 0; k <= rows; k++) {
           const h = Math.min(depth, (pile.expected[k] ?? 0) * pile.unit);
@@ -594,7 +563,7 @@ function create(ctx: VizContext): VizInstance {
       }
 
       // p = 0 or 1 is a point mass; there is no curve to draw.
-      if (showNormal && pile.sigma > 0) {
+      if (SHOW_NORMAL && pile.sigma > 0) {
         // The count the run will reach, which is what `pile.unit` reserved its
         // headroom for; the raw parameter can be an off-step permalink value.
         const balls = ballTarget(ctx.params);
@@ -615,32 +584,20 @@ function create(ctx: VizContext): VizInstance {
       ctx.emit(readouts(tallest, mode));
     },
 
-    onParamChange(key, value) {
-      switch (key) {
-        case 'showNormal':
-          showNormal = value === true;
-          return true;
-        case 'showBinomial':
-          showBinomial = value === true;
-          return true;
-        case 'showTrails':
-          showTrails = value === true;
-          return true;
-        case 'dropRate':
-          sim.setParams({ ...simParams(ctx.params), dropRate: asNumber(value, DEFAULT_DROP_RATE) });
-          return true;
-        default:
-          // rows, p, balls, seed: the balls already down belong to a different
-          // experiment, so the shell resets.
-          return false;
-      }
+    onParamChange() {
+      // Both controls are structural. A new row count is a new board; a new
+      // ball count is a new pile scale, and the balls already down were laid
+      // out on the old one. The shell resets.
+      return false;
     },
 
     reset() {
+      // The seed is not a control, but it still names the run: it arrives in
+      // the parameters when the URL or the shell's shuffle carries one, and
+      // the same seed replays the same routes and the same motion.
       ctx.rng.reseed(num(ctx.params, 'seed', DEFAULT_SEED));
       sim.setParams(simParams(ctx.params));
       sim.reset();
-      syncLive();
       syncLayout();
       // Trails fade rather than clear, so the previous run would linger for a
       // few dozen frames after a reset. Start clean instead.

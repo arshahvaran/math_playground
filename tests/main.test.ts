@@ -88,7 +88,7 @@ function ballsLanded(): number {
 }
 
 function permalink(): string {
-  return byClass(dom, 'caption')[0]?.getAttribute('data-permalink') ?? '';
+  return byClass(dom, 'share')[0]?.getAttribute('data-permalink') ?? '';
 }
 
 function tab(title: string): MElement {
@@ -99,10 +99,18 @@ function tab(title: string): MElement {
   return found;
 }
 
-function currentStep(): string | undefined {
-  return dom
-    .findAll((el) => el.getAttribute('aria-current') === 'step')
-    .map((el) => el.getAttribute('aria-label') ?? '')[0];
+/** The "Try:" chip carrying `label`. */
+function chip(label: string): MElement {
+  const found = byClass(dom, 'story__chip').find((el) => el.textContent === label);
+  if (!found) throw new Error(`no chip for ${label}`);
+  return found;
+}
+
+/** The label of the lit chip, if any. */
+function currentChip(): string | undefined {
+  return byClass(dom, 'story__chip')
+    .filter((el) => el.getAttribute('aria-pressed') === 'true')
+    .map((el) => el.textContent)[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +163,7 @@ describe('first paint', () => {
 
 describe('selecting the visualization already on screen', () => {
   it('is a no-op: the parameters, the run and the permalink survive', async () => {
-    await boot('#/galton?rows=20&p=0.7&seed=7');
+    await boot('#/galton?rows=16&balls=5000');
     fastForward();
     const landed = ledger();
     expect(landed).not.toMatch(/Balls landed\s*0(?!\d)/);
@@ -168,13 +176,12 @@ describe('selecting the visualization already on screen', () => {
     // Nothing was navigated, so nothing was torn down and coerced to defaults.
     expect(dom.history.length).toBe(writes);
     expect(ledger()).toBe(landed);
-    expect(permalink()).toContain('rows=20');
-    expect(permalink()).toContain('p=0.7');
-    expect(permalink()).toContain('seed=7');
+    expect(permalink()).toContain('rows=16');
+    expect(permalink()).toContain('balls=5000');
   });
 
   it('is a no-op from the wordmark too', async () => {
-    await boot('#/galton?rows=20&seed=7');
+    await boot('#/galton?rows=16&balls=5000');
     const wordmark = byClass(dom, 'masthead__wordmark')[0];
     expect(wordmark?.getAttribute('href')).toBe('#/galton');
 
@@ -182,19 +189,8 @@ describe('selecting the visualization already on screen', () => {
     await tick();
 
     expect(event.defaultPrevented).toBe(true);
-    expect(permalink()).toContain('rows=20');
-    expect(permalink()).toContain('seed=7');
-  });
-
-  it('is a no-op from the index select', async () => {
-    await boot('#/galton?rows=20');
-    const select = byClass(dom, 'tabs__select')[0];
-    expect(select?.value).toBe('galton');
-
-    fire(select as MElement, 'change');
-    await tick();
-
-    expect(permalink()).toContain('rows=20');
+    expect(permalink()).toContain('rows=16');
+    expect(permalink()).toContain('balls=5000');
   });
 
   it('still switches to a different visualization', async () => {
@@ -209,40 +205,48 @@ describe('selecting the visualization already on screen', () => {
 
 describe('a control change that changes nothing', () => {
   it('leaves the run alone when a control re-reports the value in force', async () => {
-    // The seed field commits on `change` whether or not the number moved, which
-    // is what select-all-and-retype produces; a stepper key at its own limit and
-    // a log fader's dead travel report the same non-change. Resetting for one
-    // throws a finished run away for a keystroke that changed nothing.
-    await boot('#/galton?rows=20&balls=20000&dropRate=400&seed=7');
+    // A stepper key at its own limit clamps back to the value already in force
+    // — the keys deliberately stay enabled at the ends — and a log fader's dead
+    // travel reports the same non-change. Resetting for one throws a finished
+    // run away for a keystroke that changed nothing.
+    await boot('#/galton?rows=16&balls=5000');
     fastForward();
     const landed = ballsLanded();
     expect(landed).toBeGreaterThan(0);
     const writes = dom.history.length;
-    const seed = byClass(dom, 'seed__input')[0] as MElement;
-    expect(seed.value).toBe('7');
 
-    fire(seed, 'change');
+    // Sixteen is the board's ceiling; the key has nowhere to go.
+    fire(byLabel(dom, 'Increase Rows') as MElement, 'click');
     fastForward(1);
 
     // The run carried on from where it was, and the URL was never rewritten.
     expect(ballsLanded()).toBeGreaterThan(landed);
     expect(dom.history.length).toBe(writes);
+    expect(permalink()).toContain('rows=16');
+  });
+
+  it('carries no seed field in the rail', async () => {
+    await boot('#/buffon?seed=7');
+    expect(byClass(dom, 'seed__input')).toEqual([]);
+    expect(byClass(dom, 'control').some((el) => el.textContent.includes('Seed'))).toBe(false);
+    // The seed still names the run in the URL, and Shuffle is how it changes.
     expect(permalink()).toContain('seed=7');
+    expect(byLabel(dom, 'Shuffle')).toBeDefined();
   });
 
   it('still restarts the run for a change that is a change', async () => {
-    await boot('#/galton?rows=20&balls=20000&dropRate=400');
+    await boot('#/galton?rows=16&balls=5000');
     fastForward();
     const landed = ballsLanded();
-    // Twenty rows of pegs deal into twenty-one bins.
-    expect(ledger()).toMatch(/Bins\s*21(?!\d)/);
+    // Sixteen rows of pegs deal into seventeen bins.
+    expect(ledger()).toMatch(/Bins\s*17(?!\d)/);
 
     fire(byLabel(dom, 'Decrease Rows') as MElement, 'click');
     // A running engine paints on its next frame; Fast-forward is that frame.
     fastForward(1);
 
-    expect(permalink()).toContain('rows=19');
-    expect(ledger()).toMatch(/Bins\s*20(?!\d)/);
+    expect(permalink()).toContain('rows=15');
+    expect(ledger()).toMatch(/Bins\s*16(?!\d)/);
     expect(ballsLanded()).toBeLessThan(landed);
   });
 });
@@ -264,13 +268,13 @@ describe('an unknown route', () => {
 
 describe('focus across a route change', () => {
   it('lands on the tab, not on <body>', async () => {
-    await boot('#/galton');
-    const randomize = byClass(dom, 'seed__random')[0];
-    expect(randomize, 'the rail has a Randomize key').toBeDefined();
-    randomize?.focus();
+    await boot('#/buffon');
+    const shuffle = byLabel(dom, 'Shuffle');
+    expect(shuffle, 'the transport has a Shuffle key').toBeDefined();
+    shuffle?.focus();
 
     // The Back button: a hash change with the focus still in the rail.
-    dom.window.location.hash = '#/buffon';
+    dom.window.location.hash = '#/dla';
     await Promise.resolve();
 
     expect(dom.document.activeElement).not.toBe(dom.document.body);
@@ -290,45 +294,71 @@ describe('focus across a route change', () => {
   });
 });
 
-describe('story mode', () => {
-  it('lights the preset that is actually in force', async () => {
+describe('the "Try:" chips', () => {
+  it('light the preset that is actually in force', async () => {
     await boot('#/buffon?ratio=0.3');
-    expect(currentStep()).toBe('Step 2: Short needle');
+    expect(currentChip()).toBe('Short needle');
   });
 
-  it('lights nothing when the state is a preset plus an edit', async () => {
-    // "Short needle" declares only `ratio`, on top of the two values "Slow
-    // motion" sets. A scan for "is every declared value in force?" answers with
-    // step 1 for a state that is really step 2 plus step 1's inheritance, and
-    // the tape then captions the plate with the wrong experiment.
-    await boot('#/buffon?ratio=0.3&dropRate=2&maxDrops=200');
-    expect(currentStep()).toBeUndefined();
+  it('light nothing when the state is a preset plus an edit', async () => {
+    // "Short needle" declares only `ratio`. With the line spacing edited as
+    // well, a scan for "is every declared value in force?" would still answer
+    // with that chip, and the caption would then describe an experiment that
+    // is not the one on the plate.
+    await boot('#/buffon?ratio=0.3&spacing=128');
+    expect(currentChip()).toBeUndefined();
   });
 
-  it('keeps the step lit across a new draw of the same configuration', async () => {
-    // A seed names the run, not the configuration: Randomize is "the same
-    // preset again, with another draw".
-    await boot('#/galton');
-    fire(byLabel(dom, 'Step 2: A hundred') as MElement, 'click');
-    expect(currentStep()).toBe('Step 2: A hundred');
+  it('stay lit across a new draw of the same configuration', async () => {
+    // A seed names the run, not the configuration: Shuffle is "the same preset
+    // again, with another draw".
+    await boot('#/buffon');
+    fire(chip('Short needle'), 'click');
+    expect(currentChip()).toBe('Short needle');
 
-    fire(byClass(dom, 'seed__random')[0] as MElement, 'click');
+    fire(byLabel(dom, 'Shuffle') as MElement, 'click');
 
     expect(permalink()).toMatch(/seed=/);
-    expect(currentStep()).toBe('Step 2: A hundred');
+    expect(currentChip()).toBe('Short needle');
   });
 
-  it('never falls back to an earlier step whose values a later one inherited', async () => {
+  it('go dark after an edit, whichever chip was lit before it', async () => {
     await boot('#/buffon');
-    fire(byLabel(dom, 'Step 1: Slow motion') as MElement, 'click');
-    expect(currentStep()).toBe('Step 1: Slow motion');
-    fire(byLabel(dom, 'Step 2: Short needle') as MElement, 'click');
-    expect(currentStep()).toBe('Step 2: Short needle');
+    fire(chip('Short needle'), 'click');
+    expect(currentChip()).toBe('Short needle');
+    fire(chip('Full length'), 'click');
+    expect(currentChip()).toBe('Full length');
 
-    // Any control change rescans. The state is no longer any preset, so the
-    // tape says nothing — it must not caption the plate with step 1, whose two
-    // values step 2 inherited.
+    // Any control change rescans. The state is no longer any preset, so no
+    // chip is lit — least of all an earlier one.
     fire(byLabel(dom, 'Increase Line spacing') as MElement, 'click');
-    expect(currentStep()).toBeUndefined();
+    expect(currentChip()).toBeUndefined();
+  });
+
+  it('show at most three', async () => {
+    await boot('#/galton');
+    expect(byClass(dom, 'story__chip')).toHaveLength(3);
+  });
+});
+
+describe('the readouts', () => {
+  it('open on one plain sentence and keep the exact table behind a disclosure', async () => {
+    await boot('#/galton');
+    fastForward();
+    const hero = byClass(dom, 'hero')[0];
+    expect(hero?.textContent).not.toMatch(/analytic|converged|residual/i);
+    expect(byClass(dom, 'exact__summary')[0]?.textContent).toBe('Show the exact numbers');
+    // The disclosure holds every readout the visualization emits.
+    expect(byClass(dom, 'ledger')[0]?.textContent).toMatch(/Balls landed/);
+    expect(byClass(dom, 'ledger')[0]?.textContent).toMatch(/Bins/);
+  });
+
+  it('speak the same plain words on pause', async () => {
+    await boot('#/galton');
+    fastForward();
+    fire(byClass(dom, 'transport__play')[0] as MElement, 'click');
+    const spoken = byClass(dom, 'readouts__summary')[0]?.textContent ?? '';
+    expect(spoken).toMatch(/^Paused\./);
+    expect(spoken).not.toMatch(/analytic|converged/i);
   });
 });

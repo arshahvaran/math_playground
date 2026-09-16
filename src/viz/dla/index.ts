@@ -16,11 +16,32 @@ const MAX_PARTICLES = 50_000;
 
 const DEFAULT_PARTICLES = 2_000;
 const DEFAULT_STICKINESS = 1;
-const DEFAULT_WALK_SPEED = 300;
-const DEFAULT_LATTICE: Lattice = 'off';
 const DEFAULT_SEED = 42;
 
-/** The engine's tick. `walkSpeed` is quoted per tick, so the accumulator needs it. */
+/**
+ * Walk steps per engine tick. This was the "Walk speed" slider, fixed at its
+ * old default: a particle takes about a thousand steps to arrive, so the number
+ * is a clock and not physics — the cluster is the same at any value — and the
+ * clock is the transport's job, not the tab's.
+ */
+const WALK_SPEED = 300;
+
+/**
+ * Off-lattice, always. This was a three-way "Lattice" choice; the square and
+ * hexagonal walks are a specialist's comparison — the same fractal with a faint
+ * crystal grain — and the free walk is the model Witten and Sander wrote down.
+ * `cluster.ts` still implements all three.
+ */
+const LATTICE: Lattice = 'off';
+
+/**
+ * Shade each particle by when it arrived, always. This was a toggle; switched
+ * off, the cluster is one flat colour and the growth history — the one thing
+ * that separates a growing cluster from a picture of one — is lost.
+ */
+const COLOUR_BY_ARRIVAL: boolean = true;
+
+/** The engine's tick. `WALK_SPEED` is quoted per tick, so the accumulator needs it. */
 const TICK_MS = 1000 / 120;
 
 /**
@@ -88,10 +109,6 @@ const params: readonly ParamSpec[] = [
     step: 100,
     default: DEFAULT_PARTICLES,
     log: true,
-    help: [
-      'Particles frozen before the cluster is finished. The plate is scaled for this count, so the ',
-      'cluster grows into its frame.',
-    ],
   },
   {
     kind: 'range',
@@ -101,102 +118,41 @@ const params: readonly ParamSpec[] = [
     max: 1,
     step: 0.05,
     default: DEFAULT_STICKINESS,
-    help: 'Chance of adhering on contact. Below 1 the wanderer bounces off and keeps walking.',
+    help: 'The chance a particle sticks when it touches — turn it down and it bounces off and wanders deeper in.',
   },
-  {
-    kind: 'choice',
-    key: 'lattice',
-    label: 'Lattice',
-    options: [
-      { value: 'off', label: 'Off-lattice' },
-      { value: 'square', label: 'Square' },
-      { value: 'hex', label: 'Hexagonal' },
-    ],
-    default: DEFAULT_LATTICE,
-    help: 'Off-lattice walks in any direction; the lattices restrict it to four or six neighbours.',
-  },
-  {
-    kind: 'range',
-    key: 'walkSpeed',
-    label: 'Walk speed',
-    min: 1,
-    max: 500,
-    step: 1,
-    default: DEFAULT_WALK_SPEED,
-    unit: '/tick',
-    log: true,
-    help: [
-      'Walk steps per tick. A particle takes about a thousand of them to arrive, so this is the ',
-      'clock, not the physics — the cluster is the same at any speed.',
-    ],
-  },
-  {
-    kind: 'toggle',
-    key: 'colourByArrival',
-    label: 'Colour by arrival',
-    default: true,
-    help: 'Shade each particle by when it arrived, oldest to newest. The growth history, in one picture.',
-  },
-  {
-    kind: 'seed',
-    key: 'seed',
-    label: 'Seed',
-    default: DEFAULT_SEED,
-    help: 'Same seed, same walk, same cluster.',
-  },
+  // Not a control: the rail skips seed specs. It is declared all the same
+  // because a permalink's seed is only read for a key that has a spec.
+  { kind: 'seed', key: 'seed', label: 'Seed', default: DEFAULT_SEED },
 ];
 
 const presets: readonly Preset[] = [
   {
     id: 'a-hundred',
     label: 'A hundred',
-    caption: [
-      'A hundred particles, slowly: each one wanders in from the dashed launch circle and freezes the instant it ',
-      'touches. There is no dimension to report yet — a hundred particles is a shape, not a fractal.',
-    ],
-    values: { particles: 100, stickiness: 1, lattice: 'off', walkSpeed: 40, colourByArrival: true },
-  },
-  {
-    id: 'two-thousand',
-    label: 'Two thousand',
-    caption:
-      'Branches now shadow one another: almost nothing reaches the inner gaps, because a wanderer meets a tip first.',
-    values: { particles: 2_000, stickiness: 1, lattice: 'off', walkSpeed: 300, colourByArrival: true },
+    caption: 'Watch one particle at a time wander in from the dashed circle and freeze the moment it touches.',
+    values: { particles: 100, stickiness: 1 },
   },
   {
     id: 'sticky',
     label: 'Sticky',
-    caption: 'Every contact sticks, so growth happens wherever the wanderer first arrives — which is always the tips.',
-    values: { particles: 5_000, stickiness: 1, lattice: 'off', walkSpeed: 500, colourByArrival: true },
+    caption: 'Every touch sticks, so the tips catch everything and the gaps between the branches stay empty.',
+    values: { particles: 5_000, stickiness: 1 },
   },
   {
     id: 'barely-sticky',
     label: 'Barely sticky',
-    caption: [
-      'One contact in twenty sticks, so a wanderer bounces along the branches and works its way into the fjords: ',
-      'the same 5,000 particles, packed into a cluster 40% smaller. Screening is the whole mechanism, and this is ',
-      'the slider that switches it off.',
-    ],
-    values: { particles: 5_000, stickiness: 0.05, lattice: 'off', walkSpeed: 500, colourByArrival: true },
-  },
-  {
-    id: 'twenty-thousand',
-    label: 'Twenty thousand',
-    caption: [
-      'Twenty thousand particles measure ', { v: 'D' }, ' ≈ 1.75 from the growth history — an estimate this ',
-      'noisy is what a finite cluster buys you, and it is still not 2.',
-    ],
-    values: { particles: 20_000, stickiness: 1, lattice: 'off', walkSpeed: 500, colourByArrival: true },
+    caption:
+      'Only one touch in twenty sticks, so particles bounce their way into the gaps and the same 5,000 pack into a smaller, denser cluster.',
+    values: { particles: 5_000, stickiness: 0.05 },
   },
 ];
 
 const facts: readonly Fact[] = [
   {
-    text: [
-      'Witten and Sander wrote the rule down in 1981 — release a particle far away, let it walk at random, freeze ',
-      'it where it lands — and found the result is a fractal of dimension ', { v: 'D' }, ' ≈ 1.71 in two dimensions. ',
-      'The paper is three pages long and the model has no free parameters at all.',
-    ],
+    text:
+      'Witten and Sander wrote this rule down in 1981 — release a particle far away, let it wander at random, ' +
+      'freeze it where it lands — and found it always grows a shape this feathery, scoring about 1.71, with ' +
+      'nothing to tune.',
     source: {
       label: 'Witten and Sander, “Diffusion-Limited Aggregation, a Kinetic Critical Phenomenon”, Phys. Rev. Lett. 47, 1400 (1981)',
       url: 'https://doi.org/10.1103/PhysRevLett.47.1400',
@@ -204,19 +160,8 @@ const facts: readonly Fact[] = [
   },
   {
     text:
-      'The tips grow fastest because a wandering particle is overwhelmingly likely to meet an exposed branch before ' +
-      'it reaches an interior gap. Screening starves the inside of the cluster of anything to grow with — and it is ' +
-      'the same mechanism that makes lightning branch, and that makes a viscous finger split rather than fatten.',
-    source: {
-      label: 'Witten and Sander, “Diffusion-limited aggregation”, Phys. Rev. B 27, 5686 (1983)',
-      url: 'https://doi.org/10.1103/PhysRevB.27.5686',
-    },
-  },
-  {
-    text: [
-      'Zinc leaves grown by electrodeposition in a thin cell were measured at ', { v: 'D' }, ' ≈ 1.66 in 1984 — ',
-      'a real object in a dish, agreeing with a rule about random walks to within the experimental scatter.',
-    ],
+      'Zinc grown in a shallow dish of zinc solution in 1984 branched the same way and scored about 1.66 — a real ' +
+      'object in a lab agreeing with a rule about random walks.',
     source: {
       label: 'Matsushita et al., “Fractal Structures of Zinc Metal Leaves Grown by Electrodeposition”, Phys. Rev. Lett. 53, 286 (1984)',
       url: 'https://doi.org/10.1103/PhysRevLett.53.286',
@@ -232,24 +177,9 @@ function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
 }
 
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
-}
-
-function asLattice(v: ParamValue | undefined, fallback: Lattice): Lattice {
-  return v === 'off' || v === 'square' || v === 'hex' ? v : fallback;
-}
-
 /** Particles this run will freeze, clamped the way the cluster clamps its own target. */
 function particleTarget(values: ParamValues): number {
   return Math.max(1, Math.min(MAX_PARTICLES, Math.floor(num(values, 'particles', DEFAULT_PARTICLES))));
-}
-
-/** Pixel size out of a CSS font shorthand, for sizing the readout's backing plate. */
-function fontPx(font: string): number {
-  const m = /(\d+(?:\.\d+)?)px/.exec(font);
-  return m ? Number(m[1]) : 12;
 }
 
 /**
@@ -285,12 +215,8 @@ function create(ctx: VizContext): VizInstance {
     capacity: MAX_PARTICLES,
     particles: DEFAULT_PARTICLES,
     stickiness: DEFAULT_STICKINESS,
-    lattice: DEFAULT_LATTICE,
+    lattice: LATTICE,
   });
-
-  // Live parameters, absorbed without disturbing the cluster on screen.
-  let walkSpeed = DEFAULT_WALK_SPEED;
-  let colourByArrival = true;
 
   // World → plate. Fixed for the run by the target count; see `viewReach`.
   let scale = 1;
@@ -307,11 +233,6 @@ function create(ctx: VizContext): VizInstance {
 
   // Fractional walk steps owed by the speed accumulator between ticks.
   let pending = 0;
-
-  function syncLive(): void {
-    walkSpeed = num(ctx.params, 'walkSpeed', DEFAULT_WALK_SPEED);
-    colourByArrival = flag(ctx.params, 'colourByArrival', true);
-  }
 
   function syncView(): void {
     const reach = viewReach(cluster.target);
@@ -368,7 +289,7 @@ function create(ctx: VizContext): VizInstance {
     if (to <= from) return;
     const g = ctx.layers.background;
     const { theme } = ctx;
-    if (!colourByArrival) {
+    if (!COLOUR_BY_ARRIVAL) {
       g.fillStyle = theme.data1;
       g.beginPath();
       addGrains(g, from, to);
@@ -409,13 +330,18 @@ function create(ctx: VizContext): VizInstance {
     repaintAll = false;
   }
 
+  /**
+   * The simple view shows the dimension and the particle count and nothing
+   * else; the radius of gyration and the relaunch count are the model's
+   * bookkeeping, kept for the exact table and the tests that read it.
+   */
   function readouts(dimension: number): Readout[] {
     return [
-      { key: 'particles', label: 'Particles', value: cluster.count, digits: 6 },
+      { key: 'particles', label: 'Particles', value: cluster.count, digits: 6, plain: 'particles stuck' },
       // In particle radii, so the scaling law reads directly off the row: a
       // finished cluster of N particles measures R_g ≈ N^(1/1.71) in these
       // units — 56.8, 218.4 and 559.7 at N = 10³, 10⁴ and 5·10⁴.
-      { key: 'gyration', label: 'Radius of gyration', value: cluster.gyration, digits: 4, unit: 'r' },
+      { key: 'gyration', label: 'Radius of gyration', value: cluster.gyration, digits: 4, unit: 'r', expertOnly: true },
       {
         key: 'dimension',
         label: 'Fractal dimension',
@@ -423,8 +349,11 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         target: ANALYTIC_D,
         tolerance: D_TOLERANCE,
+        headline: true,
+        plain: 'how feathery the cluster is',
+        hint: 'a solid blob would score 2, a line 1',
       },
-      { key: 'relaunched', label: 'Walkers relaunched', value: cluster.relaunches, digits: 6 },
+      { key: 'relaunched', label: 'Walkers relaunched', value: cluster.relaunches, digits: 6, expertOnly: true },
     ];
   }
 
@@ -434,10 +363,10 @@ function create(ctx: VizContext): VizInstance {
         pending = 0;
         return;
       }
-      // Steps per tick depend only on dt and walkSpeed, and the cluster draws
-      // from the rng only inside a step, so the cluster for a seed is the same
-      // at every walk speed — only the clock differs.
-      pending += (walkSpeed * dt) / TICK_MS;
+      // Steps per tick depend only on dt, and the cluster draws from the rng
+      // only inside a step, so the cluster for a seed is the same however the
+      // transport paces the ticks — only the clock differs.
+      pending += (WALK_SPEED * dt) / TICK_MS;
       const steps = Math.floor(pending);
       if (steps <= 0) return;
       pending -= steps;
@@ -492,48 +421,14 @@ function create(ctx: VizContext): VizInstance {
         fg.fill();
       }
 
-      // The measured dimension in the top-right corner as a display window: an
-      // opaque plate of the canvas colour with a 1 px container-pen frame,
-      // right-aligned mono, ink text. Published below through emit() as well;
-      // the canvas itself is aria-hidden. One fit per frame, shared with the
-      // ledger: it is a regression over the whole growth history.
-      const d = cluster.dimension().dimension;
-      const label = `D ≈ ${Number.isNaN(d) ? '—' : d.toFixed(3)}`;
-      const margin = 10;
-      const pad = 5;
-      fg.font = theme.labelFont;
-      fg.textAlign = 'right';
-      fg.textBaseline = 'top';
-      const textW = fg.measureText(label).width;
-      const textH = fontPx(theme.labelFont);
-      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
-      const plateX = Math.round(width - margin - textW - pad);
-      const plateY = Math.round(margin - pad);
-      const plateW = Math.round(textW + 2 * pad);
-      const plateH = Math.round(textH + 2 * pad);
-      fg.fillStyle = theme.canvas;
-      fg.fillRect(plateX, plateY, plateW, plateH);
-      fg.strokeStyle = theme.gridSoft;
-      fg.lineWidth = theme.lineWidth;
-      // Inset by half a line width so the frame lands inside the plate it draws.
-      fg.strokeRect(plateX + snap, plateY + snap, plateW - 2 * snap, plateH - 2 * snap);
-      fg.fillStyle = theme.ink;
-      fg.fillText(label, width - margin, margin);
-
-      ctx.emit(readouts(d));
+      // The plate carries no text: the dimension is read below it, in plain
+      // words, from the readouts. One fit per frame, over the whole growth
+      // history.
+      ctx.emit(readouts(cluster.dimension().dimension));
     },
 
     onParamChange(key, value) {
       switch (key) {
-        case 'walkSpeed':
-          walkSpeed = asNumber(value, walkSpeed);
-          return true;
-        case 'colourByArrival':
-          colourByArrival = value === true;
-          // Cosmetic, but it re-colours particles that are already on the
-          // background layer, so the whole cluster is repainted next frame.
-          repaintAll = true;
-          return true;
         case 'particles': {
           // Asymmetric, for the reason Buffon's drop ceiling is: the target
           // gates when the walk stops and nothing else, so the cluster on
@@ -554,7 +449,7 @@ function create(ctx: VizContext): VizInstance {
           return true;
         }
         default:
-          // stickiness, lattice, seed: the particles already frozen belong to a
+          // stickiness, seed: the particles already frozen belong to a
           // different experiment, so the shell resets.
           return false;
       }
@@ -565,9 +460,8 @@ function create(ctx: VizContext): VizInstance {
       cluster.reset({
         particles: particleTarget(ctx.params),
         stickiness: num(ctx.params, 'stickiness', DEFAULT_STICKINESS),
-        lattice: asLattice(ctx.params['lattice'], DEFAULT_LATTICE),
+        lattice: LATTICE,
       });
-      syncLive();
       syncView();
       pending = 0;
       painted = 0;
@@ -591,10 +485,9 @@ export const dla: Viz = {
   id: 'dla',
   title: 'Diffusion-Limited Aggregation',
   group: 'randomness',
-  blurb: [
-    'Releases a particle far away, lets it random-walk until it touches the cluster, and freezes it — ',
-    'coral, frost and lightning grow this way.',
-  ],
+  blurb:
+    'Lets particles wander in at random and freeze wherever they first touch, growing the branching shapes of ' +
+    'frost, coral and lightning.',
   // The cluster grows radially and the view is a disc, so the plate is square:
   // a 1.6 bed would scale the whole picture by its height and leave a third of
   // the plate empty on both sides.

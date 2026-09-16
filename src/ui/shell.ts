@@ -1,25 +1,24 @@
-import type { ParamSpec, ParamValue, ParamValues, Viz, VizGroup } from '../core/types';
-import { coerceParams, parseHash } from '../core/router';
-import { fmt } from '../core/stats';
+import type { Viz, VizGroup } from '../core/types';
 import { h, svg, type Attrs } from './dom';
-import {
-  SHORTCUTS_EVENT,
-  setShortcutsEnabled,
-  shortcutsEnabled,
-} from './transport';
 
 /**
  * The bench.
  *
- * Everything on the page that is not a visualization: the masthead and its
- * scheme toggle, the peg-row tab strip with its pinned index, the figure/rail
- * lattice the components mount into, the caption with its permalink, and the
- * footer with the aggregated sources and the shortcuts switch.
+ * Everything on the page that is not a visualization: the masthead with its
+ * scheme toggle, the tab strip, the figure/rail lattice the components mount
+ * into, the Share key under the plate, and a one-line footer.
+ *
+ * It is deliberately sparse. A visitor with no statistics should be able to
+ * read every word on the page, so the chrome is the wordmark, the tabs, the
+ * title and its one-sentence blurb, the plate, the readouts, the controls and a
+ * footer line. The author, the affiliation, the figure number, the parameter
+ * caption and the navigation arrows all went; the tab strip is the navigation,
+ * and on a narrow screen it scrolls.
  *
  * The shell is built once and reused for every route. It knows the registry —
- * titles, groups, facts — and nothing else about any visualization: no branch
- * here reads an `id`. Adding a tab is a registry line, and adding a *group* is
- * one more entry in the group union, because the run label is derived from the
+ * titles, groups — and nothing else about any visualization: no branch here
+ * reads an `id`. Adding a tab is a registry line, and adding a *group* is one
+ * more entry in the group union, because the run label is derived from the
  * group name rather than looked up in a table only this file knows about.
  *
  * State classes the CSS already derives are never written here: the active tab
@@ -34,27 +33,21 @@ import {
 const REPO_URL = 'https://github.com/arshahvaran/math_playground';
 const LICENCE_URL = 'https://creativecommons.org/licenses/by-nc/4.0/';
 const AUTHOR = 'Ali Reza Shahvaran';
-const AFFILIATION = 'University of Toronto';
-/** Mirrors package.json — the footer prints it, nothing reads it back. */
-const VERSION = '0.1.0';
 
 /** Namespaced so a sibling project on the same Pages origin cannot collide. */
 const SCHEME_KEY = 'mp:scheme';
 
-/** How long the Copy key shows its confirmation before returning to its label. */
+/** How long the Share key shows its confirmation before returning to its label. */
 const COPY_FEEDBACK_MS = 2000;
 
 /**
  * The two-column breakpoint, mirroring theme.css §15. Below it the bench is a
- * single stack and the rail's keys are painted between the caption and the
+ * single stack and the rail's keys are painted between the Share row and the
  * readouts, so the DOM has to be restacked to match — see `restack()`. The
  * number lives in both files because a media query cannot be read back out of a
  * stylesheet; theme.css is the one that decides.
  */
 const BENCH_STACK_QUERY = '(max-width: 63.9375rem)';
-
-/** Thousands separators for counts in the caption sentence; prose, not a cell. */
-const COUNT_FORMAT = new Intl.NumberFormat('en-US');
 
 // ---------------------------------------------------------------------------
 // Public shape
@@ -76,14 +69,14 @@ export interface ShellRegions {
 
 export interface ShellHandle {
   regions: ShellRegions;
-  /** Move the ball, the roving tabindex, the index select and the figure number. */
+  /** Move the ball and the roving tabindex, and give the plate its shape. */
   setActiveTab(id: string): void;
   /**
    * Put the focus on the selected tab. For a route change that destroyed the
    * element the reader was in — otherwise the focus falls to `<body>`.
    */
   focusActiveTab(): void;
-  /** Publish the current permalink: the Copy key, `data-permalink`, and the caption sentence. */
+  /** Publish the current permalink: what Share copies, and `data-permalink` for print. */
   setPermalink(hash: string): void;
   destroy(): void;
 }
@@ -132,57 +125,6 @@ function groupLabel(group: VizGroup): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** U+2212 in prose, per the typography rule. Mono cells decide separately. */
-function minus(text: string): string {
-  return text.startsWith('-') ? `−${text.slice(1)}` : text;
-}
-
-/**
- * `fmt()` keeps trailing zeros so a live cell never changes width mid-run. The
- * caption is a sentence, not a cell — "bias 0.5" reads, "bias 0.5000" does not.
- */
-function trimZeros(text: string): string {
-  if (!text.includes('.') || text.includes('e')) return text;
-  return text.replace(/0+$/, '').replace(/\.$/, '');
-}
-
-function formatParam(spec: ParamSpec, value: ParamValue): string {
-  switch (spec.kind) {
-    case 'range':
-    case 'int': {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
-      const text = Number.isInteger(value)
-        ? COUNT_FORMAT.format(value)
-        : trimZeros(fmt(value, 4));
-      return `${minus(text)}${spec.unit ?? ''}`;
-    }
-    case 'toggle':
-      return value === true ? 'on' : 'off';
-    case 'choice': {
-      const option = spec.options.find((o) => o.value === value);
-      return option ? option.label : String(value);
-    }
-    case 'seed':
-      // A seed is an identifier, not a quantity: no separators, no rounding.
-      return String(value);
-  }
-}
-
-/**
- * The caption sentence, rewritten from the live parameters every time the
- * permalink changes. It is composed from `ParamSpec.label` and the coerced
- * values, so it stays true for a visualization this file has never heard of.
- */
-function describe(viz: Viz, values: ParamValues): string {
-  const parts: string[] = [];
-  for (const spec of viz.params) {
-    const value = values[spec.key];
-    if (value === undefined) continue;
-    parts.push(`${spec.label} ${formatParam(spec, value)}`);
-  }
-  return parts.length > 0 ? `${viz.title}: ${parts.join(', ')}.` : `${viz.title}.`;
-}
-
 /** A permalink is absolute, so it survives being pasted anywhere. */
 function absolutize(hash: string): string {
   const fragment = hash.startsWith('#') ? hash : `#${hash}`;
@@ -221,6 +163,7 @@ export function createShell(
     type: 'button',
     'aria-pressed': 'false',
     'aria-label': 'Dark scheme',
+    title: 'Dark scheme',
   });
   // A half-inked plate: the square is the bed, one half is filled.
   themeToggle.append(
@@ -236,25 +179,7 @@ export function createShell(
     'Math Playground',
   );
 
-  const masthead = h(
-    'header',
-    { class: 'masthead' },
-    wordmark,
-    h(
-      'div',
-      { class: 'masthead__end' },
-      h(
-        'p',
-        { class: 'masthead__credit' },
-        h('span', { class: 'masthead__author' }, AUTHOR),
-        h('span', { class: 'masthead__affil' }, AFFILIATION),
-      ),
-      // Deliberately no target: the only new-tab links on this page are the
-      // external citations in the fact card and the footer.
-      h('a', { class: 'masthead__repo', href: REPO_URL }, 'Source'),
-      themeToggle,
-    ),
-  );
+  const masthead = h('header', { class: 'masthead' }, wordmark, themeToggle);
 
   // -- selection ------------------------------------------------------------
 
@@ -262,16 +187,16 @@ export function createShell(
   let activeViz: Viz | null = null;
 
   /**
-   * Ask for a visualization. Every path into the app — a peg, the index select,
-   * the Prev/Next keys, the wordmark — comes through here.
+   * Ask for a visualization. Every path into the app — a tab, the wordmark —
+   * comes through here.
    *
    * Re-selecting the visualization already on screen is a **no-op**. It is a
    * no-op in every tab widget, and here it would be the most destructive control
    * on the page: the shell answers a selection with `router.navigate(id)`, which
    * builds a bare `#/<id>` from an empty parameter map, and a route with no
    * query coerces every parameter back to its default — the run, the reader's
-   * rows and bias and seed, and the permalink they were about to copy, all gone.
-   * The roving tabindex puts the *selected* tab first in the tab order, so
+   * rows and bias and seed, and the permalink they were about to share, all
+   * gone. The roving tabindex puts the *selected* tab first in the tab order, so
    * Enter on it is the natural gesture after tabbing into the strip.
    */
   function select(id: string): void {
@@ -280,7 +205,7 @@ export function createShell(
   }
 
   // The wordmark is a link so it reads and behaves as one, but a plain click on
-  // it is the same selection as the first peg — including the no-op when that
+  // it is the same selection as the first tab — including the no-op when that
   // visualization is already on screen. A modified click is left to the browser:
   // opening the link in a new tab is a request for the default route.
   on(wordmark, 'click', (event) => {
@@ -339,48 +264,7 @@ export function createShell(
     run.append(tab);
   }
 
-  // -- tab index (present at every width, the complete list at 10 tabs or 25) --
-
-  const prevKey = h('button', {
-    class: 'key key--icon tabs__prev',
-    type: 'button',
-    'aria-label': 'Previous visualization',
-  });
-  prevKey.append(glyph({ d: 'M10.5 2 4.5 8l6 6z' }));
-
-  const nextKey = h('button', {
-    class: 'key key--icon tabs__next',
-    type: 'button',
-    'aria-label': 'Next visualization',
-  });
-  nextKey.append(glyph({ d: 'M5.5 2 11.5 8l-6 6z' }));
-
-  const indexSelect = h('select', { class: 'select tabs__select', id: 'viz-index' });
-  let optgroup: HTMLOptGroupElement | null = null;
-  let optgroupGroup: VizGroup | null = null;
-  for (const viz of vizList) {
-    if (optgroup === null || viz.group !== optgroupGroup) {
-      optgroupGroup = viz.group;
-      optgroup = h('optgroup', { label: groupLabel(viz.group) });
-      indexSelect.append(optgroup);
-    }
-    optgroup.append(h('option', { value: viz.id }, viz.title));
-  }
-  on(indexSelect, 'change', () => select(indexSelect.value));
-
-  const tabsNav = h(
-    'nav',
-    { class: 'tabs', 'aria-label': 'Visualizations' },
-    strip,
-    h(
-      'div',
-      { class: 'tabs__index' },
-      prevKey,
-      h('label', { class: 'visually-hidden', for: 'viz-index' }, 'Jump to visualization'),
-      indexSelect,
-      nextKey,
-    ),
-  );
+  const tabsNav = h('nav', { class: 'tabs', 'aria-label': 'Visualizations' }, strip);
 
   // -- figure column --------------------------------------------------------
 
@@ -390,10 +274,17 @@ export function createShell(
   const stageHost = h('div', { class: 'stage' });
   const plate = h('div', { class: 'plate' }, stageHost);
 
-  const captionFigure = h('span', { class: 'caption__figure' });
-  const captionText = h('span', { class: 'caption__text' });
-  const copyKey = h('button', { class: 'caption__copy', type: 'button' }, 'Copy permalink');
-  const caption = h('p', { class: 'caption' }, captionFigure, captionText, copyKey);
+  // Share: one small key that puts the permalink on the clipboard. The row
+  // carries `data-permalink` so a printed page still names the run it shows.
+  const shareText = document.createTextNode('Share');
+  const shareKey = h(
+    'button',
+    { class: 'key key--small share__key', type: 'button' },
+    // A tray with an arrow rising out of it.
+    glyph({ d: 'M2 8h2.5v4h7V8H14v6H2z' }, { d: 'M8 1l4 4H9.5v5h-3V5H4z' }),
+    h('span', { class: 'share__text' }, shareText),
+  );
+  const share = h('div', { class: 'share' }, shareKey);
 
   const readouts = h('section', { class: 'readouts', 'aria-label': 'Readouts' });
   const story = h('section', { class: 'story' });
@@ -404,7 +295,7 @@ export function createShell(
     { class: 'figure' },
     h('header', { class: 'figure__head' }, title, blurb),
     plate,
-    caption,
+    share,
     readouts,
     story,
     fact,
@@ -418,7 +309,7 @@ export function createShell(
     'aria-label': 'Transport',
     'data-running': 'false',
   });
-  const controls = h('form', { class: 'controls', 'aria-label': 'Parameters' });
+  const controls = h('form', { class: 'controls', 'aria-label': 'Controls' });
   // A generated panel has no submit control; Enter in a number field would
   // otherwise reload the page and lose the run.
   on(controls, 'submit', (event) => event.preventDefault());
@@ -440,61 +331,14 @@ export function createShell(
 
   // -- footer ---------------------------------------------------------------
 
-  const sourceList = h('ul', { class: 'sources__list' });
-  for (const viz of vizList) {
-    const seen = new Set<string>();
-    for (const item of viz.facts) {
-      const key = item.source.url ?? item.source.label;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      // The fact card and this list are the only places a link may open a new
-      // tab: they are external citations, not navigation inside the app.
-      const link = item.source.url
-        ? h(
-            'a',
-            { href: item.source.url, target: '_blank', rel: 'noopener noreferrer' },
-            item.source.label,
-          )
-        : h('span', {}, item.source.label);
-      sourceList.append(
-        h(
-          'li',
-          { class: 'sources__item' },
-          h('span', { class: 'sources__viz' }, viz.title),
-          link,
-        ),
-      );
-    }
-  }
-
-  const shortcutsSwitch = h('input', {
-    class: 'switch',
-    type: 'checkbox',
-    role: 'switch',
-  });
+  // One quiet line. The two links are the only ones on the page besides the
+  // fact sources that open a new tab: they leave the app.
   const footer = h(
     'footer',
     { class: 'footer' },
-    h(
-      'div',
-      { class: 'sources' },
-      h('h2', { class: 'sources__title' }, 'Sources'),
-      sourceList,
-    ),
-    h(
-      'div',
-      { class: 'footer__meta' },
-      h('span', {}, `v${VERSION}`),
-      h('a', { href: LICENCE_URL, target: '_blank', rel: 'noopener noreferrer' }, 'CC BY-NC 4.0'),
-      h('span', {}, AUTHOR),
-      h('a', { href: REPO_URL, target: '_blank', rel: 'noopener noreferrer' }, 'GitHub'),
-      h(
-        'label',
-        { class: 'footer__shortcuts' },
-        h('span', {}, 'Keyboard shortcuts'),
-        shortcutsSwitch,
-      ),
-    ),
+    h('a', { class: 'footer__source', href: REPO_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Source'),
+    h('a', { href: LICENCE_URL, target: '_blank', rel: 'noopener noreferrer' }, 'CC BY-NC 4.0'),
+    h('span', { class: 'footer__author' }, AUTHOR),
   );
 
   const page = h('div', { class: 'page' }, masthead, tabsNav, bench, footer);
@@ -520,37 +364,6 @@ export function createShell(
     const dark = themeToggle.getAttribute('aria-pressed') !== 'true';
     applyScheme(dark);
     writeStore(SCHEME_KEY, dark ? 'dark' : 'light');
-  });
-
-  // -- keyboard shortcuts switch (SC 2.1.4) ---------------------------------
-
-  // The transport owns the `.` and `Shift+.` bindings, their `aria-keyshortcuts`
-  // hints and the stored preference; this switch is the control surface for
-  // them. Turning them off is the SC 2.1.4 escape hatch.
-  shortcutsSwitch.checked = shortcutsEnabled();
-  on(shortcutsSwitch, 'change', () => {
-    setShortcutsEnabled(shortcutsSwitch.checked);
-  });
-
-  // Another tab of the same page, or any other caller, can flip the preference.
-  //
-  // The event's own `detail` is the state, not the store: `setShortcutsEnabled()`
-  // swallows a failed write — blocked site data, a private window — and turns the
-  // bindings off anyway, so re-reading storage here would re-check the switch
-  // while `.` and `Shift+.` stayed disabled. That is a switch reporting the
-  // opposite of the state it controls, with no way back on, and this switch is
-  // the SC 2.1.4 escape hatch itself. A cross-tab `storage` event carries no
-  // detail and the store is then the only answer there is.
-  const onShortcutsChanged = (event: Event): void => {
-    const detail = (event as CustomEvent<{ enabled?: unknown }>).detail;
-    shortcutsSwitch.checked =
-      typeof detail?.enabled === 'boolean' ? detail.enabled : shortcutsEnabled();
-  };
-  window.addEventListener(SHORTCUTS_EVENT, onShortcutsChanged);
-  window.addEventListener('storage', onShortcutsChanged);
-  cleanups.push(() => {
-    window.removeEventListener(SHORTCUTS_EVENT, onShortcutsChanged);
-    window.removeEventListener('storage', onShortcutsChanged);
   });
 
   // -- tab keyboard model ---------------------------------------------------
@@ -593,48 +406,37 @@ export function createShell(
     focusTab(target);
   });
 
-  on(prevKey, 'click', () => {
-    if (prevKey.getAttribute('aria-disabled') === 'true') return;
-    const target = vizList[activeIndex - 1];
-    if (target) select(target.id);
-  });
-  on(nextKey, 'click', () => {
-    if (nextKey.getAttribute('aria-disabled') === 'true') return;
-    const target = vizList[activeIndex + 1];
-    if (target) select(target.id);
-  });
-
-  // -- permalink ------------------------------------------------------------
+  // -- share ----------------------------------------------------------------
 
   let permalink = '';
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Back to the key's own label, with any pending restore cancelled. */
-  function restoreCopy(): void {
+  function restoreShare(): void {
     if (copyTimer !== null) clearTimeout(copyTimer);
     copyTimer = null;
-    copyKey.textContent = 'Copy permalink';
-    delete copyKey.dataset.state;
+    shareText.data = 'Share';
+    delete shareKey.dataset['state'];
   }
 
-  function flashCopy(message: string, done: boolean): void {
+  function flashShare(message: string, done: boolean): void {
     if (copyTimer !== null) clearTimeout(copyTimer);
-    copyKey.textContent = message;
-    if (done) copyKey.dataset.state = 'done';
-    else delete copyKey.dataset.state;
-    copyTimer = setTimeout(restoreCopy, COPY_FEEDBACK_MS);
+    shareText.data = message;
+    if (done) shareKey.dataset['state'] = 'done';
+    else delete shareKey.dataset['state'];
+    copyTimer = setTimeout(restoreShare, COPY_FEEDBACK_MS);
   }
 
-  on(copyKey, 'click', () => {
-    const write = navigator.clipboard?.writeText;
-    if (!write) {
-      flashCopy('Copy unavailable', false);
+  on(shareKey, 'click', () => {
+    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+    if (!clipboard?.writeText) {
+      flashShare('Copy unavailable', false);
       return;
     }
     // Insecure origins and denied permissions both reject rather than throw.
-    void navigator.clipboard.writeText(permalink).then(
-      () => flashCopy('Copied', true),
-      () => flashCopy('Copy failed', false),
+    void clipboard.writeText(permalink).then(
+      () => flashShare('Link copied', true),
+      () => flashShare('Copy failed', false),
     );
   });
 
@@ -669,13 +471,13 @@ export function createShell(
    * Put the rail's keys where the layout paints them.
    *
    * Below the breakpoint the figure and the rail are `display: contents` and the
-   * bench is one column, with the transport between the caption and the readouts
-   * and the controls between the readouts and the story tape. CSS `order` moves
-   * the paint and *not* the tab sequence, and a mismatch between the two is WCAG
-   * 2.4.3: with the rail last in the DOM, Tab off "Copy permalink" skips the
-   * transport and all ten controls, lands on the story tape a page and a half
-   * further down, and comes back up to Play nine stops later. So the stack is
-   * restacked in the DOM as well.
+   * bench is one column, with the transport between the Share row and the
+   * readouts and the controls between the readouts and the "Try:" row. CSS
+   * `order` moves the paint and *not* the tab sequence, and a mismatch between
+   * the two is WCAG 2.4.3: with the rail last in the DOM, Tab off Share skips
+   * the transport and every control, lands on the chips a page further down,
+   * and comes back up to Play stops later. So the stack is restacked in the DOM
+   * as well.
    *
    * Re-parenting an element blurs it, so the focus is carried across the move —
    * which is the whole point of the exercise.
@@ -721,9 +523,9 @@ export function createShell(
 
       // The confirmation is a 2 s timer on a shell that is never destroyed, and
       // the permalink under it is about to be rewritten. Left running it would
-      // read "Copied" beside the new route's link while the old one is on the
+      // read "Link copied" beside the new route while the old one is on the
       // clipboard — vouching for a link that sends the reader somewhere else.
-      restoreCopy();
+      restoreShare();
 
       activeIndex = index;
       activeViz = viz;
@@ -735,23 +537,10 @@ export function createShell(
       }
       focusIndex = index;
 
-      indexSelect.value = id;
-      // Inoperable at the ends, not removed from the tab order. Below 600 px the
-      // peg strip is `display: none` and these two keys are the only tab
-      // navigation there is, so a reader walks to the last tab with Next and
-      // presses Enter — and `disabled` on the key that just fired the navigation
-      // takes it out of focus mid-keypress. `document.activeElement` falls back
-      // to <body> and the next Tab restarts from the wordmark, past the whole
-      // index, with no skip link to come back with. `aria-disabled` announces the
-      // same thing, keeps the key focusable, and `.key[aria-disabled="true"]`
-      // already carries the disabled look; the click handlers above refuse it.
-      prevKey.setAttribute('aria-disabled', String(index === 0));
-      nextKey.setAttribute('aria-disabled', String(index === vizList.length - 1));
       bench.setAttribute('aria-labelledby', `tab-${id}`);
-      captionFigure.textContent = `Figure ${index + 1}.`;
       applyAspect(viz);
 
-      // The strip is a horizontal scroller from ten tabs up; `block: 'nearest'`
+      // The strip is a horizontal scroller on a narrow screen; `block: 'nearest'`
       // keeps the page itself from jumping while the strip catches up.
       const tab = tabs[index];
       if (tab && typeof tab.scrollIntoView === 'function') {
@@ -766,11 +555,7 @@ export function createShell(
 
     setPermalink(hash) {
       permalink = absolutize(hash);
-      caption.setAttribute('data-permalink', permalink);
-      if (activeViz) {
-        const raw = parseHash(hash).params;
-        captionText.textContent = describe(activeViz, coerceParams(activeViz.params, raw));
-      }
+      share.setAttribute('data-permalink', permalink);
     },
 
     destroy() {

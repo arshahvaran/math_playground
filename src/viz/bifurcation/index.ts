@@ -26,8 +26,10 @@ import {
  */
 const MAX_COLUMNS = 2048;
 
-/** Slider ceilings. `samples ≤ MAX_PLOT_ROWS` is what makes the dedupe below safe. */
-const MAX_SAMPLES = 2000;
+/** The Detail control's range. `MAX_DETAIL ≤ MAX_PLOT_ROWS` is what makes the dedupe below safe. */
+const MIN_DETAIL = 100;
+const MAX_DETAIL = 1000;
+const DEFAULT_DETAIL = 400;
 const MAX_PLOT_ROWS = 4096;
 
 /**
@@ -37,7 +39,7 @@ const MAX_PLOT_ROWS = 4096;
  * something has to hold the ones in between — and a fast-forward runs hundreds
  * of steps with no frame between them. A ring of columns is that buffer: at the
  * default 400 samples it holds 1,280 columns, more than any plate has, so a
- * single fast-forward finishes the sweep; at 2,000 samples it holds 256 and the
+ * single fast-forward finishes the sweep; at 1,000 samples it holds 512 and the
  * sweep simply advances in batches of that. Nothing here ever reallocates.
  */
 const MAX_PENDING_POINTS = 512_000;
@@ -75,10 +77,25 @@ const SWEEP_SECONDS = 2.5;
 
 /**
  * Map iterations per second of simulated time. The pace above sets the column
- * rate; this caps it, so the deepest transient and the largest sample count
- * cannot turn one tick into a dropped frame.
+ * rate; this caps it, so the transient and the largest sample count cannot turn
+ * one tick into a dropped frame.
  */
 const ITERATION_BUDGET = 4e6;
+
+/**
+ * Iterations thrown away before a column is sampled. Was the Transient control
+ * (100–5,000); fixed at the deepest value a preset ever asked for, because near
+ * a doubling the cycle is neutral and the orbit needs thousands of iterations
+ * to land on the new branches — 5,000 is what locates the cascade's onsets to
+ * the column, and the map is cheap enough that nothing else notices.
+ */
+const TRANSIENT = 5000;
+
+/**
+ * Was the Lyapunov toggle. Always on: the curve touching zero is what marks
+ * each split on the plate, and a switch to hide it was a question, not a knob.
+ */
+const SHOW_LYAPUNOV = true;
 
 /** Plate margins, CSS px. The bottom also carries the r-axis ticks and numerals. */
 const PAD_TOP = 8;
@@ -101,14 +118,24 @@ const LABEL_GAP = 3;
 const LAMBDA_TOP = 0.8;
 const LAMBDA_BOTTOM = -2;
 
-const DEFAULT_R_MIN = 2.4;
-const DEFAULT_R_MAX = 4;
-const DEFAULT_TRANSIENT = 2000;
-const DEFAULT_SAMPLES = 400;
 const DEFAULT_SEED = 42;
 
-/** Narrowest window the r sliders may bracket, so a permalink cannot ask for a column of zero width. */
-const MIN_SPAN = 0.001;
+/**
+ * The windows the Zoom control offers, in r. They replace a pair of free r
+ * sliders: every stop is somewhere a newcomer should be taken, and a window
+ * typed by hand found nothing these five do not show.
+ */
+const WINDOWS = [
+  { id: 'whole', label: 'The whole map', lo: 2.4, hi: 4 },
+  { id: 'first-split', label: 'First split', lo: 2.9, hi: 3.1 },
+  { id: 'cascade', label: 'The cascade', lo: 3.4, hi: 3.57 },
+  { id: 'island', label: 'The island of order', lo: 3.82, hi: 3.86 },
+  { id: 'deep-chaos', label: 'Deep chaos', lo: 3.95, hi: 4 },
+] as const;
+
+type Window = (typeof WINDOWS)[number];
+
+const DEFAULT_ZOOM: Window['id'] = 'whole';
 
 /**
  * Standard deviation of ln|f′| at r = 4, where the invariant density is the
@@ -118,70 +145,38 @@ const MIN_SPAN = 0.001;
  */
 const LAMBDA_SIGMA_AT_FOUR = Math.PI / Math.sqrt(12);
 
+/**
+ * The widest lines the corner window can ever show. Its plate is sized to
+ * these rather than to the lines on screen, so a reading that changes length
+ * between two columns — "never repeats" after "cycles through 16 values" —
+ * never changes the box.
+ */
+const WINDOW_TEMPLATES: readonly string[] = ['r 3.4567890', 'cycles through 64 values'];
+
 const params: readonly ParamSpec[] = [
   {
-    kind: 'range',
-    key: 'rMin',
-    label: 'r from',
-    min: 0,
-    max: 4,
-    step: 0.001,
-    default: DEFAULT_R_MIN,
-    help: ['Left edge of the window. Below ', { v: 'r' }, ' = 1 every orbit falls to zero.'],
-  },
-  {
-    kind: 'range',
-    key: 'rMax',
-    label: 'r to',
-    min: 0,
-    max: 4,
-    step: 0.001,
-    default: DEFAULT_R_MAX,
-    help: ['Right edge. Above ', { v: 'r' }, ' = 4 the orbit leaves [0, 1] and escapes.'],
+    kind: 'choice',
+    key: 'zoom',
+    label: 'Zoom',
+    options: WINDOWS.map((w) => ({ value: w.id, label: w.label })),
+    default: DEFAULT_ZOOM,
   },
   {
     kind: 'int',
-    key: 'transient',
-    label: 'Transient',
-    min: 100,
-    max: 5000,
-    default: DEFAULT_TRANSIENT,
-    help: 'Iterations thrown away before a column is sampled, so what is plotted is the attractor and not the approach to it.',
+    key: 'detail',
+    label: 'Detail',
+    min: MIN_DETAIL,
+    max: MAX_DETAIL,
+    default: DEFAULT_DETAIL,
   },
-  {
-    kind: 'int',
-    key: 'samples',
-    label: 'Samples per column',
-    min: 50,
-    max: MAX_SAMPLES,
-    default: DEFAULT_SAMPLES,
-    help: 'Iterates plotted per column after the transient. More of them fill the chaotic bands and resolve deeper cycles.',
-  },
-  {
-    kind: 'toggle',
-    key: 'showLyapunov',
-    label: 'Lyapunov exponent',
-    default: true,
-    help: [
-      'Draw ', { v: 'λ' }, ' = mean of ln|', { v: 'r' }, '(1 − 2', { v: 'x' }, ')| over the orbit: ',
-      'negative where the orbit is periodic, positive where it is chaotic, zero at every bifurcation.',
-    ],
-  },
-  {
-    kind: 'seed',
-    key: 'seed',
-    label: 'Seed',
-    default: DEFAULT_SEED,
-    // The map is deterministic: a column depends on r alone, because every
-    // starting point in (0, 1) converges to the same attractor. The seed only
-    // jitters each column's x₀ inside [0.3, 0.7), which decorrelates the
-    // leftover transient from one column to the next instead of drawing the
-    // same approach curve across the whole plate.
-    help: [
-      'The map is deterministic — the seed only jitters each column’s starting ',
-      { v: 'x' }, '₀, which every orbit forgets.',
-    ],
-  },
+  // The rail renders no control for a seed. It stays declared so a permalink's
+  // seed is still typed by coerceParams and the transport's Shuffle key has a
+  // knob to turn. The map is deterministic: a column depends on r alone,
+  // because every starting point in (0, 1) converges to the same attractor.
+  // The seed only jitters each column's x₀ inside [0.3, 0.7), which
+  // decorrelates the leftover transient from one column to the next instead of
+  // drawing the same approach curve across the whole plate.
+  { kind: 'seed', key: 'seed', label: 'Seed', default: DEFAULT_SEED },
 ];
 
 const presets: readonly Preset[] = [
@@ -189,78 +184,36 @@ const presets: readonly Preset[] = [
     id: 'whole-map',
     label: 'The whole map',
     caption: [
-      'One rule, every ', { v: 'r' }, ': a single settling point, then two, then four, then a cascade ',
-      'that accumulates at 3.5699 and hands the plate over to chaos.',
+      'Turn ', { v: 'r' }, ' up from left to right: one resting value splits into two, then four, then blurs into chaos.',
     ],
-    values: { rMin: 2.4, rMax: 4, transient: 2000, samples: 400, showLyapunov: true },
+    values: { zoom: 'whole' },
   },
   {
-    id: 'first-doubling',
-    label: 'First doubling',
+    id: 'first-split',
+    label: 'First split',
     caption: [
-      'At ', { v: 'r' }, ' = 3 the fixed point 1 − 1/', { v: 'r' }, ' stops attracting and the orbit splits in two. ',
-      { v: 'λ' }, ' touches zero exactly there.',
+      'At ', { v: 'r' }, ' = 3 the single resting value lets go and ', { v: 'x' }, ' starts bouncing between two.',
     ],
-    values: { rMin: 2.9, rMax: 3.1, transient: 3000, samples: 400, showLyapunov: true },
+    values: { zoom: 'first-split' },
   },
   {
     id: 'cascade',
-    label: 'Cascade',
-    caption: [
-      'Four doublings in a window a fifth of a unit wide. Each interval is about 4.669 times the next — ',
-      'the measured ratio in the ledger is the whole of Feigenbaum’s ', { v: 'δ' }, '.',
-    ],
-    values: { rMin: 3.4, rMax: 3.57, transient: 5000, samples: 500, showLyapunov: true },
-  },
-  {
-    id: 'period-three',
-    label: 'Period three',
-    caption: [
-      'A band of pure order inside the chaos, opening at ', { v: 'r' }, ' = 1 + √8 = 3.828427 where ',
-      { v: 'λ' }, ' dives back below zero. Period three implies chaos — this is what it looks like.',
-    ],
-    values: { rMin: 3.82, rMax: 3.86, transient: 2000, samples: 500, showLyapunov: true },
-  },
-  {
-    id: 'deep-chaos',
-    label: 'Deep chaos',
-    caption: [
-      'No cycle up to 64 repeats and ', { v: 'λ' }, ' stays positive, reaching ln 2 exactly at ',
-      { v: 'r' }, ' = 4, where the map is the tent map in disguise.',
-    ],
-    values: { rMin: 3.95, rMax: 4, transient: 2000, samples: 1000, showLyapunov: true },
+    label: 'The cascade',
+    caption: 'The splits come faster and faster: each gap is about 4.669 times shorter than the one before it.',
+    values: { zoom: 'cascade' },
   },
 ];
 
 const facts: readonly Fact[] = [
   {
-    text: [
-      'Feigenbaum found ', { v: 'δ' }, ' = 4.6692016 on an HP-65 calculator in 1975 and then showed it is universal: ',
-      'every smooth map with a single quadratic maximum period-doubles at the same rate, which is why the ',
-      'same number turns up in dripping taps and convecting fluids.',
-    ],
+    text: 'Feigenbaum showed in 1978 that this 4.669 is the same for every smooth rule with a single hump, not just this one.',
     source: {
       label: 'Feigenbaum, “Quantitative universality for a class of nonlinear transformations”, J. Stat. Phys. 19 (1978) 25–52',
       url: 'https://doi.org/10.1007/BF01020332',
     },
   },
   {
-    text: [
-      'Li and Yorke proved in 1975 that a continuous map of an interval with a point of period three has points ',
-      'of every period, and uncountably many orbits that never settle — the paper that put the word chaos into ',
-      'mathematics. Sharkovskii had proved the stronger ordering behind it in 1964, in Ukrainian, unnoticed.',
-    ],
-    source: {
-      label: 'Li and Yorke, “Period Three Implies Chaos”, American Mathematical Monthly 82 (1975) 985–992',
-      url: 'https://doi.org/10.2307/2318254',
-    },
-  },
-  {
-    text: [
-      'Robert May put this diagram in Nature in 1976 to make an ecological point: a population model with no ',
-      'noise and one parameter can produce data indistinguishable from randomness, so a wild-looking census ',
-      'is not evidence of a complicated cause.',
-    ],
+    text: 'Robert May put this picture in Nature in 1976 to warn that a population rule with no randomness in it can produce numbers that look completely random.',
     source: {
       label: 'May, “Simple mathematical models with very complicated dynamics”, Nature 261 (1976) 459–467',
       url: 'https://doi.org/10.1038/261459a0',
@@ -276,9 +229,9 @@ function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
 }
 
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
+/** The window a zoom value names; an unknown one — an old permalink — is the whole map. */
+export function windowFor(value: ParamValue | undefined): Window {
+  return WINDOWS.find((w) => w.id === value) ?? WINDOWS[0];
 }
 
 /** Pixel size out of a CSS font shorthand, for sizing the axis gutter and the readout window. */
@@ -310,6 +263,17 @@ export function tickStep(span: number): number {
 /** Decimals a numeral needs to distinguish two neighbouring ticks. */
 function tickDecimals(step: number): number {
   return Math.max(0, Math.ceil(-Math.log10(step) - 1e-9));
+}
+
+/**
+ * The corner window's second line: what x is doing at the cursor, in words.
+ * 0 is not a period — it is "no cycle up to 64 repeats", which is chaos or an
+ * orbit that has not finished settling — so it reads as never repeating.
+ */
+export function cycleText(period: number): string {
+  if (period === 0) return 'never repeats';
+  if (period === 1) return 'settles on 1 value';
+  return `cycles through ${period} values`;
 }
 
 export interface PlotLayout {
@@ -345,18 +309,14 @@ export function layoutPlot(width: number, height: number, labelHeight: number): 
 
 function create(ctx: VizContext): VizInstance {
   // Structural parameters: each one is a different diagram.
-  let rLo = DEFAULT_R_MIN;
-  let rHi = DEFAULT_R_MAX;
-  let transient = DEFAULT_TRANSIENT;
-  let samples = DEFAULT_SAMPLES;
-  // Cosmetic, absorbed live: the curve lives on the foreground, which is
-  // repainted every frame anyway.
-  let showLyapunov = true;
+  let rLo: number = WINDOWS[0].lo;
+  let rHi: number = WINDOWS[0].hi;
+  let samples = DEFAULT_DETAIL;
 
   let plot = layoutPlot(ctx.width, ctx.height, fontPx(ctx.theme.labelFont));
 
   // Every array is allocated here, once, at its ceiling.
-  const orbit = new Float64Array(MAX_SAMPLES);
+  const orbit = new Float64Array(MAX_DETAIL);
   const jitter = new Float64Array(MAX_COLUMNS);
   const lyap = new Float64Array(MAX_COLUMNS);
   const periods = new Uint8Array(MAX_COLUMNS);
@@ -373,7 +333,7 @@ function create(ctx: VizContext): VizInstance {
   /** Observed r of the first column resolving period 2ᵏ, NaN where not seen. */
   const onsets = new Float64Array(MAX_LEVEL + 1);
 
-  let stride = DEFAULT_SAMPLES;
+  let stride = DEFAULT_DETAIL;
   let ringColumns = 1;
 
   let computed = 0;
@@ -402,21 +362,11 @@ function create(ctx: VizContext): VizInstance {
     return plot.y0 + (plot.h * (LAMBDA_TOP - clamped)) / (LAMBDA_TOP - LAMBDA_BOTTOM);
   }
 
-  function syncLive(): void {
-    showLyapunov = flag(ctx.params, 'showLyapunov', true);
-  }
-
   function syncStructure(): void {
-    const a = Math.min(4, Math.max(0, num(ctx.params, 'rMin', DEFAULT_R_MIN)));
-    const b = Math.min(4, Math.max(0, num(ctx.params, 'rMax', DEFAULT_R_MAX)));
-    // A permalink can arrive with the ends the wrong way round, or equal.
-    rLo = Math.min(a, b);
-    rHi = Math.max(a, b);
-    if (rHi - rLo < MIN_SPAN) rHi = Math.min(4, rLo + MIN_SPAN);
-    if (rHi - rLo < MIN_SPAN) rLo = rHi - MIN_SPAN;
-
-    transient = Math.max(0, Math.round(num(ctx.params, 'transient', DEFAULT_TRANSIENT)));
-    samples = Math.max(2, Math.min(MAX_SAMPLES, Math.round(num(ctx.params, 'samples', DEFAULT_SAMPLES))));
+    const zoom = windowFor(ctx.params['zoom']);
+    rLo = zoom.lo;
+    rHi = zoom.hi;
+    samples = Math.max(MIN_DETAIL, Math.min(MAX_DETAIL, Math.round(num(ctx.params, 'detail', DEFAULT_DETAIL))));
     // Dedupe caps a column at one row per pixel, and samples ≤ MAX_PLOT_ROWS,
     // so `samples` rows per slot can never overflow.
     stride = samples;
@@ -454,12 +404,12 @@ function create(ctx: VizContext): VizInstance {
     // drawing the same approach curve across the whole plate. The one starting
     // point that would matter is ½, which at r = 4 maps to 1 and then to the
     // dead fixed point 0; a draw from a 32-bit stream lands on it once in 2³².
-    sampleAttractor(orbit, 0, samples, r, transient, 0.3 + 0.4 * jitter[c]!);
+    sampleAttractor(orbit, 0, samples, r, TRANSIENT, 0.3 + 0.4 * jitter[c]!);
 
     const period = detectPeriod(orbit, DEFAULT_PERIOD_TOL, 0, samples);
     periods[c] = period > 255 ? 255 : period;
     lyap[c] = lyapunovFrom(orbit, r, 0, samples);
-    iterations += transient + samples;
+    iterations += TRANSIENT + samples;
 
     // A doubling is recorded where the period the sweep last resolved was
     // exactly half this one. Columns with no period are stepped over rather
@@ -494,11 +444,11 @@ function create(ctx: VizContext): VizInstance {
    * Intervals shrink by δ each time, so the fourth is a fifth of a percent of
    * the window and a handful of columns wide: the triple with the smallest
    * uncertainty, not the deepest one, is the honest reading. Zooming in shrinks
-   * h and the reading sharpens — on the whole map it measures 4.878, 4.5% from
-   * δ, with 5.9% of slack; on the Cascade preset 4.624, 1.0% out, with 2.9%.
+   * h and the reading sharpens — on the whole map it measures 4.714, 1.0% from
+   * δ, with 5.8% of slack; on the Cascade window 4.624, 1.0% out, with 2.9%.
    *
    * Nothing is reported at all above `MAX_RATIO_UNCERTAINTY`: a window with no
-   * cascade in it — the period-3 window, or 3.95 to 4 — can still produce three
+   * cascade in it — the island of order, or 3.95 to 4 — can still produce three
    * shrinking intervals out of unrelated periodic windows in the chaos, and a
    * "ratio" known to ±240% is not a measurement of a constant known to ten
    * digits. The ledger's empty state says so better than a number would.
@@ -538,17 +488,18 @@ function create(ctx: VizContext): VizInstance {
     // window's edge, so the test is whether the column *contains* r = 4.
     const atFour = cursor >= 0 && Math.abs(r - 4) <= (rHi - rLo) / (2 * plot.columns) + 1e-12;
     return [
-      { key: 'columns', label: 'Columns rendered', value: computed, digits: 6 },
-      { key: 'span', label: 'r range', value: rHi - rLo, digits: 6 },
-      { key: 'r', label: 'r at cursor', value: r, digits: 7 },
+      { key: 'columns', label: 'Columns rendered', value: computed, digits: 6, plain: 'columns drawn so far' },
+      { key: 'span', label: 'r range', value: rHi - rLo, digits: 6, expertOnly: true },
+      { key: 'r', label: 'r at cursor', value: r, digits: 7, plain: 'r under the cursor' },
       // 0 is not a period: it is "no cycle up to 64 repeats", which is chaos or
       // an orbit that has not finished settling.
-      { key: 'period', label: 'Detected period', value: period, digits: 2 },
+      { key: 'period', label: 'Detected period', value: period, digits: 2, plain: 'values x cycles through' },
       {
         key: 'lyapunov',
         label: 'Lyapunov exponent',
         value: lambda,
         digits: 4,
+        expertOnly: true,
         ...(atFour
           ? {
               target: Math.LN2,
@@ -567,13 +518,19 @@ function create(ctx: VizContext): VizInstance {
         digits: 6,
         target: FEIGENBAUM_DELTA,
         formula: [{ v: 'δ' }],
+        plain: 'the doubling ratio',
+        headline: true,
+        hint: 'the gaps between splits shrink by this much each time — the true value is 4.669',
         ...(Number.isFinite(ratio.tolerance) ? { tolerance: ratio.tolerance } : {}),
       },
-      { key: 'iterations', label: 'Map iterations', value: iterations, digits: 9 },
+      { key: 'iterations', label: 'Map iterations', value: iterations, digits: 9, plain: 'times the rule has run' },
     ];
   }
 
-  /** The live cursor reading, as a display window in the top-left corner. */
+  /**
+   * The live cursor reading, as a display window in the top-left corner. The
+   * plate is sized to `WINDOW_TEMPLATES`, so it is the same box on every frame.
+   */
   function drawWindow(fg: CanvasRenderingContext2D, lines: readonly string[]): void {
     const { theme } = ctx;
     const margin = 10;
@@ -583,6 +540,7 @@ function create(ctx: VizContext): VizInstance {
     fg.textAlign = 'left';
     fg.textBaseline = 'top';
     let textW = 0;
+    for (const line of WINDOW_TEMPLATES) textW = Math.max(textW, fg.measureText(line).width);
     for (const line of lines) textW = Math.max(textW, fg.measureText(line).width);
     const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
     const x = Math.round(margin - pad);
@@ -604,9 +562,9 @@ function create(ctx: VizContext): VizInstance {
     step(dt) {
       if (computed >= plot.columns) return;
       // Columns per second: the sweep's own pace, capped by an iteration budget
-      // so that 5,000 transient iterations at 2,000 samples cannot turn one
+      // so that 5,000 transient iterations at 1,000 samples cannot turn one
       // tick into a dropped frame.
-      const pace = Math.min(plot.columns / SWEEP_SECONDS, ITERATION_BUDGET / (transient + samples));
+      const pace = Math.min(plot.columns / SWEEP_SECONDS, ITERATION_BUDGET / (TRANSIENT + samples));
       pending += (pace * dt) / 1000;
       while (pending >= 1 && computed < plot.columns && computed - painted < ringColumns) {
         computeColumn(computed);
@@ -662,7 +620,7 @@ function create(ctx: VizContext): VizInstance {
       bg.textAlign = 'center';
       bg.textBaseline = 'top';
       // Every tick carries a numeral on a full-size plate; on a phone the same
-      // eight intervals do not fit six digits each, so every other one does.
+      // eight intervals do not fit five digits each, so every other one does.
       const labelW = bg.measureText(rHi.toFixed(decimals)).width;
       const every = (step / (rHi - rLo)) * plot.columns >= labelW + 12 ? 1 : 2;
       for (let k = 0; ; k++) {
@@ -700,7 +658,7 @@ function create(ctx: VizContext): VizInstance {
 
       fg.clearRect(0, 0, width, height);
 
-      if (showLyapunov) {
+      if (SHOW_LYAPUNOV) {
         const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
         const zero = Math.round(lambdaY(0)) + snap;
         fg.strokeStyle = theme.gridSoft;
@@ -752,26 +710,19 @@ function create(ctx: VizContext): VizInstance {
         fg.stroke();
       }
 
+      // Two lines, both of them in the ledger: where the cursor is, and what x
+      // does there. λ is an expert reading and stays in the exact table.
       const cursor = computed - 1;
       const r = cursor >= 0 ? rAt(cursor) : NaN;
-      const lambda = cursor >= 0 ? lyap[cursor]! : NaN;
       const period = cursor >= 0 ? periods[cursor]! : 0;
-      drawWindow(fg, [
-        `r ${Number.isFinite(r) ? fmt(r, 7) : '—'}`,
-        `λ ${Number.isFinite(lambda) ? fmt(lambda, 4) : '—'}`,
-        `period ${cursor < 0 ? '—' : period === 0 ? 'none' : String(period)}`,
-      ]);
+      drawWindow(fg, [`r ${Number.isFinite(r) ? fmt(r, 7) : '—'}`, cursor < 0 ? '—' : cycleText(period)]);
 
       ctx.emit(readouts());
     },
 
-    onParamChange(key, value) {
-      if (key === 'showLyapunov') {
-        showLyapunov = value === true;
-        return true;
-      }
-      // rMin, rMax, transient, samples, seed: every column on the plate belongs
-      // to a different diagram, so the shell resets and the sweep runs again.
+    onParamChange() {
+      // zoom, detail, seed: every column on the plate belongs to a different
+      // diagram, so the shell resets and the sweep runs again.
       return false;
     },
 
@@ -783,7 +734,6 @@ function create(ctx: VizContext): VizInstance {
       // same seed.
       for (let c = 0; c < MAX_COLUMNS; c++) jitter[c] = ctx.rng.next();
       syncStructure();
-      syncLive();
       rewind();
       ctx.layers.foreground.clearRect(0, 0, ctx.width, ctx.height);
     },
@@ -802,8 +752,8 @@ export const bifurcation: Viz = {
   title: 'Logistic Bifurcation',
   group: 'chaos',
   blurb: [
-    'Iterates ', { v: 'x' }, ' ↦ ', { v: 'r' }, { v: 'x' }, '(1 − ', { v: 'x' }, ') a few thousand times per column ',
-    'and plots what is left, against ', { v: 'r' }, '.',
+    'Runs the rule ', { v: 'x' }, ' → ', { v: 'r' }, { v: 'x' }, '(1 − ', { v: 'x' }, ') over and over and plots where ',
+    { v: 'x' }, ' ends up, for every setting of the dial ', { v: 'r' }, '.',
   ],
   // Landscape: r is the long axis, and every column is one pixel of it, so the
   // plate's width is literally the resolution of the measurement. Still wide on

@@ -1,9 +1,10 @@
 /**
- * Story mode — the program tape (DESIGN §5).
+ * "Try:" — one row of preset chips.
  *
- * A numbered stepper over the visualization's presets. Presets are ordered
- * pedagogically, so the tape is a path through the idea rather than a menu:
- * step 1 is one ball, step 3 is ten thousand, and the caption says what changed.
+ * Presets are ordered pedagogically, so the first few are the ones that walk a
+ * newcomer to the idea; the row shows at most three of them, and the caption
+ * under the row says what the active one reveals. A tape of numbered steps with
+ * Prev and Next keys was more machine than a reader needs for three buttons.
  *
  * The component never applies a preset to the simulation itself. It calls
  * `onApply` and waits to be told what is current through `setActive`, because
@@ -19,6 +20,9 @@ export interface StoryHandle {
   destroy(): void;
 }
 
+/** Chips shown per tab. Three is a choice; five is a menu. */
+export const MAX_CHIPS = 3;
+
 export function createStory(
   host: HTMLElement,
   presets: readonly Preset[],
@@ -27,8 +31,9 @@ export function createStory(
   host.classList.add('story');
   clear(host);
 
-  if (presets.length === 0) {
-    // A tape with no steps is 40 px of padding promising something. Hide it.
+  const shown = presets.slice(0, MAX_CHIPS);
+  if (shown.length === 0) {
+    // A row with no chips is 40 px of padding promising something. Hide it.
     host.hidden = true;
     return { setActive() {}, destroy() {} };
   }
@@ -36,84 +41,51 @@ export function createStory(
 
   let active = -1;
 
-  const steps = presets.map((preset, index) =>
+  const chips = shown.map((preset, index) =>
     h(
       'button',
       {
-        class: 'story__step',
+        class: 'key key--small story__chip',
         type: 'button',
-        'aria-label': `Step ${index + 1}: ${preset.label}`,
-        onclick: () => select(index, true),
+        'aria-pressed': 'false',
+        onclick: () => select(index),
       },
-      String(index + 1),
+      preset.label,
     ),
   );
 
-  const list = h('ol', { class: 'story__steps' }, ...steps.map((step) => h('li', null, step)));
-  const prev = h('button', { class: 'key key--small', type: 'button', onclick: () => move(-1) }, 'Prev');
-  const next = h('button', { class: 'key key--small', type: 'button', onclick: () => move(1) }, 'Next');
-  const tape = h('div', { class: 'story__tape' }, prev, list, next);
-  const label = h('h3', { class: 'story__label' });
+  const row = h(
+    'div',
+    { class: 'story__row', role: 'group', 'aria-label': 'Try' },
+    h('span', { class: 'story__lead', 'aria-hidden': 'true' }, 'Try:'),
+    ...chips,
+  );
+  // Always in flow, at a reserved height: showing and hiding a caption would
+  // move the fact card under it every time a chip is pressed.
   const caption = h('p', { class: 'story__caption' });
+  host.append(row, caption);
 
-  tape.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    move(event.key === 'ArrowLeft' ? -1 : 1);
-    steps[active]?.focus();
-  });
-
-  host.append(h('h2', { class: 'visually-hidden' }, 'Story mode'), tape, label, caption);
-
-  function move(delta: number): void {
-    // With nothing active, either arrow lands on step 1 — the tape is a path and
-    // its start is the only sensible entry point.
-    const from = active < 0 ? (delta > 0 ? -1 : 0) : active;
-    const target = Math.min(presets.length - 1, Math.max(0, from + delta));
-    if (target !== active) select(target, true);
-  }
-
-  function select(index: number, apply: boolean): void {
-    const preset = presets[index];
+  function select(index: number): void {
+    const preset = shown[index];
     if (!preset) return;
     active = index;
     render();
-    if (apply) onApply(preset);
+    onApply(preset);
   }
 
   function render(): void {
-    steps.forEach((step, index) => {
-      const current = index === active;
-      // `aria-current="step"` is the only marker of the current step; the CSS
-      // reads it directly and there is no `.story__step--current` to write.
-      if (current) {
-        step.setAttribute('aria-current', 'step');
-        step.classList.add('story__step--visited');
-      } else {
-        step.removeAttribute('aria-current');
-      }
-    });
-    const preset = active < 0 ? undefined : presets[active];
-    label.textContent = preset ? preset.label : '';
+    // `aria-pressed` is the only marker of the active chip; the CSS reads it
+    // directly and there is no `.story__chip--active` to desynchronise.
+    chips.forEach((chip, index) => chip.setAttribute('aria-pressed', String(index === active)));
+    const preset = active < 0 ? undefined : shown[active];
     setProse(caption, preset ? preset.caption : '');
-    label.hidden = !preset;
-    caption.hidden = !preset;
-    // The ends are inoperable, not removed from the tab order. `disabled` on the
-    // key that just fired the move takes it out of focus under the user's own
-    // keypress, `document.activeElement` falls back to <body>, and the next Tab
-    // restarts from the top of the document — halfway up the page from the tape.
-    // `.key[aria-disabled="true"]` carries the same look as `:disabled`, and
-    // `move()` already clamps, so an activation at either end is a no-op.
-    prev.setAttribute('aria-disabled', String(active === 0));
-    next.setAttribute('aria-disabled', String(active === presets.length - 1));
   }
 
   render();
 
   return {
     setActive(id) {
-      const index = id === null ? -1 : presets.findIndex((preset) => preset.id === id);
-      active = index;
+      active = id === null ? -1 : shown.findIndex((preset) => preset.id === id);
       render();
     },
     destroy() {

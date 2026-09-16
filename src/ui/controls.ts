@@ -24,11 +24,15 @@
  * parameter tears the simulation down and rebuilds it, so a stepper key at its
  * own limit, or a drag that lands on the value it started from, would otherwise
  * throw the reader's run away while nothing on screen moved.
+ *
+ * The seed is the one `ParamSpec` the rail does not render. A thirty-two-bit
+ * integer is not something a reader turns; "the same experiment, another draw"
+ * is the transport's Shuffle key, and the URL still carries the seed for
+ * permalinks.
  */
 
-import type { ParamSpec, ParamValue, ParamValues, Prose } from '../core/types';
-import { randomSeed } from '../core/rng';
-import { clear, h, monoMinus, prose, withMinus } from './dom';
+import type { ParamSpec, ParamValue, ParamValues } from '../core/types';
+import { clear, h, monoMinus, withMinus } from './dom';
 
 export interface ControlsHandle {
   /** Apply a whole parameter set at once — Story mode writes every value, then resets once. */
@@ -201,7 +205,8 @@ export function createControls(
 
   const setters = new Map<string, Setter>();
 
-  for (const spec of orderedSpecs(specs)) {
+  for (const spec of specs) {
+    if (spec.kind === 'seed') continue;
     const initial = values[spec.key] ?? spec.default;
     const built = buildRow(spec, initial, onChange);
     setters.set(spec.key, built.set);
@@ -225,11 +230,8 @@ export function createControls(
   };
 }
 
-/** DESIGN §4: the seed is the last row of the rail. Otherwise declared order. */
-function orderedSpecs(specs: readonly ParamSpec[]): ParamSpec[] {
-  const seeds = specs.filter((s) => s.kind === 'seed');
-  return seeds.length === 0 ? [...specs] : [...specs.filter((s) => s.kind !== 'seed'), ...seeds];
-}
+/** The kinds the rail renders. A new kind in the union is a compile error in `buildRow`. */
+type RailSpec = Exclude<ParamSpec, { kind: 'seed' }>;
 
 interface Row {
   row: HTMLElement;
@@ -237,7 +239,7 @@ interface Row {
 }
 
 function buildRow(
-  spec: ParamSpec,
+  spec: RailSpec,
   initial: ParamValue,
   onChange: (key: string, value: ParamValue) => void,
 ): Row {
@@ -250,8 +252,6 @@ function buildRow(
       return toggleRow(spec, initial === true, onChange);
     case 'choice':
       return choiceRow(spec, typeof initial === 'string' ? initial : spec.default, onChange);
-    case 'seed':
-      return seedRow(spec, asNumber(initial, spec.default), onChange);
   }
 }
 
@@ -265,7 +265,6 @@ function rangeRow(
   onChange: (key: string, value: ParamValue) => void,
 ): Row {
   const id = nextId(spec.key);
-  const helpId = spec.help ? `${id}-help` : undefined;
   const decimals = decimalsForStep(spec.step);
   const isLog = spec.log === true && spec.min > 0 && spec.max > spec.min;
   const positions = isLog ? logPositions(spec.min, spec.max, spec.step) : 0;
@@ -285,7 +284,6 @@ function rangeRow(
     min: isLog ? 0 : spec.min,
     max: isLog ? positions : spec.max,
     step: isLog ? 1 : spec.step,
-    'aria-describedby': helpId,
   });
 
   // A log fader's own value is a position — 304,036 of 396,140 — so the number
@@ -346,7 +344,6 @@ function rangeRow(
     output,
     input,
     scale(spec.min, spec.max, decimals),
-    help(spec.help, helpId),
   );
 
   if (isLog) {
@@ -400,7 +397,6 @@ function intRow(
 ): Row {
   const id = nextId(spec.key);
   const faderId = `${id}-fader`;
-  const helpId = spec.help ? `${id}-help` : undefined;
 
   const field = h('input', {
     class: 'window stepper__input',
@@ -410,7 +406,6 @@ function intRow(
     min: spec.min,
     max: spec.max,
     step: 1,
-    'aria-describedby': helpId,
   });
 
   const fader = h('input', {
@@ -423,7 +418,6 @@ function intRow(
     // The row's <label> names the field, which is the exact value; the fader is
     // the same quantity by another means and carries the name itself.
     'aria-label': spec.label,
-    'aria-describedby': helpId,
   });
 
   let current = clampInt(initial, spec.min, spec.max);
@@ -488,7 +482,6 @@ function intRow(
     stepper,
     fader,
     scale(spec.min, spec.max, 0, spec.unit),
-    help(spec.help, helpId),
   );
 
   return {
@@ -501,7 +494,7 @@ function intRow(
 }
 
 // ---------------------------------------------------------------------------
-// Toggle, choice, seed
+// Toggle, choice
 // ---------------------------------------------------------------------------
 
 function toggleRow(
@@ -510,14 +503,12 @@ function toggleRow(
   onChange: (key: string, value: ParamValue) => void,
 ): Row {
   const id = nextId(spec.key);
-  const helpId = spec.help ? `${id}-help` : undefined;
 
   const input = h('input', {
     class: 'switch',
     id,
     type: 'checkbox',
     role: 'switch',
-    'aria-describedby': helpId,
   });
   input.checked = initial;
   input.addEventListener('change', () => onChange(spec.key, input.checked));
@@ -532,7 +523,6 @@ function toggleRow(
       h('span', { class: 'control__label' }, spec.label),
       input,
     ),
-    help(spec.help, helpId),
   );
 
   return {
@@ -549,9 +539,8 @@ function choiceRow(
   onChange: (key: string, value: ParamValue) => void,
 ): Row {
   const id = nextId(spec.key);
-  const helpId = spec.help ? `${id}-help` : undefined;
 
-  const select = h('select', { class: 'select', id, 'aria-describedby': helpId });
+  const select = h('select', { class: 'select', id });
   for (const option of spec.options) {
     select.append(h('option', { value: option.value }, option.label));
   }
@@ -563,7 +552,6 @@ function choiceRow(
     { class: 'control control--choice' },
     h('label', { class: 'control__label', for: id }, spec.label),
     select,
-    help(spec.help, helpId),
   );
 
   return {
@@ -575,73 +563,9 @@ function choiceRow(
   };
 }
 
-function seedRow(
-  spec: Extract<ParamSpec, { kind: 'seed' }>,
-  initial: number,
-  onChange: (key: string, value: ParamValue) => void,
-): Row {
-  const id = nextId(spec.key);
-  const helpId = spec.help ? `${id}-help` : undefined;
-
-  const field = h('input', {
-    class: 'window seed__input',
-    id,
-    type: 'number',
-    inputmode: 'numeric',
-    min: 0,
-    step: 1,
-    'aria-describedby': helpId,
-  });
-  field.value = String(toSeed(initial));
-
-  field.addEventListener('change', () => {
-    const seed = toSeed(Number(field.value));
-    field.value = String(seed);
-    onChange(spec.key, seed);
-  });
-
-  const randomize = h(
-    'button',
-    {
-      class: 'key seed__random',
-      type: 'button',
-      onclick: () => {
-        const seed = randomSeed();
-        field.value = String(seed);
-        onChange(spec.key, seed);
-      },
-    },
-    'Randomize',
-  );
-
-  const row = h(
-    'div',
-    { class: 'control control--seed' },
-    h('label', { class: 'control__label', for: id }, spec.label),
-    h('div', { class: 'seed' }, field, randomize),
-    help(spec.help, helpId),
-  );
-
-  return {
-    row,
-    set(value) {
-      field.value = String(toSeed(asNumber(value, initial)));
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Shared pieces
 // ---------------------------------------------------------------------------
-
-function help(text: Prose | undefined, id: string | undefined): HTMLElement | null {
-  // Help is content, not a tooltip: this is a teaching tool and the sentence
-  // explaining what a parameter means belongs on the page (DESIGN §5). It is
-  // also where the mathematics is densest — `N(n·p, n·p·(1−p))` — so it is
-  // prose, and its variables come out in italic rather than as roman words.
-  if (text === undefined || text === '') return null;
-  return h('p', { class: 'control__help', id }, ...prose(text));
-}
 
 /**
  * The engraved ends. A row whose value window cannot carry the unit — the int
@@ -693,26 +617,30 @@ function clampInt(value: number, min: number, max: number): number {
   return n < min ? min : n > max ? max : n;
 }
 
-/** Same 32-bit reduction the RNG applies, so the field shows the stream it will get. */
-function toSeed(value: number): number {
-  return Number.isFinite(value) ? value >>> 0 : 0;
-}
-
 function asNumber(value: ParamValue, fallback: number): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Decimals a value on this step grid needs to print without rounding away.
+ * Capped at twelve, which is what the finest step in the registry — the
+ * Lorenz twins' 10⁻¹² starting gap — needs to survive `toFixed()`: at ten,
+ * that gap quantised to exactly 0, and the "A thousand times closer" chip put
+ * 0.0000000000 in its own window.
+ */
+const MAX_DECIMALS = 12;
+
 function decimalsForStep(step: number): number {
   if (!Number.isFinite(step) || step <= 0 || Number.isInteger(step)) return 0;
   const text = String(step);
   const e = text.indexOf('e');
-  if (e < 0) return Math.min(10, (text.split('.')[1] ?? '').length);
+  if (e < 0) return Math.min(MAX_DECIMALS, (text.split('.')[1] ?? '').length);
   // 1e-7 prints in exponent form; the exponent is where the decimals went.
   const exponent = Number(text.slice(e + 1));
   const mantissa = (text.slice(0, e).split('.')[1] ?? '').length;
-  return Math.min(10, Math.max(0, mantissa - exponent));
+  return Math.min(MAX_DECIMALS, Math.max(0, mantissa - exponent));
 }
 
 function round4(n: number): number {

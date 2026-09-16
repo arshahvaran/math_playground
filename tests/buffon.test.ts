@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
-import type { ParamValue, Readout, VizContext } from '../src/core/types';
+import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import { buffon, layoutField } from '../src/viz/buffon/index';
 import {
   NeedleField,
@@ -393,14 +393,15 @@ const THEME = {
   particleRadius: 2,
 };
 
+/** The three parameters the tab declares; the drop rate, the ceiling and the overlay are module constants now. */
 const DEFAULTS: Record<string, ParamValue> = {
   ratio: 0.8,
   spacing: 64,
-  dropRate: 120,
-  maxDrops: 20_000,
-  showAngle: false,
   seed: SEED,
 };
+
+/** The fixed drop ceiling: `MAX_DROPS` in the module. */
+const MAX_DROPS = 20_000;
 
 function stubViz(overrides: Record<string, ParamValue> = {}, width = 720, height = 448) {
   const bg = recordingContext();
@@ -425,7 +426,7 @@ function stubViz(overrides: Record<string, ParamValue> = {}, width = 720, height
 
 type Viz = ReturnType<typeof stubViz>;
 
-/** dropRate 120 with the 120 Hz tick is exactly one needle per step. */
+/** The fixed 120/s drop rate with the 120 Hz tick is exactly one needle per step. */
 function tick(v: Viz, steps: number): void {
   for (let i = 0; i < steps; i++) v.instance.step(TICK);
 }
@@ -492,6 +493,29 @@ describe('buffon instance: readouts', () => {
     expect(b.emitted.at(-1)).toEqual(last);
   });
 
+  it('marks the π estimate as the one headline and gives every visible number a plain label', () => {
+    const v = stubViz();
+    tick(v, 100);
+    paint(v);
+    const last = v.emitted.at(-1) ?? [];
+    const headline = last.filter((r) => r.headline === true);
+    expect(headline.map((r) => r.key)).toEqual(['pi']);
+    expect(headline[0]?.plain).toBe('our estimate of pi');
+    expect(headline[0]?.hint).toBe('the real value is 3.14159');
+
+    // What a newcomer reads is the counts and the estimate; the crossing
+    // fraction and the standard error are for the exact table only.
+    const shown = last.filter((r) => r.expertOnly !== true).map((r) => r.key);
+    expect(shown).toEqual(['drops', 'crossings', 'pi']);
+    for (const r of last) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain, r.key).toBeDefined();
+      expect(r.plain, r.key).toBe(r.plain?.toLowerCase());
+    }
+    expect(last.find((r) => r.key === 'drops')?.plain).toBe('needles dropped');
+    expect(last.find((r) => r.key === 'crossings')?.plain).toBe('crossed a line');
+  });
+
   it('draws without mutating the simulation, and resets to an empty field', () => {
     const v = stubViz();
     tick(v, 500);
@@ -506,64 +530,52 @@ describe('buffon instance: readouts', () => {
   });
 });
 
-describe('buffon instance: maxDrops', () => {
-  /** Drops and crossings after `steps` ticks of a fresh instance at this ceiling. */
-  function fresh(maxDrops: number, steps: number): Record<string, number> {
-    const v = stubViz({ maxDrops });
-    tick(v, steps);
-    paint(v);
-    return ledger(v);
-  }
-
-  it('absorbs a raise as a prefix continuation, byte-identical to a fresh run', () => {
-    const v = stubViz({ maxDrops: 1_000 });
-    tick(v, 1_200);
-    paint(v);
-    expect(ledger(v)['drops']).toBe(1_000);
-
-    expect(setParam(v, 'maxDrops', 5_000)).toBe(true);
-    tick(v, 4_000);
-    paint(v);
-    // The first 1,000 needles are the first 1,000 of the longer run, and the rng
-    // picked up where it left off, so the ledger must match a fresh 5,000.
-    expect(ledger(v)).toEqual(fresh(5_000, 5_000));
-  });
-
-  it('resets on a lower ceiling than the drops already counted, so the permalink stays honest', () => {
-    const v = stubViz({ maxDrops: 20_000 });
-    tick(v, 20_000);
-    paint(v);
-    expect(ledger(v)['drops']).toBe(20_000);
-
-    // What the shell would then advertise is #/buffon?maxDrops=1000, and that
-    // has to be the run on screen — not a 20,000-drop ledger under a 1,000 label.
-    expect(setParam(v, 'maxDrops', 1_000)).toBe(false);
-    expect(ledger(v)['drops']).toBe(0);
-    tick(v, 1_200);
-    paint(v);
-    expect(ledger(v)['drops']).toBe(1_000);
-    expect(ledger(v)).toEqual(fresh(1_000, 1_200));
-  });
-
-  it('absorbs a lower ceiling the run has not reached yet: it is still a prefix', () => {
-    const v = stubViz({ maxDrops: 20_000 });
-    tick(v, 3_000);
-    paint(v);
-    expect(setParam(v, 'maxDrops', 5_000)).toBe(true);
-    expect(ledger(v)['drops']).toBe(3_000);
-    tick(v, 3_000);
-    paint(v);
-    expect(ledger(v)).toEqual(fresh(5_000, 6_000));
-  });
-
-  it('absorbs the rate and the overlay, and defers the structural knobs to the shell', () => {
+describe('buffon instance: the run', () => {
+  it('stops at exactly the fixed ceiling and stays there', () => {
     const v = stubViz();
+    tick(v, MAX_DROPS - 1);
+    paint(v);
+    expect(ledger(v)['drops']).toBe(MAX_DROPS - 1);
+    tick(v, 1);
+    paint(v);
+    expect(ledger(v)['drops']).toBe(MAX_DROPS);
+    const done = ledger(v);
+    tick(v, 2_000);
+    paint(v);
+    expect(ledger(v)).toEqual(done);
+  });
+
+  it('resets on every knob it still has, so a change is a fresh experiment at the new value', () => {
+    const changes: ReadonlyArray<readonly [string, ParamValue]> = [
+      ['ratio', 0.5],
+      ['spacing', 96],
+      ['seed', 7],
+    ];
+    for (const [key, value] of changes) {
+      const v = stubViz();
+      tick(v, 1_000);
+      paint(v);
+      expect(setParam(v, key, value), key).toBe(false);
+      expect(ledger(v)['drops'], key).toBe(0);
+      tick(v, 1_000);
+      paint(v);
+
+      const fresh = stubViz({ [key]: value });
+      tick(fresh, 1_000);
+      paint(fresh);
+      expect(ledger(v), key).toEqual(ledger(fresh));
+    }
+  });
+
+  it('ignores the knobs that used to be controls, so an old permalink runs the fixed experiment', () => {
+    // #/buffon?dropRate=2000&maxDrops=100&showAngle=true was a valid address
+    // once. The router drops the keys before they get here; the instance must
+    // not read them either.
+    const v = stubViz({ dropRate: 2_000, maxDrops: 100, showAngle: true });
     tick(v, 240);
-    expect(v.instance.onParamChange?.('dropRate', 500)).toBe(true);
-    expect(v.instance.onParamChange?.('showAngle', true)).toBe(true);
-    expect(v.instance.onParamChange?.('ratio', 0.5)).toBe(false);
-    expect(v.instance.onParamChange?.('spacing', 96)).toBe(false);
-    expect(v.instance.onParamChange?.('seed', 7)).toBe(false);
+    paint(v);
+    expect(ledger(v)['drops']).toBe(240);
+    expect(new Set(v.fg.strokes.map((s) => s.width))).toEqual(new Set([2 * THEME.lineWidth]));
   });
 });
 
@@ -661,27 +673,24 @@ describe('buffon instance: ink', () => {
     return 1 - Math.exp(-area / (v.ctx.width * v.ctx.height));
   }
 
-  it('holds the ink well under saturation at every drop count, plate and overlay', () => {
-    // The "Two hundred thousand" preset. 8,000 drops is already where the old
-    // 20,000-needle field painted a solid vermilion mass over the floorboards:
-    // 8,000 × 102 px² over a 720 × 448 plate is 95% coverage.
-    const steps = Math.round((8_000 * 1_000) / (2_000 * TICK));
+  it('holds the ink well under saturation at every drop count and plate', () => {
+    // 8,000 drops is already where the old 20,000-needle field painted a solid
+    // vermilion mass over the floorboards: 8,000 × 102 px² over a 720 × 448
+    // plate is 95% coverage.
     const plates: ReadonlyArray<[number, number]> = [
       [720, 448],
       [1_280, 720],
       [343, 343], // the phone square, from `aspectNarrow`
     ];
     for (const [width, height] of plates) {
-      for (const showAngle of [false, true]) {
-        const v = stubViz({ dropRate: 2_000, maxDrops: 200_000, showAngle }, width, height);
-        tick(v, steps);
-        paint(v);
-        expect(ledger(v)['drops']).toBeGreaterThan(7_900);
-        const painted = needleCentres(v).length;
-        expect(painted).toBeLessThanOrEqual(buffon.budget?.maxEntities ?? 0);
-        expect(painted).toBeGreaterThan(50);
-        expect(inkFraction(v), `${width}×${height} showAngle=${showAngle}`).toBeLessThan(0.3);
-      }
+      const v = stubViz({}, width, height);
+      tick(v, 8_000);
+      paint(v);
+      expect(ledger(v)['drops']).toBe(8_000);
+      const painted = needleCentres(v).length;
+      expect(painted).toBeLessThanOrEqual(buffon.budget?.maxEntities ?? 0);
+      expect(painted).toBeGreaterThan(50);
+      expect(inkFraction(v), `${width}×${height}`).toBeLessThan(0.3);
     }
   });
 
@@ -700,36 +709,20 @@ describe('buffon instance: ink', () => {
     expect(inkFraction(small)).toBeLessThan(0.25);
   });
 
-  it('paints every needle at full strength: no globalAlpha, and never under 2 px', () => {
-    for (const showAngle of [false, true]) {
-      const v = stubViz({ showAngle });
-      tick(v, 1_000);
-      paint(v);
-      const strokes = v.fg.strokes.filter((s) => s.segments.length > 0);
-      expect(strokes.length).toBeGreaterThan(0);
-      for (const s of strokes) {
-        // A translucent pen composites through the 4.5:1 the canvas foreground
-        // owes the plate — the vermilion is 4.80:1 solid and 1.46:1 at α = 0.25.
-        expect(s.alpha, `alpha at showAngle=${showAngle}`).toBe(1);
-        expect(s.width).toBeGreaterThanOrEqual(2 * THEME.lineWidth);
-        expect([THEME.inkMuted, THEME.data1]).toContain(s.pen);
-      }
+  it('paints every needle at full strength and at exactly 2 px, the overlay being off', () => {
+    const v = stubViz();
+    tick(v, 1_000);
+    paint(v);
+    const strokes = v.fg.strokes.filter((s) => s.segments.length > 0);
+    expect(strokes.length).toBeGreaterThan(0);
+    for (const s of strokes) {
+      // A translucent pen composites through the 4.5:1 the canvas foreground
+      // owes the plate — the vermilion is 4.80:1 solid and 1.46:1 at α = 0.25.
+      expect(s.alpha).toBe(1);
+      expect([THEME.inkMuted, THEME.data1]).toContain(s.pen);
     }
-  });
-
-  it('encodes |sin θ| as weight only when the overlay is on', () => {
-    const off = stubViz({ showAngle: false });
-    tick(off, 1_000);
-    paint(off);
-    expect(new Set(off.fg.strokes.map((s) => s.width))).toEqual(new Set([2 * THEME.lineWidth]));
-
-    const on = stubViz({ showAngle: true });
-    tick(on, 1_000);
-    paint(on);
-    const widths = [...new Set(on.fg.strokes.map((s) => s.width))].sort((a, b) => a - b);
-    expect(widths.length).toBeGreaterThan(4);
-    expect(widths[0]).toBe(2 * THEME.lineWidth);
-    expect(widths[widths.length - 1]).toBe(4 * THEME.lineWidth);
+    // With the weight-by-angle overlay fixed off, every needle is the 2 px floor.
+    expect(new Set(strokes.map((s) => s.width))).toEqual(new Set([2 * THEME.lineWidth]));
   });
 
   it('paints crossings over misses', () => {
@@ -741,32 +734,50 @@ describe('buffon instance: ink', () => {
   });
 });
 
+/** Prose as the page prints it, for counting sentences. */
+function text(prose: Prose): string {
+  return typeof prose === 'string' ? prose : prose.map((s) => (typeof s === 'string' ? s : s.v)).join('');
+}
+
+/** A full stop followed by a new sentence. A decimal point has no space after it. */
+const SECOND_SENTENCE = /[.!?]\s+\S/;
+
 describe('buffon metadata', () => {
-  it('declares every parameter the contract needs, with a seed', () => {
-    expect(buffon.params.map((p) => p.key)).toEqual([
-      'ratio',
-      'spacing',
-      'dropRate',
-      'maxDrops',
-      'showAngle',
-      'seed',
-    ]);
+  it('shows two knobs and keeps the seed for the URL only', () => {
+    expect(buffon.params.map((p) => p.key)).toEqual(['ratio', 'spacing', 'seed']);
+    // The rail never renders a seed, so a reader turns exactly two things.
+    expect(buffon.params.filter((p) => p.kind !== 'seed')).toHaveLength(2);
     expect(buffon.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
   });
 
-  it('sets every preset value from a declared parameter', () => {
-    for (const preset of buffon.presets ?? []) {
+  it('offers at most three presets, each one plain sentence, each from a declared parameter', () => {
+    const presets = buffon.presets ?? [];
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets.length).toBeLessThanOrEqual(3);
+    for (const preset of presets) {
+      expect(text(preset.caption), preset.id).not.toMatch(SECOND_SENTENCE);
       for (const key of Object.keys(preset.values)) {
         expect(buffon.params.some((p) => p.key === key), `preset ${preset.id} sets unknown param ${key}`).toBe(true);
       }
     }
+    // Ordered to walk to the insight: few crossings, then many, then a bigger
+    // floor that changes nothing.
+    expect(presets.map((p) => p.id)).toEqual(['short-needle', 'full-length', 'wider-boards']);
   });
 
-  it('sources every fact', () => {
-    expect(buffon.facts.length).toBeGreaterThanOrEqual(3);
+  it('states at most two facts, one sentence each, and sources both', () => {
+    expect(buffon.facts.length).toBeGreaterThan(0);
+    expect(buffon.facts.length).toBeLessThanOrEqual(2);
     for (const fact of buffon.facts) {
+      expect(text(fact.text)).not.toMatch(SECOND_SENTENCE);
       expect(fact.source.label.length).toBeGreaterThan(0);
       expect(fact.source.url).toMatch(/^https:\/\//);
     }
+  });
+
+  it('introduces itself in one present-tense sentence', () => {
+    const blurb = text(buffon.blurb);
+    expect(blurb).not.toMatch(SECOND_SENTENCE);
+    expect(blurb).toMatch(/^Drops /);
   });
 });

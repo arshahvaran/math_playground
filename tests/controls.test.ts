@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { byClass, installDom, type Harness } from './dom-harness';
+import type { ParamSpec } from '../src/core/types';
 import {
+  createControls,
   intEntry,
   logPositionFor,
   logPositions,
@@ -29,11 +32,16 @@ const RANGES: ReadonlyArray<readonly [number, number]> = [
   [1e-3, 1e3], // a symmetric six-decade span
 ];
 
-/** Every log fader in the registry, as `[label, min, max, step]`. */
+/**
+ * Every integer-stepped log fader in the registry, as `[label, min, max, step]`.
+ * The Lorenz starting gap (10⁻¹² → 10⁻³ on a 10⁻¹² step) is the one log fader
+ * left out: walking its value grid a step at a time is a billion iterations.
+ */
 const LOG_SPECS: ReadonlyArray<readonly [string, number, number, number]> = [
-  ['galton balls', 1, 20_000, 1],
-  ['buffon dropRate', 1, 2000, 1],
-  ['buffon maxDrops', 100, 200_000, 100],
+  ['galton balls', 1, 5_000, 1],
+  ['montecarlo-pi darts', 100, 2_000_000, 100],
+  ['dla particles', 100, 50_000, 100],
+  ['chaos-game points', 1_000, 2_000_000, 1_000],
 ];
 
 describe('mapLogPosition', () => {
@@ -345,5 +353,49 @@ describe('intEntry', () => {
   it('rounds a fractional entry to the lattice', () => {
     expect(intEntry('7.6', 12, 3, 20)).toBe(8);
     expect(intEntry('12.4', 12, 3, 20)).toBeNull();
+  });
+});
+
+/**
+ * The rail renders every kind of `ParamSpec` but one. A seed is not a knob a
+ * reader turns — it is the transport's Shuffle key — and a help sentence under
+ * every row was most of the text on the page.
+ */
+describe('the rail', () => {
+  let dom: Harness | null = null;
+
+  afterEach(() => {
+    dom?.teardown();
+    dom = null;
+  });
+
+  it('renders no seed row and no help text', () => {
+    dom = installDom();
+    const host = dom.document.createElement('form');
+    dom.app.appendChild(host);
+    const specs: readonly ParamSpec[] = [
+      { kind: 'int', key: 'rows', label: 'Rows', min: 3, max: 20, default: 12, help: 'Peg rows.' },
+      { kind: 'range', key: 'p', label: 'Bias', min: 0, max: 1, step: 0.01, default: 0.5, help: 'A coin.' },
+      { kind: 'toggle', key: 'trails', label: 'Trails', default: true, help: 'Fading traces.' },
+      { kind: 'choice', key: 'lattice', label: 'Lattice', options: [{ value: 'off', label: 'Off' }], default: 'off' },
+      { kind: 'seed', key: 'seed', label: 'Seed', default: 42, help: 'Same seed, same pile.' },
+    ];
+    const handle = createControls(host as unknown as HTMLElement, specs, { seed: 7 }, () => undefined);
+
+    // Declared order, seed dropped.
+    const rows = byClass(dom, 'control');
+    expect(rows.map((row) => row.className)).toEqual([
+      'control control--int',
+      'control control--range',
+      'control control--toggle',
+      'control control--choice',
+    ]);
+    expect(rows.some((row) => row.textContent.includes('Seed'))).toBe(false);
+    expect(byClass(dom, 'control__help')).toEqual([]);
+    expect(host.textContent).not.toContain('Peg rows.');
+
+    // Setting the seed is not an error either; there is simply nothing to show.
+    expect(() => handle.setValue('seed', 9)).not.toThrow();
+    handle.destroy();
   });
 });

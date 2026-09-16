@@ -424,12 +424,10 @@ const THEME = {
   particleRadius: 2,
 };
 
+/** What coerceParams() hands the tab: its two controls and the permalink's seed. */
 const DEFAULTS: Record<string, ParamValue> = {
   particles: 2_000,
   stickiness: 1,
-  lattice: 'off',
-  walkSpeed: 300,
-  colourByArrival: true,
   seed: SEED,
 };
 
@@ -520,6 +518,26 @@ describe('dla instance: readouts', () => {
     expect(b.emitted.at(-1)).toEqual(last);
   });
 
+  it('marks one plain-language headline and demotes the bookkeeping to the exact table', () => {
+    const v = stubViz();
+    tick(v, 400);
+    paint(v);
+    const last = v.emitted.at(-1) ?? [];
+    const by = Object.fromEntries(last.map((r) => [r.key, r]));
+    // The dimension is the one number a newcomer reads, in words that need no
+    // statistics; the hint says what the scale means.
+    expect(last.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['dimension']);
+    expect(by['dimension']?.plain).toBe('how feathery the cluster is');
+    expect(by['dimension']?.hint).toBe('a solid blob would score 2, a line 1');
+    expect(by['dimension']?.expertOnly).toBeUndefined();
+    expect(by['particles']?.plain).toBe('particles stuck');
+    expect(by['particles']?.expertOnly).toBeUndefined();
+    // The radius of gyration and the relaunch count are the model's own
+    // bookkeeping: still published, still tested, never in the simple view.
+    expect(by['gyration']?.expertOnly).toBe(true);
+    expect(by['relaunched']?.expertOnly).toBe(true);
+  });
+
   it('draws without mutating the simulation, and resets to a single seed particle', () => {
     const v = stubViz();
     tick(v, 300);
@@ -533,15 +551,25 @@ describe('dla instance: readouts', () => {
     v.instance.destroy();
   });
 
-  it('grows the same cluster at any walk speed — only the clock differs', () => {
-    const slow = stubViz({ walkSpeed: 50 });
-    const fast = stubViz({ walkSpeed: 500 });
-    tick(slow, 1_000);
-    tick(fast, 100);
-    paint(slow);
-    paint(fast);
-    // 50 × 1,000 and 500 × 100 are the same 50,000 walk steps.
-    expect(ledger(slow)).toEqual(ledger(fast));
+  it('grows the headless model’s cluster step for step — the clock is fixed and is not the physics', () => {
+    // The tab walks 300 steps a tick, so a thousand ticks is exactly the
+    // 300,000 steps the model takes here: the same particles in the same
+    // places, because the RNG is consulted only inside the walk. That is what
+    // lets the transport own the speed without a slider on the tab.
+    const v = stubViz();
+    tick(v, 1_000);
+    paint(v);
+    const model = createCluster(createRng(SEED), {
+      particles: 2_000,
+      capacity: 50_000,
+      stickiness: 1,
+      lattice: 'off',
+    });
+    model.advance(300 * 1_000);
+    expect(model.count).toBeGreaterThan(20);
+    expect(ledger(v)['particles']).toBe(model.count);
+    expect(ledger(v)['gyration']).toBe(model.gyration);
+    expect(ledger(v)['relaunched']).toBe(model.relaunches);
   });
 
   it('grows the same cluster on any plate, so a permalink survives the recipient’s window', () => {
@@ -621,15 +649,6 @@ describe('dla instance: painting', () => {
     for (const p of graphite) expect(p.alpha).toBe(1);
     // Every grain gets the opaque base: as many graphite marks as vermilion.
     expect(grains(graphite)).toHaveLength(grains(v.bg.fills.filter((p) => p.pen === THEME.data1)).length);
-
-    // With the toggle off there is one pen and no alpha anywhere.
-    const plain = stubViz({ colourByArrival: false });
-    tick(plain, 600);
-    paint(plain);
-    for (const p of plain.bg.fills) {
-      expect(p.pen).toBe(THEME.data1);
-      expect(p.alpha).toBe(1);
-    }
   });
 
   it('draws discs where there is room for one and pixel-snapped squares where there is not', () => {
@@ -663,24 +682,27 @@ describe('dla instance: painting', () => {
 });
 
 describe('dla instance: parameters', () => {
-  it('absorbs the walk speed and the colouring, and defers the experiment to the shell', () => {
+  it('defers a change of experiment to the shell', () => {
     const v = stubViz();
     tick(v, 200);
-    expect(v.instance.onParamChange?.('walkSpeed', 100)).toBe(true);
-    expect(v.instance.onParamChange?.('colourByArrival', false)).toBe(true);
+    // The particles already frozen belong to the old stickiness or the old
+    // seed, so there is no live absorption: the shell resets.
     expect(v.instance.onParamChange?.('stickiness', 0.05)).toBe(false);
-    expect(v.instance.onParamChange?.('lattice', 'square')).toBe(false);
     expect(v.instance.onParamChange?.('seed', 7)).toBe(false);
   });
 
-  it('repaints the whole cluster when the colouring changes', () => {
-    const v = stubViz();
-    tick(v, 400);
-    paint(v);
-    const n = ledger(v)['particles'] ?? 0;
-    expect(setParam(v, 'colourByArrival', false)).toBe(true);
-    // Every grain already on the layer is the wrong colour now.
-    expect(grainCount(v.bg.fills)).toBe(n);
+  it('honours the permalink’s seed with no control for it', () => {
+    // The seed is declared so coerceParams() keeps it, and the rail skips it.
+    // Two runs from one seed are one cluster; a different seed is a different one.
+    const a = stubViz({ seed: 7 });
+    const b = stubViz({ seed: 7 });
+    const c = stubViz({ seed: 8 });
+    for (const v of [a, b, c]) {
+      tick(v, 400);
+      paint(v);
+    }
+    expect(ledger(a)).toEqual(ledger(b));
+    expect(ledger(c)['gyration']).not.toBe(ledger(a)['gyration']);
   });
 
   it('absorbs a raised particle target as a prefix continuation, and resets on a lowered one', () => {
@@ -705,7 +727,7 @@ describe('dla instance: parameters', () => {
   });
 
   it('stops at the target and stays there', () => {
-    const v = stubViz({ particles: 100, walkSpeed: 500 });
+    const v = stubViz({ particles: 100 });
     tick(v, 4_000);
     paint(v);
     expect(ledger(v)['particles']).toBe(100);
@@ -755,20 +777,51 @@ describe('viewReach and arrivalBand', () => {
   });
 });
 
+/**
+ * One sentence: ends in a full stop and has no sentence break inside it. A
+ * decimal point — "1.71" — is not a break, which is why this is not indexOf.
+ */
+function expectOneSentence(text: string): void {
+  expect(text.endsWith('.')).toBe(true);
+  expect(text).not.toMatch(/[.!?]\s/);
+}
+
 describe('dla metadata', () => {
-  it('declares every parameter the contract needs, with a seed', () => {
+  it('declares two controls and the seed, and nothing else', () => {
     expect(dla.id).toBe('dla');
     expect(dla.group).toBe('randomness');
-    expect(dla.params.map((p) => p.key)).toEqual([
-      'particles',
-      'stickiness',
-      'lattice',
-      'walkSpeed',
-      'colourByArrival',
-      'seed',
-    ]);
+    // Particles and stickiness are the whole rail: the lattice, the walk speed
+    // and the arrival colouring are fixed constants now. The seed is declared
+    // for the permalink and is not rendered.
+    expect(dla.params.map((p) => p.key)).toEqual(['particles', 'stickiness', 'seed']);
+    expect(dla.params.filter((p) => p.kind !== 'seed')).toHaveLength(2);
     expect(dla.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
     expect(dla.budget?.maxEntities).toBe(50_000);
+  });
+
+  it('describes itself in one plain sentence', () => {
+    const blurb = typeof dla.blurb === 'string' ? dla.blurb : '';
+    expect(blurb.length).toBeGreaterThan(0);
+    expectOneSentence(blurb);
+  });
+
+  it('walks three presets from one particle to the stickiness moment, each with one plain caption', () => {
+    const presets = dla.presets ?? [];
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets.length).toBeLessThanOrEqual(3);
+    // Ordered so trying them in turn reaches the insight: the mechanism one
+    // particle at a time, then the sticky cluster, then the same count barely
+    // sticky and visibly denser.
+    expect(presets.map((p) => p.id)).toEqual(['a-hundred', 'sticky', 'barely-sticky']);
+    const sticky = presets.find((p) => p.id === 'sticky');
+    const barely = presets.find((p) => p.id === 'barely-sticky');
+    expect(barely?.values['particles']).toBe(sticky?.values['particles']);
+    expect(barely?.values['stickiness']).toBeLessThan(Number(sticky?.values['stickiness']));
+    for (const preset of presets) {
+      // A caption is one sentence of plain words, with no variable in it.
+      expect(typeof preset.caption).toBe('string');
+      expectOneSentence(String(preset.caption));
+    }
   });
 
   it('sets every preset value from a declared parameter, and keeps them inside its range', () => {
@@ -788,9 +841,12 @@ describe('dla metadata', () => {
     }
   });
 
-  it('sources every fact', () => {
-    expect(dla.facts.length).toBeGreaterThanOrEqual(3);
+  it('offers at most two facts, one sentence each, every one sourced', () => {
+    expect(dla.facts.length).toBeGreaterThan(0);
+    expect(dla.facts.length).toBeLessThanOrEqual(2);
     for (const fact of dla.facts) {
+      expect(typeof fact.text).toBe('string');
+      expectOneSentence(String(fact.text));
       expect(fact.source.label.length).toBeGreaterThan(0);
       expect(fact.source.url).toMatch(/^https:\/\//);
     }

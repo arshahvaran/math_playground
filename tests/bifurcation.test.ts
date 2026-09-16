@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
-import type { ParamValue, Readout, VizContext } from '../src/core/types';
-import { bifurcation, doublingLevel, layoutPlot, tickStep } from '../src/viz/bifurcation/index';
+import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
+import {
+  bifurcation,
+  cycleText,
+  doublingLevel,
+  layoutPlot,
+  tickStep,
+  windowFor,
+} from '../src/viz/bifurcation/index';
 import {
   ACCUMULATION,
   DEFAULT_X0,
@@ -22,6 +29,15 @@ const SEED = 42;
 
 /** The engine's tick: 120 Hz. */
 const TICK = 1000 / 120;
+
+/**
+ * Iterations the sweep throws away before sampling a column. Fixed in the
+ * module, not a control; the ledger's iteration count is built from it.
+ */
+const TRANSIENT = 5000;
+
+/** Words the simple view must never print — the same list the readouts test keeps. */
+const BANNED = /\b(mean|variance|analytic|converged|estimator|standard error|bin|residual|tolerance|asymptotic)\b/i;
 
 // ---------------------------------------------------------------------------
 // The map
@@ -263,15 +279,10 @@ describe('layout', () => {
       [1100, 688],
       [343, 312],
     ] as const) {
-      // The last one is the case that forces every-other labelling: four
-      // decimals on a phone plate is six digits per numeral against a 41 px
+      // The island is the case that forces every-other labelling: three
+      // decimals on a phone plate is five digits per numeral against a 41 px
       // tick spacing.
-      for (const values of [
-        {},
-        { rMin: 3.4, rMax: 3.57 },
-        { rMin: 3.95, rMax: 4 },
-        { rMin: 3.568, rMax: 3.572 },
-      ]) {
+      for (const values of [{}, { zoom: 'cascade' }, { zoom: 'deep-chaos' }, { zoom: 'island' }]) {
         const v = stubViz(values, width, height);
         const numerals = v.bg.labels.filter((l) => l.align === 'center').sort((a, b) => a.x - b.x);
         expect(numerals.length, `${width} ${JSON.stringify(values)}`).toBeGreaterThanOrEqual(3);
@@ -297,6 +308,33 @@ describe('layout', () => {
       expect(n).toBeGreaterThanOrEqual(3);
       expect(n).toBeLessThanOrEqual(10);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The words on the plate
+// ---------------------------------------------------------------------------
+
+describe('the zoom windows and the cursor window', () => {
+  it('names five windows and falls back to the whole map for a value it does not know', () => {
+    expect(windowFor('whole')).toMatchObject({ lo: 2.4, hi: 4 });
+    expect(windowFor('first-split')).toMatchObject({ lo: 2.9, hi: 3.1 });
+    expect(windowFor('cascade')).toMatchObject({ lo: 3.4, hi: 3.57 });
+    expect(windowFor('island')).toMatchObject({ lo: 3.82, hi: 3.86 });
+    expect(windowFor('deep-chaos')).toMatchObject({ lo: 3.95, hi: 4 });
+    // An old permalink carried rMin and rMax; those keys are gone and the
+    // whole map is the honest thing to show for them.
+    expect(windowFor(undefined)).toMatchObject({ id: 'whole' });
+    expect(windowFor('rMin')).toMatchObject({ id: 'whole' });
+    expect(windowFor(3.4)).toMatchObject({ id: 'whole' });
+  });
+
+  it('says what x does at the cursor in words, not a period', () => {
+    expect(cycleText(0)).toBe('never repeats');
+    expect(cycleText(1)).toBe('settles on 1 value');
+    expect(cycleText(2)).toBe('cycles through 2 values');
+    expect(cycleText(64)).toBe('cycles through 64 values');
+    for (const p of [0, 1, 2, 3, 4, 8, 64]) expect(cycleText(p)).not.toMatch(BANNED);
   });
 });
 
@@ -406,11 +444,8 @@ const THEME = {
 };
 
 const DEFAULTS: Record<string, ParamValue> = {
-  rMin: 2.4,
-  rMax: 4,
-  transient: 2000,
-  samples: 400,
-  showLyapunov: true,
+  zoom: 'whole',
+  detail: 400,
   seed: SEED,
 };
 
@@ -464,12 +499,17 @@ function setParam(v: Harness, key: string, value: ParamValue): boolean {
 
 /** Run to the end of the sweep, the way the transport's fast-forward does. */
 function sweep(v: Harness): void {
+  sweep2(v, 704);
+}
+
+/** Sweep to a known column count on a re-laid-out plate. */
+function sweep2(v: Harness, columns: number): void {
   for (let i = 0; i < 40; i++) {
     tick(v, 300);
     paint(v);
-    if (ledger(v)['columns'] === 704) return;
+    if (ledger(v)['columns'] === columns) return;
   }
-  throw new Error(`sweep did not finish: ${ledger(v)['columns']} columns`);
+  throw new Error(`sweep did not finish: ${ledger(v)['columns']} of ${columns}`);
 }
 
 function ledger(v: Harness): Record<string, number> {
@@ -490,6 +530,17 @@ function preset(id: string): Record<string, ParamValue> {
   return { ...(found?.values ?? {}) };
 }
 
+/** The corner window's plate: the one fill on the foreground. */
+function windowPlate(v: Harness): Fill {
+  const plates = v.fg.fills.filter((f) => f.pen === THEME.canvas);
+  expect(plates).toHaveLength(1);
+  return plates[0]!;
+}
+
+function flatten(text: Prose): string {
+  return typeof text === 'string' ? text : text.map((s) => (typeof s === 'string' ? s : s.v)).join('');
+}
+
 describe('bifurcation instance: the ledger', () => {
   it('publishes every number it draws, and holds still between draws', () => {
     const v = stubViz();
@@ -497,15 +548,41 @@ describe('bifurcation instance: the ledger', () => {
     paint(v);
     const keys = (v.emitted.at(-1) ?? []).map((r) => r.key);
     expect(keys).toEqual(['columns', 'span', 'r', 'period', 'lyapunov', 'feigenbaum', 'iterations']);
-    // The three numbers painted into the corner window are all in the ledger.
+    // The two lines in the corner window are both in the ledger: r under the
+    // cursor, and the period it resolved there, in words.
+    const l = ledger(v);
     expect(v.fg.texts.some((t) => t.startsWith('r '))).toBe(true);
-    expect(v.fg.texts.some((t) => t.startsWith('λ '))).toBe(true);
-    expect(v.fg.texts.some((t) => t.startsWith('period '))).toBe(true);
+    expect(v.fg.texts).toContain(cycleText(l['period'] ?? -1));
+    // λ is an expert reading now: the only λ on the plate is the zero line's
+    // label, not a number.
+    expect(v.fg.texts.filter((t) => t.startsWith('λ'))).toEqual(['λ = 0']);
 
     const before = ledger(v);
     paint(v);
     expect(ledger(v)).toEqual(before);
     expect(row(v, 'feigenbaum').target).toBeCloseTo(FEIGENBAUM_DELTA, 9);
+  });
+
+  it('marks the doubling ratio as the one headline, in words a newcomer can read', () => {
+    const v = stubViz();
+    tick(v, 100);
+    paint(v);
+    const readouts = v.emitted.at(-1) ?? [];
+    expect(readouts.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['feigenbaum']);
+    const feigenbaum = row(v, 'feigenbaum');
+    expect(feigenbaum.plain).toBe('the doubling ratio');
+    expect(feigenbaum.hint).toContain('4.669');
+    // The precise names and values stay exactly as they were for the table.
+    expect(feigenbaum.label).toBe('Feigenbaum ratio');
+    expect(feigenbaum.digits).toBe(6);
+    expect(row(v, 'span').expertOnly).toBe(true);
+    expect(row(v, 'lyapunov').expertOnly).toBe(true);
+    for (const r of readouts) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain, r.key).toBeDefined();
+      expect(r.plain, r.key).not.toMatch(BANNED);
+      expect(r.hint ?? '', r.key).not.toMatch(BANNED);
+    }
   });
 
   it('counts columns, iterations and the r window it was given', () => {
@@ -515,7 +592,7 @@ describe('bifurcation instance: the ledger', () => {
     expect(l['columns']).toBe(704);
     expect(l['span']).toBeCloseTo(1.6, 12);
     // Every column costs transient + samples iterations of the map.
-    expect(l['iterations']).toBe(704 * (2000 + 400));
+    expect(l['iterations']).toBe(704 * (TRANSIENT + 400));
     // The cursor parks half a column short of the right edge, at that column's centre.
     expect(l['r']).toBeCloseTo(4 - 1.6 / 704 / 2, 9);
   });
@@ -594,17 +671,41 @@ describe('bifurcation instance: the two layers', () => {
     expect(v.fg.strokes.filter((s) => s.pen === THEME.data1)).toHaveLength(0);
   });
 
-  it('absorbs the λ toggle without touching the diagram, and resets for everything else', () => {
+  it('paints the corner window the same size on every frame, whatever the words in it', () => {
+    // Before the first column the window shows dashes; a fixed point reads
+    // "settles on 1 value"; the chaos at the right edge "never repeats". None
+    // of those may move the box.
+    const v = stubViz();
+    paint(v);
+    const empty = windowPlate(v);
+    tick(v, 60);
+    paint(v);
+    expect(ledger(v)['period']).toBe(1);
+    const settled = windowPlate(v);
+    sweep(v);
+    paint(v);
+    expect(ledger(v)['period']).toBe(0);
+    const chaotic = windowPlate(v);
+    for (const plate of [settled, chaotic]) {
+      expect(plate.x).toBe(empty.x);
+      expect(plate.y).toBe(empty.y);
+      expect(plate.w).toBe(empty.w);
+      expect(plate.h).toBe(empty.h);
+    }
+  });
+
+  it('resets for every control, because every column belongs to a different diagram', () => {
     const v = stubViz();
     sweep(v);
-    expect(setParam(v, 'showLyapunov', false)).toBe(true);
-    expect(ledger(v)['columns']).toBe(704);
-    expect(v.fg.strokes.filter((s) => s.pen === THEME.data2)).toHaveLength(0);
-    expect(v.bg.fills).toHaveLength(0);
-
-    expect(setParam(v, 'rMax', 3.6)).toBe(false);
+    expect(setParam(v, 'zoom', 'cascade')).toBe(false);
     expect(ledger(v)['columns']).toBe(0);
-    expect(ledger(v)['span']).toBeCloseTo(1.2, 12);
+    expect(ledger(v)['span']).toBeCloseTo(0.17, 12);
+    expect(setParam(v, 'detail', 500)).toBe(false);
+    expect(ledger(v)['columns']).toBe(0);
+    sweep(v);
+    expect(ledger(v)['iterations']).toBe(704 * (TRANSIENT + 500));
+    expect(setParam(v, 'seed', 7)).toBe(false);
+    expect(ledger(v)['columns']).toBe(0);
   });
 
   it('rewinds the sweep on a resize, because every column moved', () => {
@@ -619,16 +720,6 @@ describe('bifurcation instance: the two layers', () => {
     expect(ledger(v)['columns']).toBe(884);
   });
 });
-
-/** Sweep to a known column count on a re-laid-out plate. */
-function sweep2(v: Harness, columns: number): void {
-  for (let i = 0; i < 40; i++) {
-    tick(v, 300);
-    paint(v);
-    if (ledger(v)['columns'] === columns) return;
-  }
-  throw new Error(`sweep did not finish: ${ledger(v)['columns']} of ${columns}`);
-}
 
 describe('bifurcation instance: convergence to the analytic values', () => {
   it('measures δ inside the uncertainty its own column width implies', () => {
@@ -650,9 +741,11 @@ describe('bifurcation instance: convergence to the analytic values', () => {
     sweep(v);
     const feigenbaum = row(v, 'feigenbaum');
     const tolerance = feigenbaum.tolerance ?? 0;
-    // Seven times the window over the same 704 columns, so h is seven times
-    // larger and so is the uncertainty: 5.9%. Measured 4.8780, 4.5% from δ —
-    // agreement, and a visibly worse one than the zoom above, which is the
+    // Nine times the window over the same 704 columns, so h is nine times
+    // larger and the deeper triples are refused; what survives is the first
+    // one — the onsets at 3, 1 + √6 and 3.5441, whose own ratio is 4.7514 —
+    // known to 5.8%. Measured 4.7143, 0.97% from δ: agreement, but a reading
+    // known only to 5.8% where the zoom above knows it to 2.9%, which is the
     // lesson the Cascade preset exists to make.
     expect(tolerance).toBeLessThan(0.1);
     expect(Math.abs(feigenbaum.value - FEIGENBAUM_DELTA) / FEIGENBAUM_DELTA).toBeLessThan(tolerance);
@@ -663,15 +756,15 @@ describe('bifurcation instance: convergence to the analytic values', () => {
     // windows up in the chaos. The uncertainty that carries — hundreds of
     // percent — is what disqualifies them, and the ledger shows no reading
     // rather than a number.
-    for (const id of ['period-three', 'deep-chaos']) {
-      const v = stubViz(preset(id));
+    for (const zoom of ['island', 'deep-chaos']) {
+      const v = stubViz({ zoom, detail: 500 });
       sweep(v);
-      expect(Number.isNaN(row(v, 'feigenbaum').value), id).toBe(true);
+      expect(Number.isNaN(row(v, 'feigenbaum').value), zoom).toBe(true);
     }
   });
 
   it('reaches ln 2 at r = 4 on the deep-chaos window, and says so', () => {
-    const v = stubViz(preset('deep-chaos'));
+    const v = stubViz({ zoom: 'deep-chaos', detail: 1000 });
     sweep(v);
     const lyapunov = row(v, 'lyapunov');
     expect(lyapunov.target).toBe(Math.LN2);
@@ -683,7 +776,7 @@ describe('bifurcation instance: convergence to the analytic values', () => {
   });
 
   it('finds the period-3 window where 1 + √8 says it is', () => {
-    const v = stubViz(preset('period-three'));
+    const v = stubViz({ zoom: 'island', detail: 500 });
     let opened = NaN;
     let lambdaInside = NaN;
     // One tick a look: the sweep advances 2.35 columns a tick here, so the
@@ -699,22 +792,23 @@ describe('bifurcation instance: convergence to the analytic values', () => {
     // The window opens at r = 1 + √8 = 3.8284271, and a column here is 5.7e-5
     // wide. The bound is 5e-4, about nine columns: three for the sampling above
     // and the rest for the tangent bifurcation itself, where the new 3-cycle is
-    // neutral and an orbit needs more than the preset's 2,000 iterations to
-    // land on it. Measured: 3.8284943, one and a fifth columns past 1 + √8.
+    // neutral and an orbit needs more than the 5,000 iterations the sweep
+    // spends to land on it. Measured: 3.8284943, one and a fifth columns past
+    // 1 + √8.
     expect(PERIOD_THREE_ONSET).toBeCloseTo(3.8284271, 7);
     expect(opened).toBeGreaterThan(PERIOD_THREE_ONSET);
     expect(opened - PERIOD_THREE_ONSET).toBeLessThan(5e-4);
     // Inside the window the orbit is a stable 3-cycle, so λ is negative — order
-    // sitting inside chaos, which is the whole point of the preset.
+    // sitting inside chaos, which is the whole point of the window.
     expect(lambdaInside).toBeLessThan(0);
   });
 
   it('shows the first doubling at r = 3 as λ touching zero', () => {
-    const v = stubViz(preset('first-doubling'));
+    const v = stubViz(preset('first-split'));
     sweep2(v, 704);
     // The window is 2.9 to 3.1, so the doubling sits at its centre. Sample the
     // ledger as the cursor crosses: below r = 3 the period is 1, above it is 2.
-    const w = stubViz(preset('first-doubling'));
+    const w = stubViz(preset('first-split'));
     let belowPeriod = 0;
     let abovePeriod = 0;
     let minAbsLambda = Infinity;
@@ -729,8 +823,8 @@ describe('bifurcation instance: convergence to the analytic values', () => {
     }
     expect(belowPeriod).toBe(1);
     expect(abovePeriod).toBe(2);
-    // λ is exactly 0 at r = 3 and the estimate over 400 samples after 3,000
-    // iterations carries the −ln(1 + N/n₀)/N ≈ −4e-5 of the neutral fixed
+    // λ is exactly 0 at r = 3 and the estimate over 400 samples after 5,000
+    // iterations carries the −ln(1 + N/n₀)/N ≈ −2e-4 of the neutral fixed
     // point; a hundredth is far above that and far below the −0.9 of the
     // stable 2-cycle a fifth of a unit later.
     expect(minAbsLambda).toBeLessThan(0.01);
@@ -738,33 +832,72 @@ describe('bifurcation instance: convergence to the analytic values', () => {
 });
 
 describe('bifurcation: the shipped tab', () => {
-  it('is registered with a permanent id, a budget, and presets that name the moment', () => {
+  it('is registered with a permanent id, a budget, and a one-sentence blurb', () => {
     expect(bifurcation.id).toBe('bifurcation');
     expect(bifurcation.group).toBe('chaos');
     expect(bifurcation.budget?.maxEntities).toBeGreaterThan(0);
-    expect(bifurcation.presets?.map((p) => p.id)).toEqual([
-      'whole-map',
-      'first-doubling',
-      'cascade',
-      'period-three',
-      'deep-chaos',
-    ]);
-    expect(bifurcation.facts.length).toBeGreaterThanOrEqual(3);
-    for (const fact of bifurcation.facts) expect(fact.source.label.length).toBeGreaterThan(0);
+    const blurb = flatten(bifurcation.blurb);
+    expect(blurb).not.toMatch(BANNED);
+    expect(blurb.match(/[.!?](?=\s)/g) ?? []).toHaveLength(0);
+    expect(blurb.endsWith('.')).toBe(true);
   });
 
-  it('declares a seed and keeps every preset inside its own slider range', () => {
+  it('offers two controls a newcomer can turn, and a seed the rail never shows', () => {
+    expect(bifurcation.params.map((p) => p.key)).toEqual(['zoom', 'detail', 'seed']);
+    const [zoom, detail, seed] = bifurcation.params;
+    expect(zoom?.kind).toBe('choice');
+    if (zoom?.kind === 'choice') {
+      expect(zoom.options.map((o) => o.value)).toEqual(['whole', 'first-split', 'cascade', 'island', 'deep-chaos']);
+      expect(zoom.options.map((o) => o.label)).toEqual([
+        'The whole map',
+        'First split',
+        'The cascade',
+        'The island of order',
+        'Deep chaos',
+      ]);
+      expect(zoom.default).toBe('whole');
+    }
+    expect(detail?.kind).toBe('int');
+    if (detail?.kind === 'int') {
+      expect(detail.min).toBe(100);
+      expect(detail.max).toBe(1000);
+      expect(detail.default).toBe(400);
+    }
+    // The seed still types a permalink's `seed=` through coerceParams; the
+    // rail simply renders nothing for it.
+    expect(seed?.kind).toBe('seed');
+  });
+
+  it('walks to the insight in three presets, each with a one-sentence caption', () => {
+    expect(bifurcation.presets?.map((p) => p.id)).toEqual(['whole-map', 'first-split', 'cascade']);
     const specs = new Map(bifurcation.params.map((p) => [p.key, p]));
-    expect(specs.get('seed')?.kind).toBe('seed');
     for (const p of bifurcation.presets ?? []) {
+      const caption = flatten(p.caption);
+      expect(caption, p.id).not.toBe('');
+      expect(caption, p.id).not.toMatch(BANNED);
+      expect(caption.match(/[.!?](?=\s)/g) ?? [], p.id).toHaveLength(0);
       for (const [key, value] of Object.entries(p.values)) {
         const spec = specs.get(key);
         expect(spec, `preset ${p.id} sets unknown ${key}`).toBeDefined();
-        if (spec && (spec.kind === 'range' || spec.kind === 'int')) {
+        if (!spec) continue;
+        if (spec.kind === 'range' || spec.kind === 'int') {
           expect(value).toBeGreaterThanOrEqual(spec.min);
           expect(value).toBeLessThanOrEqual(spec.max);
         }
+        if (spec.kind === 'choice') expect(spec.options.some((o) => o.value === value), `${p.id} ${key}`).toBe(true);
       }
+    }
+    // The cascade is where the headline number is read, and it is the last stop.
+    expect(preset('cascade')['zoom']).toBe('cascade');
+  });
+
+  it('cites two facts, one sentence each', () => {
+    expect(bifurcation.facts).toHaveLength(2);
+    for (const fact of bifurcation.facts) {
+      const text = flatten(fact.text);
+      expect(text.match(/[.!?](?=\s)/g) ?? [], text).toHaveLength(0);
+      expect(fact.source.label.length).toBeGreaterThan(0);
+      expect(fact.source.url).toMatch(/^https:\/\/doi\.org\//);
     }
   });
 });

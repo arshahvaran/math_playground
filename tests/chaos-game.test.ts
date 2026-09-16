@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Readout, VizContext } from '../src/core/types';
-import { chaosGame, layoutView, resolveSystem } from '../src/viz/chaos-game/index';
+import { SHAPES, chaosGame, layoutView, resolveSystem } from '../src/viz/chaos-game/index';
 import {
   BOX_MAX_LEVEL,
   BOX_MIN_LEVEL,
@@ -29,9 +29,6 @@ const SEED = 42;
 
 /** The engine's tick: 120 Hz. */
 const TICK = 1000 / 120;
-
-/** The `system` value that hands control to the vertices and ratio sliders. */
-const CUSTOM_ID = 'polygon';
 
 /**
  * The tolerance every convergence assertion here uses, and where it comes from.
@@ -598,14 +595,10 @@ const THEME = {
   particleRadius: 2,
 };
 
+/** Everything the URL can carry: the shape, the dot count, and the seed the rail never shows. */
 const DEFAULTS: Record<string, ParamValue> = {
   system: 'sierpinski',
-  n: 3,
-  r: 0.5,
-  restriction: 'none',
   points: 200_000,
-  pointsPerFrame: 2_000,
-  colourByVertex: false,
   seed: SEED,
 };
 
@@ -632,7 +625,7 @@ function stubViz(overrides: Record<string, ParamValue> = {}, width = 560, height
 
 type Viz = ReturnType<typeof stubViz>;
 
-/** pointsPerFrame 2,000 at the 120 Hz tick is exactly 1,000 points per step. */
+/** The fixed 2,000 points per frame at the 120 Hz tick is exactly 1,000 points per step. */
 function tick(v: Viz, steps: number): void {
   for (let i = 0; i < steps; i++) v.instance.step(TICK);
 }
@@ -701,13 +694,32 @@ describe('chaos-game instance: readouts', () => {
     expect(b.emitted.at(-1)).toEqual(last);
   });
 
-  it('shows the same number on the plate as in the ledger', () => {
+  it('marks one headline in plain words and demotes the internals to the exact table', () => {
     const v = stubViz();
-    tick(v, 200);
+    tick(v, 20);
     paint(v);
-    const window = v.fg.texts.at(-1);
-    expect(window?.text).toBe(`D ≈ ${(ledger(v)['dimension'] ?? 0).toFixed(3)}`);
-    expect(window?.style).toBe(THEME.ink);
+    const rows = v.emitted.at(-1) ?? [];
+    const by = Object.fromEntries(rows.map((r) => [r.key, r]));
+    // Exactly one headline, and it is the dimension.
+    expect(rows.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['dimension']);
+    expect(by['dimension']?.plain).toBe('how crinkly the shape is');
+    expect(by['dimension']?.hint).toBe('a filled square scores 2, a line 1');
+    expect(by['points']?.plain).toBe('dots placed');
+    // What a newcomer sees carries a plain label; what only the table shows need not.
+    for (const r of rows) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain, r.key).toMatch(/^[a-z]/);
+    }
+    expect(by['analytic']?.expertOnly).toBe(true);
+    expect(by['cells']?.expertOnly).toBe(true);
+    // The exact table's names, targets and digits are the contract the rest of
+    // this file reads, and the plain fields sit beside them rather than
+    // replacing them.
+    expect(by['dimension']?.label).toBe('Box dimension');
+    expect(by['dimension']?.digits).toBe(4);
+    expect(by['points']?.label).toBe('Points plotted');
+    expect(by['analytic']?.label).toBe('Analytic dimension');
+    expect(by['cells']?.label).toBe('Boxes at 1/256');
   });
 
   it('draws without mutating the simulation, and resets to an empty picture', () => {
@@ -727,19 +739,22 @@ describe('chaos-game instance: readouts', () => {
     v.instance.destroy();
   });
 
-  it('drops the target where the formula stops holding, and keeps measuring', () => {
-    // r = 0.6 on a triangle: the three copies overlap, log 3 / log(1/0.6) is
-    // 2.15, and a set in the plane cannot be that. The tab reports the box count
-    // and claims nothing.
-    const v = stubViz({ system: 'polygon', n: 3, r: 0.6, points: 200_000 });
-    tick(v, 200);
-    paint(v);
-    const last = v.emitted.at(-1) ?? [];
-    expect(last.map((r) => r.key)).toEqual(['points', 'dimension', 'cells']);
-    expect(last.every((r) => r.target === undefined)).toBe(true);
-    // …and what it measures is a filled blob, not 2.15.
-    expect(ledger(v)['dimension']).toBeGreaterThan(1.8);
-    expect(ledger(v)['dimension']).toBeLessThan(2.05);
+  it('publishes the restricted square against log 3 / log 2, the rule’s own closed form', () => {
+    // The teaching moment as the ledger sees it: the same four corners, and
+    // the target moves from 2 to the Sierpiński triangle's dimension because
+    // the shape carries the rule.
+    const free = stubViz({ system: 'square', points: 1_000_000 });
+    const bound = stubViz({ system: 'square-no-repeat', points: 1_000_000 });
+    for (const v of [free, bound]) {
+      tick(v, 1_000);
+      paint(v);
+    }
+    const freeRows = Object.fromEntries((free.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    const boundRows = Object.fromEntries((bound.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    expect(freeRows['dimension']?.target).toBe(2);
+    expect(boundRows['dimension']?.target).toBeCloseTo(Math.log2(3), 12);
+    expect(Math.abs((freeRows['dimension']?.value ?? 0) - 2)).toBeLessThan(DIM_TOLERANCE);
+    expect(Math.abs((boundRows['dimension']?.value ?? 0) - Math.log2(3))).toBeLessThan(DIM_TOLERANCE);
   });
 
   it('reports the fern without a target and the dragon without a claim', () => {
@@ -793,46 +808,42 @@ describe('chaos-game instance: parameters', () => {
     expect(ledger(v)).toEqual(fresh(20_000, 40));
   });
 
-  it('absorbs the rate and the colour toggle, and defers the attractor to the shell', () => {
+  it('absorbs only a raised ceiling, and defers the shape and the seed to the shell', () => {
     const v = stubViz();
     tick(v, 10);
-    expect(v.instance.onParamChange?.('pointsPerFrame', 8_000)).toBe(true);
-    expect(v.instance.onParamChange?.('colourByVertex', true)).toBe(true);
+    expect(v.instance.onParamChange?.('points', 400_000)).toBe(true);
     expect(v.instance.onParamChange?.('system', 'fern')).toBe(false);
-    expect(v.instance.onParamChange?.('n', 5)).toBe(false);
-    expect(v.instance.onParamChange?.('r', 0.4)).toBe(false);
-    expect(v.instance.onParamChange?.('restriction', 'no-repeat')).toBe(false);
+    expect(v.instance.onParamChange?.('system', 'square-no-repeat')).toBe(false);
     expect(v.instance.onParamChange?.('seed', 7)).toBe(false);
   });
 
-  it('gives the same figure at any rate: one draw per point', () => {
-    const slow = stubViz({ pointsPerFrame: 500, points: 50_000 });
-    const fast = stubViz({ pointsPerFrame: 20_000, points: 50_000 });
-    tick(slow, 200);
-    tick(fast, 5);
-    paint(slow);
-    paint(fast);
-    expect(ledger(slow)['points']).toBe(50_000);
-    expect(ledger(fast)['points']).toBe(50_000);
-    expect(ledger(slow)).toEqual(ledger(fast));
-  });
-
-  it('lets the named polygon systems carry their own vertices and ratio', () => {
+  it('carries the vertices, the ratio and the rule on the shape', () => {
+    // The sliders are gone, so a stray n or r in the URL cannot reach the
+    // system: the pentagon is its own (5, 1/(1 + φ)) whatever else is passed.
     const pentagon = resolveSystem({ ...DEFAULTS, system: 'pentagon', n: 8, r: 0.9 });
     expect(pentagon.n).toBe(5);
     expect(pentagon.r).toBeCloseTo(PENTAGON_RATIO, 12);
+    expect(pentagon.restriction).toBe('none');
     expect(pentagon.targeted).toBe(true);
-    // …while the custom n-gon is where the sliders bite.
-    const custom = resolveSystem({ ...DEFAULTS, system: CUSTOM_ID, n: 8, r: 0.25 });
-    expect(custom.n).toBe(8);
-    expect(custom.r).toBe(0.25);
-    expect(custom.maps).toHaveLength(8);
+    // The one rule on the menu rides on its shape.
+    const bound = resolveSystem({ ...DEFAULTS, system: 'square-no-repeat' });
+    expect(bound.n).toBe(4);
+    expect(bound.r).toBe(0.5);
+    expect(bound.restriction).toBe('no-repeat');
+    expect(bound.branching).toBe(3);
+    expect(bound.dimension).toBeCloseTo(Math.log2(3), 12);
+    expect(bound.targeted).toBe(true);
+    // An id the menu does not have is the default triangle, not a crash.
+    const stray = resolveSystem({ ...DEFAULTS, system: 'polygon' });
+    expect(stray.n).toBe(3);
+    expect(stray.r).toBe(0.5);
   });
 
-  it('ignores a restriction on a system that has no vertices', () => {
-    const fern = resolveSystem({ ...DEFAULTS, system: 'fern', restriction: 'no-repeat' });
+  it('resolves the fern with no corners and no rule', () => {
+    const fern = resolveSystem({ ...DEFAULTS, system: 'fern' });
     expect(fern.restriction).toBe('none');
     expect(fern.n).toBe(0);
+    expect(fern.targeted).toBe(false);
     // The fern's probabilities are the whole design of the fern; a rule that
     // discarded them would delete the stem.
     expect(findSystem('fern')?.maps.map((m) => m.weight)).toEqual([0.01, 0.85, 0.07, 0.07]);
@@ -862,33 +873,26 @@ describe('chaos-game instance: painting', () => {
     return bad;
   }
 
-  it('paints snapped, full-strength marks and batches them by pen', () => {
+  it('paints snapped, full-strength marks in two pens, one pass each', () => {
     const v = stubViz();
     tick(v, 20);
     paint(v);
     expect(v.bg.fills.length).toBe(20_000);
     // §7: a mark under 3 CSS px is legal snapped and at full coverage — the
     // drafting pen is 9.41:1 solid and 2.56:1 smeared across a hairline.
-    expect(offSpec(v, [THEME.data2])).toBe(0);
-    // One fill style for twenty thousand points, not one per point.
-    expect(v.bg.styleWrites).toEqual([THEME.data2]);
-  });
-
-  it('uses two pens and two passes with colour by vertex, and no more', () => {
-    const v = stubViz({ colourByVertex: true });
-    tick(v, 20);
-    paint(v);
+    expect(offSpec(v, [THEME.data2, THEME.data1])).toBe(0);
+    // Colour by vertex is always on: two fill styles for twenty thousand
+    // points, not one per point, and both pens actually land on the plate.
     expect(v.bg.styleWrites).toEqual([THEME.data2, THEME.data1]);
     expect(new Set(v.bg.fills.map((f) => f.style))).toEqual(new Set([THEME.data2, THEME.data1]));
-    expect(offSpec(v, [THEME.data2, THEME.data1])).toBe(0);
   });
 
-  it('recolours the whole picture when the toggle flips, without replotting', () => {
+  it('repaints the picture in the pens it was plotted in, from the grid rather than the points', () => {
     const v = stubViz();
     tick(v, 200);
     paint(v);
     const points = ledger(v)['points'];
-    expect(setParam(v, 'colourByVertex', true)).toBe(true);
+    resize(v, 560, 560);
     expect(ledger(v)['points']).toBe(points);
     // The repaint comes off the occupancy grid, so it inks cells, not points.
     const cells = v.bg.fills.length;
@@ -925,8 +929,8 @@ describe('chaos-game instance: painting', () => {
     // What src/main.ts does for a reduced-motion cold start: thousands of ticks
     // with one paint at the end. More points are plotted than the ring holds, so
     // the background comes back off the grid instead of off the ring.
-    const v = stubViz({ points: 1_000_000, pointsPerFrame: 20_000 });
-    tick(v, 2_400);
+    const v = stubViz({ points: 1_000_000 });
+    tick(v, 1_000);
     paint(v);
     expect(ledger(v)['points']).toBe(1_000_000);
     expect(v.bg.fills.length).toBeGreaterThan(10_000);
@@ -935,22 +939,23 @@ describe('chaos-game instance: painting', () => {
     );
   });
 
-  it('draws the apparatus once, on the background, in the container and apparatus pens', () => {
+  it('draws the apparatus once, on the background, and writes no text on the plate', () => {
     const v = stubViz({ system: 'square' });
     // The polygon outline is the frame; the vertices are the experiment.
     expect(v.bg.strokes.some((s) => s.pen === THEME.gridSoft)).toBe(true);
     expect(v.bg.styleWrites).toContain(THEME.grid);
-    // Four numerals, one per vertex, in the muted ink.
-    const numerals = v.bg.texts.filter((t) => t.style === THEME.inkMuted);
-    expect(numerals.map((t) => t.text)).toEqual(['0', '1', '2', '3']);
-    // …and none of it is repainted per frame.
+    // No numerals at the corners and no reading in the corner of the plate:
+    // every number this tab shows is in the readouts, in words.
+    expect(v.bg.texts).toEqual([]);
     tick(v, 10);
     paint(v);
-    expect(v.fg.texts.map((t) => t.style)).toEqual([THEME.ink]);
+    expect(v.fg.texts).toEqual([]);
+    // …and the apparatus is not repainted per frame.
+    expect(v.bg.strokes).toEqual([]);
   });
 
   it('keeps the live cursor in the signal pen, never as a hairline', () => {
-    const v = stubViz({ pointsPerFrame: 100 });
+    const v = stubViz();
     tick(v, 5);
     paint(v);
     const trail = v.fg.strokes.filter((s) => s.pen === THEME.data1);
@@ -995,44 +1000,57 @@ describe('layoutView', () => {
 // Metadata
 // ---------------------------------------------------------------------------
 
+/** One sentence: a single terminal mark, at the end. */
+function oneSentence(text: unknown): boolean {
+  return typeof text === 'string' && /^[^.!?]+[.!?]$/.test(text.trim());
+}
+
 describe('chaos-game metadata', () => {
-  it('declares every parameter the contract needs, with a seed', () => {
+  it('declares two controls and a seed the rail never shows', () => {
     expect(chaosGame.id).toBe('chaos-game');
     expect(chaosGame.group).toBe('chaos');
-    expect(chaosGame.params.map((p) => p.key)).toEqual([
-      'system',
-      'n',
-      'r',
-      'restriction',
-      'points',
-      'pointsPerFrame',
-      'colourByVertex',
-      'seed',
-    ]);
+    expect(chaosGame.params.map((p) => p.key)).toEqual(['system', 'points', 'seed']);
+    // The seed stays a spec so the URL keeps carrying it and Shuffle has
+    // something to redraw; the rail skips the kind, so it is not a control.
     expect(chaosGame.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
+    expect(chaosGame.params.filter((p) => p.kind !== 'seed')).toHaveLength(2);
+    expect(chaosGame.params.map((p) => p.label)).toEqual(['Shape', 'Dots', 'Seed']);
     expect(chaosGame.budget?.maxEntities).toBe(2_000_000);
     expect(chaosGame.aspect).toBe(1);
     expect(chaosGame.aspectNarrow).toBe(1);
   });
 
-  it('offers every named system plus the custom n-gon', () => {
+  it('offers every named system as a shape, the restricted square, and nothing else', () => {
     const system = chaosGame.params.find((p) => p.key === 'system');
     expect(system?.kind).toBe('choice');
     const values = system?.kind === 'choice' ? system.options.map((o) => o.value) : [];
-    expect(values).toEqual([...NAMED_SYSTEMS.map((s) => s.id), CUSTOM_ID]);
+    expect(values).toEqual(SHAPES.map((s) => s.id));
+    // Every system in the catalogue is reachable from the menu…
+    for (const named of NAMED_SYSTEMS) {
+      expect(SHAPES.some((s) => s.system.id === named.id), named.id).toBe(true);
+    }
+    // …and exactly one entry carries a rule: the square that never repeats a corner.
+    const ruled = SHAPES.filter((s) => s.restriction !== 'none');
+    expect(ruled.map((s) => [s.id, s.system.id, s.restriction])).toEqual([
+      ['square-no-repeat', 'square', 'no-repeat'],
+    ]);
+    // Shape names a reader can use without looking anything up.
+    const labels = system?.kind === 'choice' ? system.options.map((o) => o.label) : [];
+    expect(labels).toEqual([
+      'Triangle',
+      'Pentagon',
+      'Square',
+      'Square, never the same corner twice',
+      'Fern',
+      'Dragon curve',
+    ]);
   });
 
-  it('sets every preset value from a declared parameter, in teaching order', () => {
-    const ids = (chaosGame.presets ?? []).map((p) => p.id);
-    expect(ids).toEqual([
-      'one-thousand',
-      'sierpinski',
-      'square-fills',
-      'restrict-it',
-      'fern',
-      'dragon',
-    ]);
-    for (const preset of chaosGame.presets ?? []) {
+  it('walks to the insight in three presets, the last two one control apart', () => {
+    const presets = chaosGame.presets ?? [];
+    expect(presets.map((p) => p.id)).toEqual(['triangle', 'square-fills', 'add-a-rule']);
+    for (const preset of presets) {
+      expect(oneSentence(preset.caption), `preset ${preset.id} caption`).toBe(true);
       for (const key of Object.keys(preset.values)) {
         expect(
           chaosGame.params.some((p) => p.key === key),
@@ -1040,22 +1058,32 @@ describe('chaos-game metadata', () => {
         ).toBe(true);
       }
     }
-    // The moment is one control apart: the two square presets differ only in the
-    // restriction, so the reader sees the rule doing the work.
-    const fills = (chaosGame.presets ?? []).find((p) => p.id === 'square-fills');
-    const restrict = (chaosGame.presets ?? []).find((p) => p.id === 'restrict-it');
-    const differing = Object.keys(restrict?.values ?? {}).filter(
-      (k) => restrict?.values[k] !== fills?.values[k],
+    // The moment is one control apart: the two square presets differ only in
+    // the shape, and the shape is what carries the rule.
+    const fills = presets.find((p) => p.id === 'square-fills');
+    const ruled = presets.find((p) => p.id === 'add-a-rule');
+    const differing = Object.keys(ruled?.values ?? {}).filter(
+      (k) => ruled?.values[k] !== fills?.values[k],
     );
-    expect(differing).toEqual(['restriction']);
-    expect(restrict?.values['restriction']).toBe('no-repeat');
+    expect(differing).toEqual(['system']);
+    expect(fills?.values['system']).toBe('square');
+    expect(ruled?.values['system']).toBe('square-no-repeat');
+    // The first chip is the default configuration, so it reads as pressed on arrival.
+    const first = presets[0];
+    for (const spec of chaosGame.params) {
+      if (spec.kind === 'seed') continue;
+      expect(first?.values[spec.key], spec.key).toBe(spec.default);
+    }
   });
 
-  it('sources every fact', () => {
-    expect(chaosGame.facts.length).toBeGreaterThanOrEqual(3);
+  it('keeps to two facts, one sentence each, both sourced', () => {
+    expect(chaosGame.facts.length).toBeGreaterThanOrEqual(1);
+    expect(chaosGame.facts.length).toBeLessThanOrEqual(2);
     for (const fact of chaosGame.facts) {
+      expect(oneSentence(fact.text)).toBe(true);
       expect(fact.source.label.length).toBeGreaterThan(0);
       expect(fact.source.url).toMatch(/^https:\/\//);
     }
+    expect(oneSentence(chaosGame.blurb)).toBe(true);
   });
 });

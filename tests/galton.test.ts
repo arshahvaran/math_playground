@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { Readout, VizContext, VizInstance } from '../src/core/types';
-import { galton, pileMetrics } from '../src/viz/galton/index';
+import { dropRateFor, galton, pileMetrics } from '../src/viz/galton/index';
 import { binomialPmf, normalPdf } from '../src/core/stats';
 import { proseText } from '../src/ui/dom';
 import {
+  DEFAULT_BOARD,
+  GRAVITY_PX,
   MAX_ROWS,
   binCentreX,
   createSim,
@@ -13,12 +15,17 @@ import {
   pegPosition,
   popcount32,
   progressToPy,
+  restSlot,
+  type BoardPhysics,
   type GaltonParams,
   type GaltonSim,
 } from '../src/viz/galton/sim';
 
 /** The engine's tick: 120 Hz. */
 const TICK = 1000 / 120;
+
+/** Row pitch in peg pitches: the lattice is equilateral. */
+const ASPECT = Math.sqrt(3) / 2;
 
 function sumOf(xs: Uint32Array): number {
   let s = 0;
@@ -114,6 +121,31 @@ describe('galton sim: determinism', () => {
     runToRest(b, params.balls, 1000);
     expect(Array.from(a.bins)).not.toEqual(Array.from(b.bins));
   });
+
+  it('moves every ball along the same trajectory whatever the step size', () => {
+    // The motion is analytic per segment, so a tick of a second and a hundred
+    // and twenty ticks of a hundred-and-twentieth land on the same parabola —
+    // this is what makes the animation identical at every refresh rate, and
+    // what lets Fast-forward skip frames without changing where a ball is.
+    const params: GaltonParams = { rows: 12, p: 0.5, balls: 40, dropRate: 20 };
+    const coarse = make(11, params);
+    const fine = make(11, params);
+    for (let s = 0; s < 5; s++) {
+      coarse.step(1000);
+      for (let i = 0; i < 120; i++) fine.step(TICK);
+      expect(fine.ballCount).toBe(coarse.ballCount);
+      for (let i = 0; i < fine.ballCount; i++) {
+        const a = coarse.ball(i);
+        const b = fine.ball(i);
+        // 120 · (1000/120) is a second to within an ulp; the positions differ
+        // by the speed times that, nothing more.
+        expect(b.x).toBeCloseTo(a.x, 6);
+        expect(b.y).toBeCloseTo(a.y, 6);
+        expect(b.row).toBe(a.row);
+        expect(b.done).toBe(a.done);
+      }
+    }
+  });
 });
 
 describe('galton sim: bookkeeping', () => {
@@ -146,10 +178,12 @@ describe('galton sim: bookkeeping', () => {
     sim.forEachBall((b) => {
       expect(b.done).toBe(true);
       expect(b.settled).toBe(true);
-      expect(b.y).toBe(rows + 1);
+      expect(b.row).toBe(rows);
+      // At rest inside its bin: below the mouth, within the bin's width.
+      expect(b.y).toBeGreaterThan(rows);
       expect(b.path >>> rows).toBe(0);
       expect(b.bin).toBe(popcount32(b.path));
-      expect(b.x).toBeCloseTo(b.bin - rows / 2, 6);
+      expect(Math.abs(b.x - (b.bin - rows / 2))).toBeLessThanOrEqual(0.5 + 1e-9);
       slots[b.bin]!.add(b.stack);
     });
     for (let k = 0; k <= rows; k++) {
@@ -165,22 +199,20 @@ describe('galton sim: bookkeeping', () => {
     const rows = 12;
     const balls = 300;
     const sim = make(9, { rows, p: 0.5, balls, dropRate: 400 });
+    const C = sim.contact;
     let checked = 0;
     while (sim.landed < balls) {
       sim.step(TICK);
       sim.forEachActive((b) => {
-        if (b.done) return;
+        if (b.done || b.row >= rows) return;
         expect(b.y).toBeGreaterThanOrEqual(-1);
         expect(b.y).toBeLessThan(rows);
-        if (b.y < 0) {
-          expect(b.x).toBe(0);
-          return;
-        }
-        const r = Math.floor(b.y);
-        const from = popcount32(b.path & ((1 << r) - 1)) - r / 2;
-        const to = from + ((b.path >>> r) & 1 ? 0.5 : -0.5);
-        expect(b.x).toBeGreaterThanOrEqual(Math.min(from, to) - 1e-6);
-        expect(b.x).toBeLessThanOrEqual(Math.max(from, to) + 1e-6);
+        // The peg it left and the peg it is flying to. Contact happens a
+        // contact radius from a peg's centre, so that is the margin.
+        const to = popcount32(b.path & ((1 << b.row) - 1)) - b.row / 2;
+        const from = b.row === 0 ? 0 : popcount32(b.path & ((1 << (b.row - 1)) - 1)) - (b.row - 1) / 2;
+        expect(b.x).toBeGreaterThanOrEqual(Math.min(from, to) - C - 1e-9);
+        expect(b.x).toBeLessThanOrEqual(Math.max(from, to) + C + 1e-9);
         checked++;
       });
     }
@@ -189,7 +221,8 @@ describe('galton sim: bookkeeping', () => {
 
   it('absorbs a drop-rate change without losing the balls already down, and resets on a row change', () => {
     const sim = make(42, { rows: 12, p: 0.5, balls: 500, dropRate: 400 });
-    // A twelve-row fall takes about 1.2 s; two seconds guarantees landings.
+    // A twelve-row ball reaches the bin mouth 1.77 s after release on the
+    // default board; two seconds guarantees landings.
     for (let i = 0; i < 240; i++) sim.step(TICK);
     const landedBefore = sim.landed;
     expect(landedBefore).toBeGreaterThan(0);
@@ -214,6 +247,281 @@ describe('galton sim: bookkeeping', () => {
     runToRest(sim, 50, 1000);
     expect(sim.ballCount).toBe(50);
     expect(sumOf(sim.bins)).toBe(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Motion
+// ---------------------------------------------------------------------------
+
+/** The physics board the renderer would derive for `rows` on a `width` × `height` plate at `balls`. */
+function boardFor(width: number, height: number, rows: number, balls: number): BoardPhysics {
+  const g = layoutBoard(width, height, rows);
+  const pile = pileMetrics(g, 0.5, balls, 3);
+  return {
+    pitch: g.pegSpacing,
+    contact: g.pegRadius + 3,
+    binDepth: g.binBottom - g.binTop,
+    dotRadius: pile.radius,
+    cols: pile.cols,
+  };
+}
+
+/** One sample of a ball's state, taken every `dt` ms of a run. */
+interface Sample {
+  t: number;
+  x: number;
+  /** Vertical position in peg pitches, not rows. */
+  y: number;
+  vx: number;
+  vy: number;
+  row: number;
+  done: boolean;
+  settled: boolean;
+  path: number;
+  bin: number;
+  stack: number;
+}
+
+/** Every ball's history at `dt` ms resolution until all are at rest. */
+function trace(sim: GaltonSim, balls: number, dt: number): Sample[][] {
+  const out: Sample[][] = Array.from({ length: balls }, () => []);
+  let t = 0;
+  let steps = 0;
+  while (sim.landed < balls || sumOf(sim.settledBins) < balls) {
+    sim.step(dt);
+    t += dt;
+    if (++steps > 200_000) throw new Error('no rest');
+    sim.forEachActive((b, i) => {
+      out[i]!.push({
+        t, x: b.x, y: b.y * ASPECT, vx: b.vx, vy: b.vy, row: b.row, done: b.done, settled: b.settled,
+        path: b.path, bin: b.bin, stack: b.stack,
+      });
+    });
+  }
+  return out;
+}
+
+describe('galton sim: motion', () => {
+  const rows = 12;
+
+  it('falls freely from rest: the entry drop is y = −1 + ½·g·t² and nothing else', () => {
+    const sim = make(42, { rows, p: 0.5, balls: 1, dropRate: 1 });
+    // pitches/s² on the default board; the view reports rows, so divide by the row pitch.
+    const g = GRAVITY_PX / DEFAULT_BOARD.pitch;
+    expect(sim.gravity).toBeCloseTo(g, 12);
+    let samples = 0;
+    for (let i = 0; i < 40; i++) {
+      sim.step(TICK);
+      const b = sim.ball(0);
+      if (b.row !== 0) break;
+      const t = b.age / 1000;
+      expect(b.y).toBeCloseTo(-1 + (g * t * t) / 2 / ASPECT, 9);
+      expect(b.vy).toBeCloseTo(g * t, 9);
+      // Released on the centre line; the drift toward the apex's shoulder is
+      // within a contact radius.
+      expect(Math.abs(b.x)).toBeLessThan(sim.contact);
+      samples++;
+    }
+    expect(samples).toBeGreaterThan(5);
+  });
+
+  it('reaches the apex a contact radius from its centre, at the free-fall time for that height', () => {
+    const sim = make(42, { rows, p: 0.5, balls: 1, dropRate: 1 });
+    const g = sim.gravity;
+    const C = sim.contact;
+    // Fine steps, so the sample after the strike is within 0.05 ms of it.
+    // The first ball leaves on the first tick.
+    sim.step(0.05);
+    let before = sim.ball(0);
+    for (let i = 0; i < 20_000; i++) {
+      sim.step(0.05);
+      const b = sim.ball(0);
+      if (b.row === 1) {
+        // The sample before the strike is still on the entry parabola, ending
+        // on the apex's contact circle: h = drop from release to contact.
+        const h = before.y * ASPECT + ASPECT;
+        expect(Math.hypot(before.x, before.y * ASPECT)).toBeCloseTo(C, 2);
+        expect(before.age / 1000).toBeCloseTo(Math.sqrt((2 * h) / g), 3);
+        // And it has been turned: upward, and toward the side its route chose.
+        expect(b.vy).toBeLessThan(0);
+        expect(Math.sign(b.vx)).toBe((b.path & 1) === 1 ? 1 : -1);
+        return;
+      }
+      before = b;
+    }
+    throw new Error('never struck the apex');
+  });
+
+  it('speeds up through the upper rows and then bounces along at a steady pace', () => {
+    // v² = 2gh holds inside every flight; between flights the peg takes its
+    // toll, so the arrival speed climbs for the first rows and then settles
+    // where the energy gained over one row equals the energy a bounce costs.
+    // That plateau is what a real board shows too — with any restitution
+    // below one, a ball does not keep accelerating down a peg lattice.
+    const balls = 100;
+    const sim = make(3, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 1);
+    const arrival = Array.from({ length: rows }, () => [] as number[]);
+    const strike = Array.from({ length: rows }, () => [] as number[]);
+    for (const run of runs) {
+      for (let i = 1; i < run.length; i++) {
+        const prev = run[i - 1]!;
+        const cur = run[i]!;
+        if (cur.row !== prev.row && prev.row < rows) {
+          arrival[prev.row]!.push(Math.hypot(prev.vx, prev.vy));
+          strike[prev.row]!.push(cur.t);
+        }
+      }
+    }
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const v = arrival.map(mean);
+    const t = strike.map(mean);
+    // Measured on the default board: 17.5, 20.6, 21.6, 21.9 pitch/s, then 22.0 ± 0.1.
+    expect(v[1]!).toBeGreaterThan(v[0]! * 1.1);
+    expect(v[2]!).toBeGreaterThan(v[1]!);
+    expect(v[3]!).toBeGreaterThan(v[2]!);
+    for (let r = 4; r < rows; r++) expect(Math.abs(v[r]! / v[3]! - 1)).toBeLessThan(0.03);
+    // The row-to-row transit is not a fixed duration: the entry drop is the
+    // shortest, and a ball reaches the twelfth row about 1.6 s after release.
+    expect(t[1]! - t[0]!).toBeGreaterThan(t[0]!);
+    expect(t[rows - 1]!).toBeGreaterThan(1_500);
+    expect(t[rows - 1]!).toBeLessThan(1_750);
+  });
+
+  it('rebounds off every peg upward and toward the side the route chose', () => {
+    const balls = 100;
+    const sim = make(5, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 1);
+    let bounces = 0;
+    for (const run of runs) {
+      for (let i = 1; i < run.length; i++) {
+        const prev = run[i - 1]!;
+        const cur = run[i]!;
+        if (cur.row === prev.row || prev.row >= rows) continue;
+        const s = (cur.path >>> prev.row) & 1 ? 1 : -1;
+        expect(Math.sign(cur.vx), `ball path ${cur.path.toString(2)} row ${prev.row}`).toBe(s);
+        expect(cur.vy).toBeLessThan(0);
+        bounces++;
+      }
+    }
+    expect(bounces).toBe(balls * rows);
+  });
+
+  it('bounces higher off a peg it arrives at faster', () => {
+    // Hop height after striking row r, averaged: 0.075, 0.17, 0.20, 0.21 …
+    // pitches on the default board, tracking the arrival speeds above. The
+    // restitution model produces this; nothing scales a hop by the row.
+    const balls = 100;
+    const sim = make(8, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 1);
+    const hop = Array.from({ length: rows }, () => [] as number[]);
+    for (const run of runs) {
+      let launchY = NaN;
+      let top = NaN;
+      let launchedFrom = -1;
+      for (let i = 1; i < run.length; i++) {
+        const prev = run[i - 1]!;
+        const cur = run[i]!;
+        if (cur.row !== prev.row) {
+          if (launchedFrom >= 0) hop[launchedFrom]!.push(launchY - top);
+          launchedFrom = prev.row < rows ? prev.row : -1;
+          launchY = cur.y;
+          top = cur.y;
+        } else if (cur.y < top) {
+          top = cur.y;
+        }
+      }
+    }
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    // The hop off the last peg ends in the bin, where no row change marks
+    // it; the eleven before it are what the tracker sees.
+    const h = hop.slice(0, rows - 1).map(mean);
+    expect(h[0]!).toBeGreaterThan(0.03);
+    expect(h[1]!).toBeGreaterThan(1.5 * h[0]!);
+    expect(h[2]!).toBeGreaterThan(h[1]!);
+    for (let r = 3; r < rows - 1; r++) expect(h[r]!).toBeGreaterThan(0.15);
+  });
+
+  it.each([
+    ['the default board', 12, null],
+    ['a desktop plate', 12, boardFor(480, 600, 12, 500)],
+    ['three rows on a desktop plate', 3, boardFor(480, 600, 3, 5_000)],
+    ['sixteen rows on a phone', 16, boardFor(360, 480, 16, 5_000)],
+    // The narrowest plate the layout serves at the most rows the control
+    // offers: contact radius 0.31 pitch, the largest a ball meets.
+    ['sixteen rows on the narrowest phone', 16, boardFor(320, 480, 16, 5_000)],
+  ] as ReadonlyArray<[string, number, BoardPhysics | null]>)('never enters a peg on %s', (_, n, board) => {
+    const balls = 60;
+    const sim = make(21, { rows: n, p: 0.5, balls, dropRate: 1e6 });
+    if (board) sim.setBoard(board);
+    const C = sim.contact;
+    const runs = trace(sim, balls, 0.25);
+    let closest = Infinity;
+    let samples = 0;
+    for (const run of runs) {
+      for (const s of run) {
+        if (s.row >= n) continue;
+        samples++;
+        for (let r = Math.max(0, s.row - 2); r < Math.min(n, s.row + 2); r++) {
+          for (let k = 0; k <= r; k++) {
+            const d = Math.hypot(s.x - (k - r / 2), s.y - r * ASPECT);
+            if (d < closest) closest = d;
+          }
+        }
+      }
+    }
+    expect(samples).toBeGreaterThan(10_000);
+    expect(closest).toBeGreaterThanOrEqual(C - 1e-9);
+  });
+
+  it('settles with two damped bounces on the pile, exactly where the pile is painted', () => {
+    const balls = 50;
+    const board = boardFor(480, 600, rows, 500);
+    const g = layoutBoard(480, 600, rows);
+    const sim = make(13, { rows, p: 0.5, balls, dropRate: 1e6 });
+    sim.setBoard(board);
+    const runs = trace(sim, balls, 0.5);
+    for (const run of runs) {
+      const inBin = run.filter((s) => s.row === rows && s.y >= rows * ASPECT);
+      expect(inBin.length).toBeGreaterThan(20);
+      const last = inBin.at(-1)!;
+      const slot = restSlot(board.cols, board.dotRadius, board.binDepth, last.stack);
+      const restY = rows * ASPECT + slot.depth / board.pitch;
+      // Never below its own resting place: the pile is a floor.
+      for (const s of inBin) expect(s.y).toBeLessThanOrEqual(restY + 1e-9);
+      // Up-turns inside the bin: the ball meets the pile, hops, meets it again.
+      let ups = 0;
+      for (let i = 1; i < inBin.length; i++) if (inBin[i - 1]!.vy > 0 && inBin[i]!.vy < 0) ups++;
+      expect(ups).toBe(2);
+      // And where it stops is the dot the renderer paints for that stack.
+      const rest = sim.ball(run === runs[0] ? 0 : runs.indexOf(run));
+      expect(rest.settled).toBe(true);
+      expect(lateralToPx(g, rest.x)).toBeCloseTo(binCentreX(g, rest.bin) + slot.dx, 9);
+      expect(progressToPy(g, rest.y)).toBeCloseTo(g.binTop + slot.depth, 9);
+    }
+  });
+
+  it('counts a ball into its bin the moment it passes the mouth, and into the pile only once at rest', () => {
+    const balls = 30;
+    const sim = make(17, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 1);
+    for (const run of runs) {
+      const firstDone = run.findIndex((s) => s.done);
+      expect(firstDone).toBeGreaterThan(0);
+      const before = run[firstDone - 1]!;
+      const at = run[firstDone]!;
+      expect(before.y).toBeLessThan(rows * ASPECT);
+      expect(at.y).toBeGreaterThanOrEqual(rows * ASPECT - 1e-9);
+      for (const s of run) if (s.settled) throw new Error('a settled ball is not active');
+    }
+  });
+
+  it('lets the renderer set the plate: gravity scales with the pitch and the contact radius with the pegs', () => {
+    const sim = make(1, { rows, p: 0.5, balls: 1, dropRate: 1 });
+    sim.setBoard({ pitch: 20, contact: 5, binDepth: 100, dotRadius: 2, cols: 5 });
+    expect(sim.gravity).toBeCloseTo(GRAVITY_PX / 20, 12);
+    expect(sim.contact).toBeCloseTo(0.25, 12);
   });
 });
 
@@ -266,6 +574,9 @@ describe('galton geometry', () => {
     // Peg (r, k) sits at lateral k − r/2: exactly where a ball with k rights arrives.
     expect(pegPosition(g, 5, 2).x).toBeCloseTo(lateralToPx(g, 2 - 2.5), 9);
     expect(pegPosition(g, 5, 2).y).toBeCloseTo(progressToPy(g, 5), 9);
+    // The same line continues into the bin: a depth below the mouth is
+    // progress past `rows` in rows, with no second mapping to disagree.
+    expect(progressToPy(g, 12 + 50 / g.rowSpacing)).toBeCloseTo(g.binTop + 50, 9);
   });
 
   it('keeps the lattice equilateral', () => {
@@ -294,29 +605,47 @@ describe('galton viz metadata', () => {
   it('has the permanent id, the randomness group, and a budget the balls slider respects', () => {
     expect(galton.id).toBe('galton');
     expect(galton.group).toBe('randomness');
-    expect(galton.budget).toEqual({ maxEntities: 20_000 });
+    expect(galton.budget).toEqual({ maxEntities: 5_000 });
     const balls = galton.params.find((p) => p.key === 'balls');
     expect(balls?.kind).toBe('range');
-    if (balls?.kind === 'range') expect(balls.max).toBe(20_000);
+    if (balls?.kind === 'range') {
+      expect(balls.min).toBe(1);
+      expect(balls.max).toBe(5_000);
+      expect(balls.default).toBe(500);
+      expect(balls.log).toBe(true);
+    }
     const rows = galton.params.find((p) => p.key === 'rows');
-    if (rows?.kind === 'int') expect(rows.max).toBe(MAX_ROWS);
-    else throw new Error('rows must be an int param');
+    if (rows?.kind === 'int') {
+      expect(rows.min).toBe(3);
+      expect(rows.max).toBe(16);
+      expect(rows.max).toBeLessThanOrEqual(MAX_ROWS);
+      expect(rows.default).toBe(12);
+    } else throw new Error('rows must be an int param');
   });
 
-  it('declares every parameter the contract needs, with a seed', () => {
-    const keys = galton.params.map((p) => p.key);
-    expect(keys).toEqual(['rows', 'p', 'balls', 'dropRate', 'showNormal', 'showBinomial', 'showTrails', 'seed']);
-    expect(galton.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
+  it('offers exactly two controls; the seed is a spec the rail never renders, so a permalink can carry it', () => {
+    // The rail skips `kind: 'seed'` (ui/controls.ts) and coerceParams() drops
+    // any URL key without a spec, so the seed has to be declared to survive
+    // `#/galton?seed=7` and must be the only thing declared beyond the two.
+    expect(galton.params.filter((p) => p.kind !== 'seed').map((p) => p.key)).toEqual(['rows', 'balls']);
+    const seed = galton.params.find((p) => p.key === 'seed');
+    expect(seed?.kind).toBe('seed');
+    if (seed?.kind === 'seed') expect(seed.default).toBe(42);
   });
 
-  it('walks Story mode from one ball to twenty rows', () => {
+  it('paces the stream to finish a run in about twelve seconds, between a trickle and a blur', () => {
+    expect(dropRateFor(500)).toBeCloseTo(500 / 12, 9);
+    expect(dropRateFor(5_000)).toBe(400);
+    expect(dropRateFor(1)).toBe(2);
+  });
+
+  it('walks Story mode from one ball to sixteen rows', () => {
     expect(galton.presets?.map((p) => p.id)).toEqual([
       'one-ball',
       'a-hundred',
-      'ten-thousand',
-      'bias',
+      'five-thousand',
       'three-rows',
-      'twenty-rows',
+      'sixteen-rows',
     ]);
     for (const preset of galton.presets ?? []) {
       // A caption is Prose now — a bare string, or the segments of a sentence
@@ -399,7 +728,7 @@ function runViz(instance: VizInstance, emitted: Readout[][], balls: number): Rec
 }
 
 describe('galton viz instance', () => {
-  const defaults = { rows: 12, p: 0.5, balls: 500, dropRate: 400, showNormal: true, showBinomial: true, showTrails: true, seed: 42 };
+  const defaults = { rows: 12, balls: 500, seed: 42 };
 
   it('publishes every number it draws, with the binomial targets, and identically for the same seed', () => {
     const a = stubViz({ ...defaults });
@@ -420,18 +749,50 @@ describe('galton viz instance', () => {
     expect(b.emitted.at(-1)).toEqual(last);
   });
 
-  it('absorbs cosmetic and rate changes live and defers structural ones to the shell', () => {
-    const { ctx, instance } = stubViz({ ...defaults });
+  it('tells a newcomer which number to read, in plain words, and keeps the internals for the expert table', () => {
+    const { instance, emitted } = stubViz({ ...defaults });
+    instance.draw();
+    const by = Object.fromEntries(emitted.at(-1)!.map((r) => [r.key, r]));
+    // The precise labels stay: they are what the expert table and the tests read.
+    expect(by['mean']!.label).toBe('Mean bin');
+    expect(by['landed']!.label).toBe('Balls landed');
+    expect(by['mean']!.headline).toBe(true);
+    expect(by['mean']!.plain).toBe('average landing spot');
+    expect(by['mean']!.hint).toBe('the maths says it should be 6');
+    expect(by['landed']!.plain).toBe('balls landed');
+    expect(emitted.at(-1)!.filter((r) => r.headline).length).toBe(1);
+    for (const key of ['tallest', 'mode', 'bins']) expect(by[key]!.expertOnly).toBe(true);
+    for (const key of ['landed', 'mean', 'variance']) expect(by[key]!.expertOnly).toBeUndefined();
+  });
+
+  it('replays the seed the parameters carry: seed 7 is a different pile from seed 42, and from itself it is the same', () => {
+    const balls = 200;
+    const run = (seed: number): Record<string, Readout> => {
+      const { instance, emitted } = stubViz({ ...defaults, balls, seed });
+      return runViz(instance, emitted, balls);
+    };
+    const seven = run(7);
+    const again = run(7);
+    const fortyTwo = run(42);
+    const pile = (by: Record<string, Readout>) => ['mean', 'variance', 'tallest', 'mode'].map((k) => by[k]!.value);
+    expect(pile(seven)).toEqual(pile(again));
+    expect(pile(seven)).not.toEqual(pile(fortyTwo));
+  });
+
+  it('phrases the hint for the rows in force', () => {
+    const { instance, emitted } = stubViz({ ...defaults, rows: 15 });
+    instance.draw();
+    const mean = emitted.at(-1)!.find((r) => r.key === 'mean')!;
+    expect(mean.target).toBe(7.5);
+    expect(mean.hint).toBe('the maths says it should be 7.5');
+  });
+
+  it('defers every control change to the shell: rows and balls are both a new experiment', () => {
+    const { instance } = stubViz({ ...defaults });
     for (let i = 0; i < 240; i++) instance.step(TICK);
     instance.draw();
-    // Mutate in place, as the shell does, then notify.
-    const params = ctx.params as Record<string, number | string | boolean>;
-    params['showNormal'] = false;
-    expect(instance.onParamChange?.('showNormal', false)).toBe(true);
-    params['dropRate'] = 10;
-    expect(instance.onParamChange?.('dropRate', 10)).toBe(true);
     expect(instance.onParamChange?.('rows', 8)).toBe(false);
-    expect(instance.onParamChange?.('p', 0.6)).toBe(false);
+    expect(instance.onParamChange?.('balls', 50)).toBe(false);
     expect(instance.onParamChange?.('seed', 7)).toBe(false);
   });
 
@@ -449,16 +810,32 @@ describe('galton viz instance', () => {
     instance.destroy();
   });
 
+  it('finishes the default run, five hundred balls, in about fourteen seconds of simulation', () => {
+    const { instance, emitted } = stubViz({ ...defaults });
+    let ticks = 0;
+    for (; ticks < 100_000; ticks++) {
+      instance.step(TICK);
+      if (ticks % 12 !== 11) continue;
+      instance.draw();
+      const landed = emitted.at(-1)!.find((r) => r.key === 'landed')!.value;
+      if (landed >= 500) break;
+    }
+    // Twelve seconds of stream plus one fall.
+    expect(ticks / 120).toBeGreaterThan(12);
+    expect(ticks / 120).toBeLessThan(15);
+  });
+
   it('judges Variance against the sampling error of a variance, so a finished run agrees at any seed', () => {
-    // The shipped default ball count. A variance estimated from n samples has
-    // standard error √((μ₄ − σ⁴)/n) ≈ σ²·√(2/n), i.e. a relative error of
-    // √(2/n) — 3.2% here, three times the ledger's 1% default, which is why a
-    // completed and statistically perfect run used to read "not yet converged".
+    // Two thousand balls, a run the slider allows. A variance estimated from n
+    // samples has standard error √((μ₄ − σ⁴)/n) ≈ σ²·√(2/n), i.e. a relative
+    // error of √(2/n) — 3.2% here, three times the ledger's 1% default, which
+    // is why a completed and statistically perfect run used to read "not yet
+    // converged".
     const balls = 2_000;
     const expected = 3 * Math.sqrt(2 / balls);
     let worst = 0;
     for (const seed of [1, 2, 3, 7, 42, 99]) {
-      const { instance, emitted } = stubViz({ ...defaults, balls, dropRate: 2_000, seed });
+      const { instance, emitted } = stubViz({ ...defaults, balls, seed });
       const variance = runViz(instance, emitted, balls)['variance']!;
       expect(variance.target).toBe(3);
       expect(variance.tolerance).toBeCloseTo(expected, 12);
@@ -481,20 +858,20 @@ describe('galton viz instance', () => {
       instance.draw();
       return emitted.at(-1)!.find((r) => r.key === 'variance')!;
     };
-    expect(read(20_000).tolerance!).toBeCloseTo(read(2_000).tolerance! / Math.sqrt(10), 12);
+    expect(read(5_000).tolerance!).toBeCloseTo(read(500).tolerance! / Math.sqrt(10), 12);
   });
 });
 
 describe('pileMetrics', () => {
   /** The presets, plus the defaults, as (rows, p, balls) triples. */
   const configs: ReadonlyArray<[number, number, number]> = [
-    [12, 0.5, 2_000],
+    [12, 0.5, 500],
     ...(galton.presets ?? []).map(
       (preset) =>
         [
           typeof preset.values['rows'] === 'number' ? preset.values['rows'] : 12,
-          typeof preset.values['p'] === 'number' ? preset.values['p'] : 0.5,
-          typeof preset.values['balls'] === 'number' ? preset.values['balls'] : 2_000,
+          0.5,
+          typeof preset.values['balls'] === 'number' ? preset.values['balls'] : 500,
         ] as [number, number, number],
     ),
   ];
@@ -516,7 +893,7 @@ describe('pileMetrics', () => {
         const peak = balls * pmax * pile.unit;
         // The scale is derived so the expected peak lands at depth/HEADROOM =
         // depth/1.15. The tallest bin fluctuates about balls·pmax with SD
-        // √(balls·pmax(1−pmax)) — under 2% of it at 20,000 balls — so anything
+        // √(balls·pmax(1−pmax)) — under 4% of it at 5,000 balls — so anything
         // at or under `depth` here never clips against the bin mouth in play.
         expect(peak, `rows ${rows}, p ${p}, balls ${balls} at ${width}x${height}`).toBeLessThanOrEqual(depth);
       }
@@ -560,11 +937,13 @@ describe('pileMetrics', () => {
     }
   });
 
-  it('tops a pile out where its own bar does, and settles an arriving ball onto it', () => {
-    // Twenty rows and twenty thousand balls on plates the live stage actually
-    // gets: this is where the 0.5 px radius floor binds, and where the dot
-    // pitch and the bin depth were a factor of 1.67 apart — piles standing at
-    // 2.5× their bar, and balls animating to a rest tens of pixels in mid-air.
+  it('tops a pile out where its own bar does, and lands an arriving ball on it', () => {
+    // Sixteen rows and five thousand balls on plates the live stage actually
+    // gets: this is where the dot radius is smallest and the dot pitch and
+    // the bin depth were once a factor of 1.67 apart — piles standing at 2.5×
+    // their bar, and balls animating to a rest tens of pixels in mid-air.
+    // `restSlot` is the one place a resting position comes from, for the
+    // renderer's dots and for the pile the physics bounces a ball on.
     const stages: ReadonlyArray<[number, number]> = [
       [418, 522],
       [360, 640],
@@ -572,18 +951,21 @@ describe('pileMetrics', () => {
       [1280, 720],
     ];
     for (const [width, height] of stages) {
-      const g = layoutBoard(width, height, MAX_ROWS);
-      const pile = pileMetrics(g, 0.5, 20_000, 3);
-      const counts = [1, pile.cols, 4 * pile.cols, 1_271, pile.cap];
+      const g = layoutBoard(width, height, 16);
+      const pile = pileMetrics(g, 0.5, 5_000, 3);
+      const depth = g.binBottom - g.binTop;
+      const counts = [1, pile.cols, 4 * pile.cols, 371, pile.cap];
       for (const c of counts) {
-        // restY() for the c-th arrival, which carries stack index c − 1.
-        const rest = g.binBottom - pile.radius - Math.floor((c - 1) / pile.cols) * 2 * pile.radius;
+        // The c-th arrival carries stack index c − 1.
+        const slot = restSlot(pile.cols, pile.radius, depth, c - 1);
+        const rest = g.binTop + slot.depth;
         const barTop = g.binBottom - c * pile.unit;
         const where = `${c} balls at ${width}x${height}`;
         // It comes to rest on the bar those c balls raise: the top row of the
         // grid straddles the bar top, so the centre is within one radius of it.
         expect(Math.abs(rest - barTop), where).toBeLessThanOrEqual(pile.radius + 1e-9);
         expect(rest, where).toBeGreaterThan(g.binTop);
+        expect(Math.abs(slot.dx), where).toBeLessThanOrEqual(g.pegSpacing / 2);
         // A full grid of dots tops out on the bar exactly.
         if (c % pile.cols === 0) expect(rest - pile.radius, where).toBeCloseTo(barTop, 9);
       }
@@ -594,8 +976,8 @@ describe('pileMetrics', () => {
     // 1/(σ√2π) is 0.4606 at three rows against a mode of 0.375: headroom
     // reserved against the mode alone clipped the top of the bell into a flat
     // plateau, at the one row count where the pile is visibly not yet a bell.
-    for (const rows of [3, 4, 5, 12, MAX_ROWS]) {
-      for (const balls of [2_000, 5_000]) {
+    for (const rows of [3, 4, 5, 12, 16, MAX_ROWS]) {
+      for (const balls of [500, 5_000]) {
         for (const [width, height] of sizes) {
           const g = layoutBoard(width, height, rows);
           const pile = pileMetrics(g, 0.5, balls, 3);

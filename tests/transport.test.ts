@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { SPEEDS, createPressGuard } from '../src/ui/transport';
+import { afterEach, describe, expect, it } from 'vitest';
+import { byLabel, fire, installDom, type Harness, type MElement } from './dom-harness';
+import { SPEEDS, createPressGuard, createTransport, type TransportCallbacks } from '../src/ui/transport';
 
 /**
  * Fast-forward answers a press as it begins — that is what makes holding the key
@@ -83,5 +84,62 @@ describe('speeds', () => {
   it('offers 1x and is ordered', () => {
     expect(SPEEDS).toContain(1);
     expect([...SPEEDS]).toEqual([...SPEEDS].sort((a, b) => a - b));
+  });
+});
+
+/**
+ * The cluster itself. The seed field left the rail, so Shuffle is the only way
+ * a reader asks for another draw — it has to be there for every seeded
+ * visualization and absent for one with nothing to shuffle. And every key but
+ * Play/Pause is a glyph with a name: no captions to read, no ticks to count.
+ */
+describe('the cluster', () => {
+  let dom: Harness | null = null;
+
+  afterEach(() => {
+    dom?.teardown();
+    dom = null;
+  });
+
+  function mountWith(seeded: boolean): { calls: string[]; host: MElement } {
+    dom = installDom();
+    const host = dom.document.createElement('div');
+    dom.app.appendChild(host);
+    const calls: string[] = [];
+    const cb: TransportCallbacks = {
+      onPlay: () => calls.push('play'),
+      onPause: () => calls.push('pause'),
+      onStep: () => calls.push('step'),
+      onFastForward: () => calls.push('ff'),
+      onReset: () => calls.push('reset'),
+      onShuffle: () => calls.push('shuffle'),
+      onSpeed: (m) => calls.push(`speed ${m}`),
+    };
+    createTransport(host as unknown as HTMLElement, cb, { reducedMotion: false, seeded });
+    return { calls, host };
+  }
+
+  it('offers Shuffle to a seeded visualization, and it draws a fresh seed', () => {
+    const { calls } = mountWith(true);
+    const shuffle = byLabel(dom as Harness, 'Shuffle');
+    expect(shuffle).toBeDefined();
+    fire(shuffle as MElement, 'click');
+    expect(calls).toEqual(['shuffle']);
+  });
+
+  it('offers no Shuffle where there is nothing to shuffle', () => {
+    mountWith(false);
+    expect(byLabel(dom as Harness, 'Shuffle')).toBeUndefined();
+    expect(byLabel(dom as Harness, 'Reset')).toBeDefined();
+  });
+
+  it('labels every key but Play/Pause with a name and no caption', () => {
+    mountWith(true);
+    for (const name of ['Step', 'Fast-forward', 'Reset', 'Shuffle']) {
+      const key = byLabel(dom as Harness, name);
+      expect(key, name).toBeDefined();
+      expect(key?.textContent).toBe('');
+    }
+    expect(byLabel(dom as Harness, 'Pause')?.textContent).toBe('Pause');
   });
 });

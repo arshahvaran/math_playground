@@ -50,7 +50,30 @@ const INK_TARGET = 0.25;
 const MAX_TARGET = 2_000_000;
 
 const DEFAULT_DARTS = 100_000;
-const DEFAULT_RATE = 2_000;
+
+/**
+ * Darts thrown per second of simulation time. This was the `dartRate` fader.
+ * Fixed, because speed is the transport's job — its keys run more ticks of
+ * the same experiment — and a second fader was one more thing a newcomer had
+ * to ask about. Exported so a test can count ticks against it.
+ */
+export const DART_RATE = 2_000;
+
+/**
+ * The convergence plot. This was the `showErrorPlot` toggle; always on now,
+ * because the plot is the point of the tab — the estimate alone says nothing
+ * about how slowly it improves. `layoutPlate()` keeps the switch, so the
+ * layout with no plot stays reachable and tested.
+ */
+const SHOW_ERROR_PLOT = true;
+
+/**
+ * The 1/√n reference line on the plot. This was the `showEnvelope` toggle;
+ * always on now, because the measured error means nothing until there is a
+ * line to compare it against.
+ */
+const SHOW_ENVELOPE = true;
+
 const DEFAULT_SEED = 42;
 
 const TAU = 2 * Math.PI;
@@ -94,8 +117,8 @@ export interface PlateLayout {
  * The field is square whichever way the plate is split, so the plot takes the
  * leftover strip: beside the field on a landscape plate, under it on a phone.
  * A strip narrower than `MIN_PLOT` cannot carry a labelled decade axis, and
- * half a plot is worse than none — the field takes the whole plate instead and
- * the toggle reads as "no room", which is the honest outcome at 200 px.
+ * half a plot is worse than none — the field takes the whole plate instead,
+ * which is the honest outcome at 200 px.
  */
 export function layoutPlate(width: number, height: number, showPlot: boolean): PlateLayout {
   const w = Math.max(1, width - 2 * PLATE_PAD);
@@ -226,6 +249,11 @@ export function plotY(s: PlotScale, error: number, pad = 0): number {
 // Contract
 // ---------------------------------------------------------------------------
 
+/**
+ * One fader. The seed is declared too, because the URL carries it and the
+ * transport's Shuffle key draws a fresh one, but the rail never renders a
+ * seed — it is not a control.
+ */
 const params: readonly ParamSpec[] = [
   {
     kind: 'range',
@@ -236,121 +264,56 @@ const params: readonly ParamSpec[] = [
     step: 100,
     default: DEFAULT_DARTS,
     log: true,
-    help: `Stop after this many darts. At most ${MAX_DARTS} stay on screen; the counts keep going.`,
-  },
-  {
-    kind: 'range',
-    key: 'dartRate',
-    label: 'Dart rate',
-    min: 1,
-    max: 20_000,
-    step: 1,
-    default: DEFAULT_RATE,
-    unit: '/s',
-    log: true,
-    help: 'Darts thrown per second of simulation time.',
-  },
-  {
-    kind: 'toggle',
-    key: 'showErrorPlot',
-    label: 'Error plot',
-    default: true,
-    help: [
-      'Draw |estimate − ', { v: 'π' }, '| against the dart count on log-log axes.',
-    ],
-  },
-  {
-    kind: 'toggle',
-    key: 'showEnvelope',
-    label: '1/√n envelope',
-    default: true,
-    help: [
-      'Lay the theoretical standard error 4·√(', { v: 'p' }, '(1−', { v: 'p' }, ')/', { v: 'n' },
-      ') = 1.64/√', { v: 'n' }, ' over the measured error.',
-    ],
+    help: `How many darts to throw. Only the newest ${MAX_DARTS} stay on screen; the count keeps going.`,
   },
   {
     kind: 'seed',
     key: 'seed',
     label: 'Seed',
     default: DEFAULT_SEED,
-    help: 'Same seed, same darts, same estimate.',
   },
 ];
 
+/** Three ceilings, a hundredfold apart, so each step buys one decimal place. */
 const presets: readonly Preset[] = [
   {
     id: 'a-hundred',
     label: 'A hundred darts',
-    caption: [
-      'A hundred darts, thrown slowly enough to count: the estimate is good to about one decimal, ',
-      'which is the standard error 1.64/√100 = 0.164.',
-    ],
-    values: { darts: 100, dartRate: 5, showErrorPlot: false, showEnvelope: true },
+    caption: ['A hundred darts gets the first decimal place of ', { v: 'π' }, ' about right, and no more.'],
+    values: { darts: 100 },
   },
   {
     id: 'ten-thousand',
     label: 'Ten thousand',
-    caption: [
-      'A hundred times the darts buys exactly one more decimal — the error falls from 0.164 to 0.0164 — ',
-      'and the plot shows it descending.',
-    ],
-    values: { darts: 10_000, dartRate: 400, showErrorPlot: true, showEnvelope: false },
+    caption: 'A hundred times more darts buys exactly one more decimal place.',
+    values: { darts: 10_000 },
   },
   {
     id: 'one-million',
     label: 'One million',
-    caption: [
-      'A million darts pin ', { v: 'π' }, ' to about three decimals, and the reference line ',
-      'goes on over the measured error: the descent has a law.',
-    ],
-    values: { darts: 1_000_000, dartRate: 20_000, showErrorPlot: true, showEnvelope: true },
-  },
-  {
-    id: 'watch-the-envelope',
-    label: 'Watch the envelope',
-    caption: [
-      'Two million darts at full rate. The measured error tracks 1.64/√', { v: 'n' },
-      ' for five decades and never beats it for long — this is why nobody computes ', { v: 'π' }, ' this way.',
-    ],
-    values: { darts: MAX_TARGET, dartRate: 20_000, showErrorPlot: true, showEnvelope: true },
+    caption: 'A million darts pins down about three decimals, and the plot’s straight line shows it never speeds up.',
+    values: { darts: 1_000_000 },
   },
 ];
 
 const facts: readonly Fact[] = [
   {
     text:
-      'Stanisław Ulam thought of the method in 1946, convalescing and playing solitaire: rather than work out ' +
-      'the odds of a Canfield deal combinatorially, he wondered whether laying the cards out a hundred times and ' +
-      'counting the wins would be quicker. Metropolis named it after the casino at Monte Carlo, where Ulam’s uncle ' +
-      'used to borrow money to gamble.',
+      'Stanisław Ulam thought of the method in 1946 while playing solitaire, wondering whether dealing ' +
+      'the cards a hundred times and counting the wins would be quicker than working out the odds.',
     source: {
-      label:
-        "Metropolis, 'The Beginning of the Monte Carlo Method', Los Alamos Science 15 (1987), 125–130; " +
-        "Eckhardt, 'Stan Ulam, John von Neumann, and the Monte Carlo Method', ibid. 131–137",
+      label: "Metropolis, 'The Beginning of the Monte Carlo Method', Los Alamos Science 15 (1987), 125–130",
       url: 'https://en.wikipedia.org/wiki/Monte_Carlo_method',
     },
   },
   {
     text: [
-      'The error falls as 1/√', { v: 'n' }, ', so every extra decimal place costs a hundred times the darts: ',
-      'ten correct decimals would take about 10²¹ throws. The Chudnovsky series adds fourteen correct digits ',
-      'per term, which is why every record computation of ', { v: 'π' }, ' uses one and none of them use darts.',
+      'Every extra decimal place of ', { v: 'π' }, ' costs a hundred times more darts, which is why the ',
+      'record calculations use a formula that gains fourteen digits per step instead.',
     ],
     source: {
       label: 'Chudnovsky and Chudnovsky (1988); Chudnovsky algorithm',
       url: 'https://en.wikipedia.org/wiki/Chudnovsky_algorithm',
-    },
-  },
-  {
-    text: [
-      'Random points are not a good way to fill a square — they clump, leaving gaps a regular grid would not. ',
-      'Throwing a low-discrepancy sequence instead, Halton or Sobol, changes the error law from 1/√', { v: 'n' },
-      ' to about (log ', { v: 'n' }, ')²/', { v: 'n' }, ', which is the whole of quasi-Monte Carlo integration.',
-    ],
-    source: {
-      label: 'Koksma–Hlawka inequality; quasi-Monte Carlo method',
-      url: 'https://en.wikipedia.org/wiki/Quasi-Monte_Carlo_method',
     },
   },
 ];
@@ -365,11 +328,6 @@ function asNumber(v: ParamValue | undefined, fallback: number): number {
 
 function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
-}
-
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
 }
 
 /** Darts this run will throw, clamped the way `step()` clamps its own ceiling. */
@@ -413,45 +371,41 @@ function create(ctx: VizContext): VizInstance {
   const field = new DartField(MAX_DARTS);
   const history = new ErrorHistory();
 
-  // Structural: the run's ceiling and whether the plate is split. Both change
-  // what the background layer holds, so both are re-read by `paintBackground`.
+  // Structural: the run's ceiling. It changes what the background layer holds
+  // — the x axis spans the run — so it is re-read by `paintBackground`.
   let maxDarts = DEFAULT_DARTS;
-  let showErrorPlot = true;
-  let layout = layoutPlate(ctx.width, ctx.height, showErrorPlot);
+  let layout = layoutPlate(ctx.width, ctx.height, SHOW_ERROR_PLOT);
   let scale = plotScale(layout.plot ?? layout.field, maxDarts);
-
-  // Live: absorbed without touching the darts already thrown.
-  let dartRate = DEFAULT_RATE;
-  let showEnvelope = true;
 
   // Fractional darts owed by the rate accumulator between ticks.
   let pending = 0;
 
   function syncStructure(): void {
     maxDarts = dartTarget(ctx.params);
-    showErrorPlot = flag(ctx.params, 'showErrorPlot', true);
-    layout = layoutPlate(ctx.width, ctx.height, showErrorPlot);
+    layout = layoutPlate(ctx.width, ctx.height, SHOW_ERROR_PLOT);
     scale = plotScale(layout.plot ?? layout.field, maxDarts);
   }
 
-  function syncLive(): void {
-    dartRate = num(ctx.params, 'dartRate', DEFAULT_RATE);
-    showEnvelope = flag(ctx.params, 'showEnvelope', true);
-  }
-
+  /**
+   * The estimate is the headline; the two counts are the plain sentence under
+   * it; the two error figures are for the exact table only. `label`, `target`
+   * and `digits` are what the tests read, and stay as they are.
+   */
   function readouts(): Readout[] {
     const darts = field.darts;
     const inside = field.inside;
     const pi = estimatePi(inside, darts);
     return [
-      { key: 'darts', label: 'Darts', value: darts, digits: 7 },
-      { key: 'inside', label: 'Inside the circle', value: inside, digits: 7 },
+      { key: 'darts', label: 'Darts', value: darts, digits: 7, plain: 'darts thrown' },
+      { key: 'inside', label: 'Inside the circle', value: inside, digits: 7, plain: 'landed in the circle' },
       {
         key: 'pi',
         label: 'π estimate',
         value: pi,
         digits: 6,
         target: Math.PI,
+        headline: true,
+        plain: 'our estimate of pi',
         // The ledger's 1% default is 0.031 on π — nineteen standard errors at a
         // million darts, so the row would read "converged" whatever the
         // simulation did. Three standard errors at the count the run is going
@@ -460,14 +414,15 @@ function create(ctx: VizContext): VizInstance {
         // rather than being true from the first one.
         tolerance: (3 * piStandardError(maxDarts)) / Math.PI,
       },
-      { key: 'error', label: 'Absolute error', value: Math.abs(pi - Math.PI), digits: 3 },
+      { key: 'error', label: 'Absolute error', value: Math.abs(pi - Math.PI), digits: 3, expertOnly: true },
       {
-        // The label carries the formula because this number is also drawn on the
-        // plate, as the legend key for the reference line.
+        // The label carries the formula so the exact table names the reference
+        // line the plot draws; the plot's own key says "expected".
         key: 'se',
         label: `Std. error, ${PI_SE_COEFFICIENT.toFixed(2)}/√n`,
         value: piStandardError(darts),
         digits: 3,
+        expertOnly: true,
       },
     ];
   }
@@ -477,10 +432,10 @@ function create(ctx: VizContext): VizInstance {
    *
    * Called by `drawBackground()` and, unusually, from `onParamChange` as well:
    * the plot's frame and its decade axis are static geometry and therefore live
-   * here, but both toggling the plot and raising the dart ceiling move them,
-   * and the shell repaints the background only for a change the visualization
-   * *refuses*. Refusing them would throw a two-million-dart run away for a
-   * cosmetic switch, so they are absorbed and this is called directly.
+   * here, but raising the dart ceiling moves them, and the shell repaints the
+   * background only for a change the visualization *refuses*. Refusing it
+   * would throw a two-million-dart run away for a longer axis, so it is
+   * absorbed and this is called directly.
    */
   function paintBackground(): void {
     syncStructure();
@@ -564,7 +519,7 @@ function create(ctx: VizContext): VizInstance {
     }
     bg.textAlign = 'left';
     bg.textBaseline = 'bottom';
-    bg.fillText('|error| vs darts', box.x, box.y - LABEL_GAP);
+    bg.fillText('error vs darts', box.x, box.y - LABEL_GAP);
   }
 
   const instance: VizInstance = {
@@ -573,10 +528,10 @@ function create(ctx: VizContext): VizInstance {
         pending = 0;
         return;
       }
-      pending += (dartRate * dt) / 1000;
-      // Darts per tick depend only on dt and dartRate, and each dart consumes
-      // exactly two rng draws, so the dart sequence for a seed is the same at
-      // every rate — only the clock differs.
+      pending += (DART_RATE * dt) / 1000;
+      // Darts per tick depend only on dt, and each dart consumes exactly two
+      // rng draws, so the dart sequence for a seed is the same however the
+      // ticks are batched — only the clock differs.
       while (pending >= 1 && field.darts < maxDarts) {
         field.push(throwDart(ctx.rng));
         history.sample(field.darts, field.inside);
@@ -633,7 +588,7 @@ function create(ctx: VizContext): VizInstance {
 
       if (layout.plot) {
         const curve = 2 * theme.lineWidth;
-        if (showEnvelope) {
+        if (SHOW_ENVELOPE) {
           // On log-log axes 4·√(p(1−p)/n) is exactly a straight line of slope
           // −½, so the reference is two points, not a sampled curve.
           fg.beginPath();
@@ -684,18 +639,8 @@ function create(ctx: VizContext): VizInstance {
       ctx.emit(readouts());
     },
 
-    onParamChange(key, value) {
+    onParamChange(key) {
       switch (key) {
-        case 'dartRate':
-          dartRate = asNumber(value, dartRate);
-          return true;
-        case 'showEnvelope':
-          // Foreground only: the next frame carries it.
-          showEnvelope = value === true;
-          return true;
-        case 'showErrorPlot':
-          paintBackground();
-          return true;
         case 'darts': {
           // Asymmetric, for the reason Buffon's ceiling is: a dart consumes the
           // same two draws whatever the ceiling, so the run on screen is a true
@@ -717,7 +662,6 @@ function create(ctx: VizContext): VizInstance {
 
     reset() {
       syncStructure();
-      syncLive();
       ctx.rng.reseed(num(ctx.params, 'seed', DEFAULT_SEED));
       field.reset();
       history.reset();
@@ -735,17 +679,19 @@ function create(ctx: VizContext): VizInstance {
    *
    * On the foreground rather than the background, and painted after the curves,
    * because the background layer is *under* them: a key the data draws over is
-   * not a key. It is one fillRect, one strokeRect and two short strokes, which
-   * is cheaper than the background repaint that toggling the reference line
-   * would otherwise cost.
+   * not a key. It is one fillRect, one strokeRect and two short strokes.
+   *
+   * The reference line is keyed "expected", not by its formula: the formula
+   * is in the exact table for anyone who opens it, and a reader who would have
+   * to ask what 1.64/√n means is the reader this plate is for.
    */
   function paintLegend(fg: CanvasRenderingContext2D): void {
     const { theme } = ctx;
     const box = scale.box;
-    const rows: ReadonlyArray<[string, string]> = showEnvelope
+    const rows: ReadonlyArray<[string, string]> = SHOW_ENVELOPE
       ? [
           ['measured', theme.data1],
-          [`${PI_SE_COEFFICIENT.toFixed(2)}/√n`, theme.data2],
+          ['expected', theme.data2],
         ]
       : [['measured', theme.data1]];
 
@@ -799,10 +745,7 @@ export const montecarloPi: Viz = {
   id: 'montecarlo-pi',
   title: 'Monte Carlo π',
   group: 'randomness',
-  blurb: [
-    'Throws darts at a square and recovers ', { v: 'π' },
-    ' from the fraction that land inside the inscribed circle.',
-  ],
+  blurb: ['Throws darts at a square and works out ', { v: 'π' }, ' from how many land inside the circle.'],
   // Landscape, because the plate holds two panels: a square field of darts and
   // the convergence plot beside it. Portrait on a phone, where the plot goes
   // under the field instead and a 1.6 bed would leave it 60 px tall.

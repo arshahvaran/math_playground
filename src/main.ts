@@ -3,7 +3,7 @@ import './ui/theme.css';
 import { createStage, readCanvasTheme, type Stage } from './core/canvas';
 import { createEngine } from './core/engine';
 import { ensureCanvasFont } from './core/paint';
-import { createRng } from './core/rng';
+import { createRng, randomSeed } from './core/rng';
 import {
   buildHash,
   coerceParams,
@@ -11,7 +11,6 @@ import {
   serializeParams,
   type Route,
 } from './core/router';
-import { fmt } from './core/stats';
 import type {
   ParamValue,
   Preset,
@@ -23,7 +22,7 @@ import type {
 import { createControls, type ControlsHandle } from './ui/controls';
 import { clear, setProse } from './ui/dom';
 import { createFacts, type FactsHandle } from './ui/facts';
-import { createReadouts, type ReadoutsHandle } from './ui/readouts';
+import { createReadouts, headlineOf, sentenceOf, type ReadoutsHandle } from './ui/readouts';
 import { createShell } from './ui/shell';
 import { createStory, type StoryHandle } from './ui/story';
 import { createTransport, type TransportHandle } from './ui/transport';
@@ -74,9 +73,6 @@ const SETTLE_BUDGET_MS = 400;
 /** Fallback for a visualization that declares no seed parameter. */
 const FALLBACK_SEED = 1;
 
-/** Relative error inside which a reading counts as converged, per the contract. */
-const DEFAULT_TOLERANCE = 0.01;
-
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('main: #app is missing from index.html');
 
@@ -118,39 +114,18 @@ let generation = 0;
 // Live region
 // ---------------------------------------------------------------------------
 
-function converged(readout: Readout, target: number): boolean {
-  const declared = readout.tolerance;
-  const tolerance = declared !== undefined && declared >= 0 ? declared : DEFAULT_TOLERANCE;
-  const error = Math.abs(readout.value - target);
-  // A target of exactly zero has no relative error; compare absolutely.
-  return target === 0 ? error <= tolerance : error / Math.abs(target) <= tolerance;
-}
-
 /**
- * The page's only live region, written through the ledger that owns it: one
+ * The page's only live region, written through the readouts that own it: one
  * sentence, on pause, preset change and route change, never during a run — a
  * drag or a running simulation must not narrate every throttled update.
+ *
+ * The sentence is the headline in the same plain words the page shows, with
+ * the same verdict: `headlineOf()` and `sentenceOf()` are the readouts' own
+ * rules, so what is spoken can never disagree with what is printed.
  */
 function announce(prefix: string): void {
-  // The hero is the first readout carrying a target, else the first readout —
-  // the same promotion rule the ledger uses.
-  const hero = latest.find((r) => r.target !== undefined) ?? latest[0];
-  let sentence = prefix;
-  if (hero && !Number.isFinite(hero.value)) {
-    // A mean over zero samples is NaN, which is the honest value and a useless
-    // thing to hear read out.
-    sentence += ` ${hero.label} not measured yet.`;
-  } else if (hero) {
-    const digits = hero.digits ?? 4;
-    sentence += ` ${hero.label} ${fmt(hero.value, digits)}`;
-    if (hero.unit) sentence += ` ${hero.unit}`;
-    if (hero.target !== undefined) {
-      sentence += `, analytic ${fmt(hero.target, digits)}`;
-      sentence += converged(hero, hero.target) ? ', converged' : ', not yet converged';
-    }
-    sentence += '.';
-  }
-  readouts?.announce(sentence);
+  const hero = headlineOf(latest);
+  readouts?.announce(hero ? `${prefix} ${sentenceOf(hero)}` : prefix);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +169,13 @@ const transportCallbacks = {
     inst.draw();
     announce('Reset.');
   },
+  onShuffle(): void {
+    // The rail carries no seed field, so this is the one way to ask for the
+    // same experiment with another draw. It goes through the control path so
+    // the URL, the "Try:" chips and the reset all follow as for any other knob.
+    const seed = activeViz?.params.find((spec) => spec.kind === 'seed');
+    if (seed) onControlChange(seed.key, randomSeed());
+  },
   onSpeed(multiplier: number): void {
     engine.setSpeed(multiplier);
   },
@@ -224,14 +206,13 @@ function syncUrl(): void {
  * Every value it declares has to be in force *and* every parameter it does not
  * declare has to be at its default — the state applying it to a fresh route
  * would produce. A plain subset test ("is every declared value in force?") is
- * not enough, because presets declare partial, overlapping key sets: Buffon's
- * "Short needle" sets only `ratio`, on top of the two values "Slow motion"
- * already set, so a subset scan answers with the earlier step for a state that
- * is really the later one — and the tape then captions the plate with the wrong
- * experiment.
+ * not enough, because presets declare partial key sets: Buffon's "Short
+ * needle" sets only `ratio` and "Wider boards" only `spacing`, so a subset scan
+ * answers "Short needle" for a short needle on wide boards — a state that is
+ * neither chip — and the caption then describes the wrong experiment.
  *
  * A seed a preset does not declare is exempt: a seed names the run, not the
- * configuration, and "the same preset with another draw" is what Randomize is
+ * configuration, and "the same preset with another draw" is what Shuffle is
  * for.
  */
 function presetInForce(
@@ -439,7 +420,10 @@ function activate(viz: Viz, route: Route): void {
   regions.story.hidden = presets.length === 0;
   facts = createFacts(regions.facts, viz.facts);
   regions.facts.hidden = viz.facts.length === 0;
-  transport = createTransport(regions.transport, transportCallbacks, { reducedMotion });
+  transport = createTransport(regions.transport, transportCallbacks, {
+    reducedMotion,
+    seeded: viz.params.some((spec) => spec.kind === 'seed'),
+  });
 
   unResize = st.onResize((width, height) => {
     // The resize already wiped both bitmaps; the background is ours to repaint.

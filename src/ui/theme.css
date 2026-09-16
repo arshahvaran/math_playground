@@ -30,7 +30,14 @@
    with its width axis as the density instrument, Martian Mono for every
    measurement, the vermilion #d53619, the three CVD-validated pens on a white
    plate, the peg-row tab strip where the peg swells into the ball, and the
-   Measured / Analytic / Error ledger.
+   Measured / Analytic / Error table — now behind "Show the exact numbers".
+
+   Revision 4 is a subtraction. The page is written for a reader with no
+   statistics: the readouts are one number, its plain label and one sentence;
+   the masthead is the wordmark and the scheme toggle; the tab strip is the
+   whole navigation; the footer is one line. And NOTHING MOVES WHEN A DIGIT
+   CHANGES — every number sits in a box reserved for its widest reading, every
+   live line has a fixed height, and the readouts region is layout-contained.
 
    FIVE FILE-WIDE RULES, in order of how easily they are broken:
 
@@ -49,18 +56,18 @@
       fully encloses a control satisfies SC 2.4.11 with no separate contrast
       check against the control.
    4. Nothing animates a layout property. Allowed: transform / translate /
-      scale, opacity, box-shadow, background-color, color, border-color,
-      outline-color, and the registered custom property --err.
+      scale / rotate, opacity, box-shadow, background-color, color,
+      border-color and outline-color.
 
    Section map:
-     1  Tokens                        9  Story mode
+     1  Tokens                        9  "Try:" chips
      2  Base and typography          10  Fact card
      3  Page layout                  11  Rail, transport, controls
      4  Masthead                     12  Windows and keys
      5  Tab bar                      13  Native controls
      6  Bench, figure, plate         14  Footer and utilities
-     7  Caption                      15  Responsive
-     8  Readouts: hero + ledger      16  Reduced motion, forced colors, print
+     7  Share                        15  Responsive
+     8  Readouts: hero + exact table 16  Reduced motion, forced colors, print
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -89,26 +96,8 @@
   initial-value: 1.6;
 }
 
-/* Hero needle position, 0 = full negative error, 0.5 = converged, 1 = full
-   positive.
-
-   `inherits: true` is a CORRECTION, not a preference. The shell writes --err on
-   `.hero` and the needle reads it on `.hero__needle`, a DESCENDANT. Declared
-   `inherits: false` — as it was through revision 2 — the needle computed the
-   initial value 0.5 for every reading in every tab, and dead centre is the one
-   position on a null meter that means "this agrees with theory". The meter was
-   welded to a convergence claim nothing had been tested for.
-
-   Registered and inherited, it is also animatable, which is what lets the
-   needle transition the NUMBER rather than its `left` offset.
-
-   Deliberately NOT given to --viz-aspect-narrow, which must stay unregistered
-   so `var(--viz-aspect-narrow, …)` can fall back. */
-@property --err {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 0.5;
-}
+/* --viz-aspect-narrow is deliberately NOT registered, so
+   `var(--viz-aspect-narrow, …)` can fall back. */
 
 /* --------------------------------------------------------------------------
    1  Tokens
@@ -318,14 +307,14 @@
   --gutter: 1.5rem;
   --bench-gap: var(--s-6);   /* was a 1 px seam. This one line is most of the fix. */
   --page-max: 100rem;
-  /* 23rem, not revision 2's 20rem: the transport's five 44 px controls and its
-     rate picker want 292 px on one row, and the rail also pays for 14 px help
-     text and 20 px of panel padding. The extra 48 px is spent on legibility,
-     not on more controls. */
-  --rail-w: 23rem;
-  --rail-w-wide: 25rem;
+  /* 24rem: the transport's six controls — Play at 84 px, four 44 px keys, the
+     52 px speed picker, five 4 px gaps and 10 px of padding — want 342 px on
+     one row, and the panel pays 20 px of padding each side. It is a FIXED
+     column at every two-column width, so nothing the figure does can change it. */
+  --rail-w: 24rem;
+  --rail-w-wide: 26rem;
   --label-col: 8.5rem;
-  --measure: 68ch;           /* blurb and story caption ONLY, never a wrapper */
+  --measure: 68ch;           /* blurb, chip caption and facts ONLY, never a wrapper */
 
   /* ------------------------------------------------------------------------
      Control sizes. Desktop default 36 px; the primary action and the transport
@@ -341,10 +330,10 @@
   --key-h-touch: 2.75rem;
   --window-h: 1.75rem;       /* 28 — was 22, i.e. a 98.css text field */
   --input-h: 2.25rem;        /* 36 */
-  --hero-h: 7rem;            /* 112 — was 96 */
-  --hero-max: 23rem;
-  --band-w: 12rem;           /* the null meter's travel — fixed, so the needle
-                                can move on `translate` instead of `left` */
+  /* The hero's three fixed lines — 44 px numeral, 20 px label, 22 px sentence —
+     plus two 4 px gaps and 32 px of padding. A FLOOR, never a fit: the region
+     under the plate must not change height while a run is going. */
+  --hero-h: 8.75rem;
   --row-control: 2.75rem;
   --deck-h: 4rem;            /* 64 handheld transport deck */
 
@@ -353,8 +342,8 @@
      and one circle in the system is the Galton ball. Machined, so px.
      --range-w is a CONSTANT upper bound on the input's width, used by the
      box-shadow fill; it only has to EXCEED the real width. --rail-w tops out at
-     23.5rem = 376 px, so there is 104 px of headroom. Raise it if the rail ever
-     grows past 480 px. */
+     26rem = 416 px less 40 px of panel padding, so there is 104 px of headroom.
+     Raise it if the rail ever grows past 480 px. */
   --range-h: 44px;
   --range-w: 480px;
   --channel: 14px;
@@ -400,7 +389,7 @@
   --t-17: 1.0625rem;  --lh-17: 1.625rem;
   --t-18: 1.125rem;   --lh-18: 1.625rem;     /* fact text, wordmark */
   --t-20: 1.25rem;    --lh-20: 1.6875rem;    /* section titles */
-  --t-hero: 2.5rem;   --lh-hero: 2.75rem;    /* the measured value, Martian Mono */
+  --t-hero: 2.5rem;   --lh-hero: 2.75rem;    /* the headline number, Martian Mono */
   /* clamp() appears EXACTLY ONCE in this file, and so does text-wrap: balance;
      the two are deliberately not deployed as a set with a prose measure. */
   --title-size: clamp(1.875rem, 1.2rem + 2.4vw, 2.625rem);
@@ -434,7 +423,7 @@
   --dur-1: 90ms;    /* colour and opacity: hover wash, press, ledger row hover */
   --dur-2: 140ms;   /* transform and box-shadow: carriage, key depress, rings */
   --dur-3: 200ms;   /* travel: switch knob, the peg swelling into the ball */
-  --dur-4: 280ms;   /* section change, the null-meter needle */
+  --dur-4: 280ms;   /* section change */
   --dur-5: 420ms;   /* fact card enter */
 
   --ease-std: cubic-bezier(0.2, 0, 0, 1);               /* moving in place */
@@ -649,7 +638,8 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   4  Masthead
+   4  Masthead — the wordmark and the scheme toggle. Nothing else: the author
+   and the source live in the footer line, where a reader who wants them looks.
    -------------------------------------------------------------------------- */
 
 .masthead {
@@ -672,34 +662,6 @@ canvas {
   white-space: nowrap;
 }
 
-.masthead__end {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-}
-
-.masthead__credit {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-3);
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-ui);
-  line-height: var(--lh-13);
-  font-stretch: var(--wdth-ui);
-  color: var(--ink-soft);
-  white-space: nowrap;
-}
-
-.masthead__author,
-.masthead__repo {
-  color: var(--ink);
-}
-
-.masthead__affil {
-  color: var(--ink-soft);
-}
-
 /* The scheme toggle. Two states, aria-pressed, one glyph that fills as the
    scheme darkens. It is a .key.key--icon and takes all of its geometry from
    there; this rule exists so the masthead can find it. */
@@ -717,21 +679,18 @@ canvas {
 
 /* --------------------------------------------------------------------------
    5  Tab bar
-   A peg row in a sunken trough, plus a pinned index. Every tab carries a peg on
-   its bottom edge; the vermilion ball rests on the active one. State is read
-   from ARIA alone — there is no class for the shell to desynchronise.
+   A peg row in a sunken trough. Every tab carries a peg on its bottom edge; the
+   vermilion ball rests on the active one. State is read from ARIA alone —
+   there is no class for the shell to desynchronise.
 
-   The strip's scrollbar is gone and an edge fade plus scroll snapping replaces
-   it: the index (prev key, jump select, next key) is present at every width, so
-   nothing is undiscoverable, and a chunky scrollbar inside a toolbar was itself
-   part of the look being removed.
+   The strip is the whole navigation at every width. On a narrow screen it
+   scrolls sideways, with the active tab snapped into view by the shell and an
+   edge fade in place of a scrollbar; the arrow keys and the index select that
+   used to sit beside it were three more controls to explain.
    -------------------------------------------------------------------------- */
 
 .tabs {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--s-3);
+  display: block;
   padding: var(--s-3) var(--gutter) var(--s-5);
 }
 
@@ -751,9 +710,7 @@ canvas {
   scroll-snap-type: x proximity;
   /* The scrollbar is gone and an edge fade replaces it. The fade is 10 px — the
      width of the strip's own inline padding — so nothing sits in it at rest and
-     it only softens the clip when the row genuinely scrolls. The index beside
-     the strip lists every visualization at every width, so nothing here is the
-     sole affordance. */
+     it only softens the clip when the row genuinely scrolls. */
   scrollbar-width: none;
   mask-image: linear-gradient(
     to right,
@@ -873,29 +830,6 @@ canvas {
   .tab[aria-selected="true"]:hover {
     background-color: var(--surface-raised);
   }
-}
-
-/* The index: prev · jump · next. Pinned outside the scroller at every width. */
-.tabs__index {
-  display: grid;
-  grid-template-columns: auto minmax(7rem, 14rem) auto;
-  align-items: center;
-  gap: var(--s-2);
-}
-
-/* .tabs__prev / .tabs__next are .key.key--icon and take their size from there.
-   These rules only keep them from stretching. */
-.tabs__prev,
-.tabs__next {
-  flex: none;
-}
-
-.tabs__select {
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-ui);
-  line-height: var(--lh-13);
-  font-stretch: var(--wdth-ui);
 }
 
 /* --------------------------------------------------------------------------
@@ -1064,133 +998,90 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   7  Caption
+   7  Share
+   One small key under the plate, right-aligned, that copies the permalink.
+   Its label changes while it confirms, so it has a reserved width and grows
+   leftward from the edge it is pinned to — nothing else on the row moves.
    -------------------------------------------------------------------------- */
 
-.caption {
+.share {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s-1) var(--s-3);
-  /* Pulls the caption to 16 px under the plate — closer than the 24 px section
-     rhythm, because a caption belongs to its figure. It must stay clear of the
-     plate's 12 px mat, which is a shadow and takes no layout space. */
+  justify-content: flex-end;
+  /* 16 px under the plate — closer than the 24 px section rhythm, because the
+     key belongs to its figure. It stays clear of the plate's 12 px mat, which
+     is a shadow and takes no layout space. */
   margin-top: calc(-1 * var(--s-2));
-  font-size: var(--t-13);
-  line-height: var(--lh-13);
-  color: var(--ink-soft);
 }
 
-.caption__figure {
-  font-weight: var(--wght-label);
-  color: var(--ink);
+.share__key {
+  min-width: 7.5rem;
 }
 
-.caption__text {
-  flex: 1 1 24ch;
-  min-width: 0;
-}
-
-.caption__copy {
-  position: relative;
-  margin-inline-start: auto;
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-2);
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-ui);
-  line-height: var(--lh-13);
-  font-stretch: var(--wdth-ui);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color var(--hover-out) var(--ease-std);
-}
-
-/* 32 px of ink, 44 px of target. */
-.caption__copy::after {
-  content: "";
-  position: absolute;
-  inset: -6px;
-}
-
-.caption__copy[data-state="done"] {
+.share__key[data-state="done"] {
   color: var(--accent-text);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .caption__copy:hover {
-    background-color: var(--wash-1);
-    transition-duration: var(--hover-in);
-  }
-}
-
-.caption__copy:active {
-  background-color: var(--wash-2);
 }
 
 /* --------------------------------------------------------------------------
    8  Readouts
-   One white hero window with a null meter, and a ledger for the rest. The
-   lattice is gone: no vertical rules, no inter-cell seams, no zebra. Exactly
-   one 1 px rule, under the head.
+   One white window holding the headline number, its plain-language label and
+   one sentence — and under it a disclosure with the exact Measured / Analytic
+   / Error table.
+
+   THE REGION IS FROZEN. It is layout-contained with a floor on its height, the
+   window's three lines have FIXED heights and never wrap, the number sits in
+   a box the shell reserves from the digits the reading can need, and the
+   table has fixed columns. A digit changing lays out nothing outside its own
+   glyph box; that is the whole contract with the plate above and the page
+   below.
    -------------------------------------------------------------------------- */
 
 .readouts {
   display: grid;
-  /* The hero is capped. max-content ignored the hero's own flex-wrap and let a
-     long label claim 444 px, crushing the ledger at 1024–1280 px. */
-  grid-template-columns: minmax(15rem, var(--hero-max)) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--s-6);
+  gap: var(--s-4);
+  align-content: start;
+  contain: layout;
+  /* The window plus the disclosure line, so the region is the same height
+     empty, settling and finished. Opening the disclosure is the reader's own
+     act and is allowed to grow it. */
+  min-height: calc(var(--hero-h) + var(--s-4) + var(--key-h));
 }
 
-/* Hero window: measured at 500, analytic at 300, same size, one baseline. */
 .hero {
+  --hero-value-lh: var(--lh-hero);
   display: grid;
-  align-content: center;
-  gap: var(--s-2);
+  /* Three rows of FIXED height: the numeral, the label, the sentence. */
+  grid-template-rows: var(--hero-value-lh) var(--lh-14) var(--lh-14);
+  align-content: start;
+  row-gap: var(--s-1);
   min-height: var(--hero-h);
-  max-width: var(--hero-max);
   padding: var(--s-4) var(--s-5);
   border-radius: var(--radius-3);
   background: var(--canvas);
   box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   color: var(--window-ink);
-  /* A registered <number> is animatable, so the needle interpolates the VALUE
-     and nothing lays out. Revision 2 transitioned `left` and triggered layout
-     on every frame. */
-  transition: --err var(--dur-4) var(--ease-std);
-}
-
-.hero__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--s-4);
-  font-family: var(--font-mono);
-  font-stretch: var(--wdth-mono);
-  letter-spacing: var(--tracking-mono);
-  font-variant-numeric: var(--num);
 }
 
 .hero__value {
+  display: block;
+  font-family: var(--font-mono);
   font-weight: 500;
   font-size: var(--t-hero);
-  line-height: var(--lh-hero);
+  line-height: var(--hero-value-lh);
+  font-stretch: var(--wdth-mono);
+  letter-spacing: var(--tracking-mono);
+  font-variant-numeric: var(--num);
   white-space: nowrap;
+  overflow: hidden;
 }
 
-.hero__target {
-  font-weight: 300;
-  font-size: var(--t-hero);
-  line-height: var(--lh-hero);
-  white-space: nowrap;
+/* The digits' box. `min-width` is written by the shell in ch — Martian Mono is
+   fixed pitch, so a ch is a glyph — from the widest reading the readout can
+   produce, so the unit after it and nothing else ever shifts as digits change. */
+.hero__number {
+  display: inline-block;
+  min-width: 7ch;
+  text-align: left;
+  font-variant-numeric: var(--num);
 }
 
 .hero__unit {
@@ -1204,98 +1095,22 @@ canvas {
   margin-inline-start: 0.25em;
 }
 
-/* The null meter. A galvanometer, not a KPI delta chip: the needle rests dead
-   centre when the reading agrees with theory and walks out as it diverges. The
-   shell writes --err in [0, 1] on .hero; 0.5 is agreement. --band-w is fixed so
-   the needle can move on `translate` rather than on `left`. */
-.hero__band {
-  position: relative;
-  width: var(--band-w);
-  max-width: 100%;
-  height: 10px;
-}
-
-/* Baseline and centre tick in ONE pseudo-element, so ::after is free to speak
-   in the empty state. */
-.hero__band::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 10px;
-  background-image:
-    linear-gradient(var(--window-stroke), var(--window-stroke)),
-    linear-gradient(var(--window-stroke), var(--window-stroke));
-  background-size: 100% 1px, 1px 10px;
-  background-position: 0 4px, 50% 0;
-  background-repeat: no-repeat, no-repeat;
-}
-
-.hero__needle {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 2px;
-  height: 10px;
-  margin-left: -1px;
-  background: var(--window-ink);
-  translate: calc((clamp(0, var(--err), 1) - 0.5) * var(--band-w)) 0;
-}
-
-/* No reading yet — a mean over zero samples. The needle is hidden rather than
-   parked, because dead centre on the null meter is the one position that means
-   "the reading agrees with theory". The UA's [hidden] rule loses to
-   .hero__needle's own `position`, so it is restated here. */
-.hero__needle[hidden] {
-  display: none;
-}
-
-/* The spoken empty state. .hero__band already carries aria-hidden="true", so
-   this sentence is added for sighted readers with zero duplication in the live
-   region — the shell already announces "not measured yet" there. Three cues:
-   the value goes quiet, the centreline goes dashed, and the meter says so. */
-.hero:has(.hero__needle[hidden]) .hero__band {
-  height: calc(10px + var(--lh-13));
-}
-
-.hero:has(.hero__needle[hidden]) .hero__band::before {
-  background-image:
-    repeating-linear-gradient(
-      to right,
-      var(--window-stroke) 0 3px,
-      transparent 3px 6px
-    ),
-    linear-gradient(var(--window-stroke), var(--window-stroke));
-}
-
-.hero:has(.hero__needle[hidden]) .hero__band::after {
-  content: "waiting for the first sample";
-  position: absolute;
-  inset-inline-start: 0;
-  top: 15px;
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-body);
-  line-height: var(--lh-13);
-  color: var(--window-ink-muted);
-  white-space: nowrap;
-}
-
-.hero:has(.hero__needle[hidden]) .hero__value {
+.hero[data-measured="false"] .hero__value {
   color: var(--window-ink-muted);
 }
 
-.hero__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--s-3);
+.hero__label,
+.hero__verdict {
+  margin: 0;
   font-family: var(--font-display);
-  font-size: var(--t-13);
+  font-size: var(--t-14);
   font-weight: var(--wght-ui);
-  line-height: var(--lh-13);
+  line-height: var(--lh-14);
   font-stretch: var(--wdth-display);
   font-variant-numeric: var(--num);
-  color: var(--window-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hero__label {
@@ -1303,38 +1118,113 @@ canvas {
   font-weight: var(--wght-label);
 }
 
-.hero__error {
-  font-family: var(--font-mono);
-  font-weight: 400;
-  font-stretch: var(--wdth-mono-dense);
-  letter-spacing: var(--tracking-mono);
-  font-variant-numeric: var(--num);
-  white-space: nowrap;
-  text-decoration: underline dotted;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+.hero__verdict {
+  color: var(--window-ink-muted);
 }
 
-.hero[data-state="agree"] .hero__error {
+/* The check keeps its box whether or not it shows, so the words after it never
+   shift when agreement arrives. */
+.hero__mark {
+  display: inline-block;
+  width: 1.25em;
+  visibility: hidden;
   color: var(--window-agree);
-  text-decoration: none;
 }
 
-.hero[data-state="agree"] .hero__needle {
-  background: var(--window-agree);
+.hero[data-state="agree"] .hero__mark {
+  visibility: visible;
 }
 
-/* The ledger, in its own scroller: three nowrap ch-reserved columns will not
-   fit a 220 px track, and the page body must never scroll sideways. */
+.hero[data-state="agree"] .hero__verdict {
+  color: var(--window-agree);
+}
+
+/* The disclosure. A solid triangle, not a stroked chevron; the label is
+   constant so the line's width never changes. */
+.exact__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--key-h);
+  padding: 0 var(--s-3);
+  border-radius: var(--radius-3);
+  list-style: none;
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+  color: var(--ink-muted);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    color var(--dur-1) var(--ease-std),
+    background-color var(--hover-out) var(--ease-std);
+}
+
+.exact__summary::-webkit-details-marker {
+  display: none;
+}
+
+.exact__summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-block: 5px solid transparent;
+  border-inline-start: 6px solid currentColor;
+  transition: rotate var(--dur-2) var(--ease-std);
+}
+
+.exact[open] > .exact__summary::before {
+  rotate: 90deg;
+}
+
+.exact__summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .exact__summary:hover {
+    color: var(--ink);
+    background-color: var(--wash-1);
+    transition-duration: var(--hover-in);
+  }
+}
+
+.exact > .ledger-wrap {
+  margin-top: var(--s-3);
+}
+
+/* The table, in its own scroller: three fixed columns will not fit a 220 px
+   track, and the page body must never scroll sideways. */
 .ledger-wrap {
   overflow-x: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--stroke) transparent;
 }
 
+/* FIXED layout: the three numeric columns take their widths from the <col>s,
+   the label column takes the rest, and a value growing a digit cannot move a
+   column edge. Each width holds the widest reading its column can be asked
+   for, in mono glyphs: twelve for a value, nine for a target, sixteen for a
+   signed error with its percentage. */
 .ledger {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.ledger__col--value {
+  width: 8rem;
+}
+
+.ledger__col--target {
+  width: 7.5rem;
+}
+
+.ledger__col--error {
+  width: 11rem;
 }
 
 .ledger th,
@@ -1342,6 +1232,8 @@ canvas {
   padding: 10px var(--s-3);
   text-align: right;
   vertical-align: baseline;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ledger th:first-child,
@@ -1392,6 +1284,7 @@ canvas {
   font-weight: var(--wght-ui);
   line-height: var(--lh-14);
   color: var(--ink);
+  white-space: nowrap;
 }
 
 .readout__value {
@@ -1425,6 +1318,17 @@ canvas {
   color: var(--ink-muted);
   min-width: 8ch;
   white-space: nowrap;
+}
+
+/* The closed form beside the number it produced: n·p, 2L/(πd). Prose, so its
+   variables are italic. */
+.readout__formula {
+  margin-inline-start: var(--s-2);
+  font-family: var(--font-display);
+  font-size: var(--t-11);
+  font-stretch: var(--wdth-display);
+  letter-spacing: normal;
+  color: var(--ink-soft);
 }
 
 .readout__error {
@@ -1487,7 +1391,9 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   9  Story mode — a program tape
+   9  "Try:" — one row of at most three preset chips, and a caption for the
+   active one. The active chip is vermilion, per the rubrication rule: it is
+   what is current.
    -------------------------------------------------------------------------- */
 
 .story {
@@ -1495,89 +1401,43 @@ canvas {
   gap: var(--s-2);
 }
 
-.story__tape {
+.story__row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--s-2);
-  margin-bottom: var(--s-2);
 }
 
-.story__steps {
-  display: flex;
-  gap: var(--s-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.story__step {
-  position: relative;
-  width: var(--key-s);
-  height: var(--key-s);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-2);
-  background: transparent;
-  color: var(--ink-muted);
-  font-family: var(--font-mono);
+.story__lead {
+  margin-inline-end: var(--s-1);
+  font-family: var(--font-display);
   font-size: var(--t-13);
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: var(--tracking-mono);
-  font-variant-numeric: var(--num);
-  box-shadow: var(--ring);
-  cursor: pointer;
-  transition:
-    background-color var(--hover-out) var(--ease-std),
-    color var(--dur-1) var(--ease-std),
-    box-shadow var(--dur-2) var(--ease-tactile);
+  font-weight: var(--wght-label);
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+  color: var(--ink-muted);
 }
 
-/* 30 px of ink, 44 px of target. */
-.story__step::after {
-  content: "";
-  position: absolute;
-  inset: -7px;
-}
-
-.story__step--visited {
-  color: var(--ink);
-  box-shadow: var(--ring-strong);
-}
-
-.story__step[aria-current="step"] {
-  background: var(--accent);
+.story__chip[aria-pressed="true"] {
+  background-color: var(--accent);
+  background-image: none;
   color: var(--accent-ink);
-  box-shadow: var(--e-1);
+  box-shadow: 0 0 0 1px var(--accent-press), var(--e-1);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .story__step:hover {
-    color: var(--ink);
-    background-color: var(--wash-1);
-    transition-duration: var(--hover-in);
-  }
-
-  .story__step[aria-current="step"]:hover {
+  .story__chip[aria-pressed="true"]:hover:not(:disabled) {
     background-color: var(--accent-hover);
+    background-image: none;
+    color: var(--accent-ink);
+    box-shadow: 0 0 0 1px var(--accent-press), var(--e-1), var(--e-hover);
   }
 }
 
-.story__step:active {
-  translate: 0 1px;
-}
-
-.story__label {
-  font-family: var(--font-display);
-  font-size: var(--t-20);
-  font-weight: var(--wght-title);
-  line-height: var(--lh-20);
-  letter-spacing: var(--tracking-20);
-  color: var(--ink);
-}
-
+/* Reserved at two lines and always in flow: showing and hiding it would move
+   the fact card under it every time a chip is pressed. */
 .story__caption {
+  min-height: calc(2 * var(--lh-16));
   max-width: var(--measure);
   font-size: var(--t-16);
   line-height: var(--lh-16);
@@ -1585,8 +1445,8 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   10  Fact card — the second elevated object in the figure column. The fact is
-   the heading; there is no label above it.
+   10  Fact card — the second elevated object in the figure column. Two facts,
+   one sentence each, each with its source. No label above them.
    -------------------------------------------------------------------------- */
 
 .fact {
@@ -1605,37 +1465,39 @@ canvas {
   }
 }
 
-.fact__text {
+.fact__list {
+  display: grid;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact__item {
   max-width: var(--measure);
+}
+
+.fact__text {
   font-family: var(--font-display);
-  font-size: var(--t-18);
+  font-size: var(--t-16);
   font-weight: var(--wght-ui);
-  line-height: var(--lh-18);
+  line-height: var(--lh-16);
   color: var(--ink);
   text-wrap: pretty;
-  margin-bottom: var(--s-2);
 }
 
 .fact__source {
-  max-width: var(--measure);
-  font-family: var(--font-mono);
+  margin-top: var(--s-1);
+  font-family: var(--font-display);
   font-size: var(--t-12);
-  font-weight: 400;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-12);
-  font-stretch: var(--wdth-mono-dense);
-  letter-spacing: var(--tracking-mono);
-  font-variant-numeric: var(--num);
+  font-stretch: var(--wdth-ui);
   color: var(--ink-soft);
-  margin-bottom: var(--s-3);
-  overflow-wrap: anywhere;
 }
 
 .fact__source a {
   color: var(--ink-muted);
-}
-
-.fact__next {
-  margin-top: var(--s-1);
 }
 
 /* --------------------------------------------------------------------------
@@ -1672,10 +1534,10 @@ canvas {
    rather than as a gap in a strip. Revision 2's `margin-inline: -1px` shared
    seams were a Motif idiom.
 
-   It WRAPS. Five 44 px controls plus a picker want 292 px and a 21rem rail
-   gives 296 px of panel; that is four pixels of headroom, and a font that
-   measures differently would push the picker out of the panel rather than onto
-   a second row. Wrapping is the only version of this that cannot overflow. */
+   It WRAPS. Six controls want 342 px and a 24rem rail gives 344 px of panel;
+   that is two pixels of headroom, and a font that measures differently would
+   push the picker out of the panel rather than onto a second row. Wrapping is
+   the only version of this that cannot overflow. */
 .transport {
   display: flex;
   flex-wrap: wrap;
@@ -1693,8 +1555,8 @@ canvas {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* Inside the transport the four secondary keys are GHOSTS: no fill and no ring
-   at rest, so Play/Pause is the only filled, elevated, labelled object and a
+/* Inside the transport the secondary keys are GHOSTS: no fill and no ring at
+   rest, so Play/Pause is the only filled, elevated, labelled object and a
    newcomer can see where to start. */
 .transport .key:not(.key--primary) {
   background: transparent;
@@ -1717,8 +1579,9 @@ canvas {
   box-shadow: var(--ring-strong);
 }
 
+/* Reserved for the wider of its two labels, so Play ↔ Pause moves nothing. */
 .transport__play {
-  min-width: 5.5rem;
+  min-width: 5.25rem;
 }
 
 /* The speed picker sits apart from the key cluster — it sets a rate, it does
@@ -1729,11 +1592,11 @@ canvas {
 .select.transport__speed {
   flex: none;
   width: auto;
-  min-width: 3.5rem;
+  min-width: 3.25rem;
   height: var(--key-h-lg);
   margin-inline-start: auto;
-  padding-inline: var(--s-2) 26px;
-  background-position: right 8px center;
+  padding-inline: var(--s-2) 24px;
+  background-position: right 7px center;
   border-radius: var(--radius-3);
 }
 
@@ -1752,8 +1615,7 @@ canvas {
   grid-template-areas:
     "label value"
     "input input"
-    "scale scale"
-    "help  help";
+    "scale scale";
   align-items: center;
   column-gap: var(--s-3);
   row-gap: var(--s-1);
@@ -1774,14 +1636,6 @@ canvas {
   justify-self: end;
 }
 
-.control__help {
-  grid-area: help;
-  margin-top: var(--s-1);
-  font-size: var(--t-14);
-  line-height: var(--lh-14);
-  color: var(--ink-muted);
-}
-
 .control__scale {
   grid-area: scale;
   display: flex;
@@ -1796,15 +1650,18 @@ canvas {
   color: var(--ink-soft);
 }
 
-/* Centre the end numerals under the carriage's end positions. */
+/* Centre the end numerals under the carriage's end positions — but never
+   further out than 22 px, which keeps a long numeral inside the gutter. A
+   "0.000000000001" at the low end of the Lorenz gap fader is 100 px wide,
+   and centred it hung 40 px off the left edge of a phone. */
 .control__min {
   margin-inline-start: calc(var(--thumb) / 2);
-  transform: translateX(-50%);
+  transform: translateX(max(-50%, -1.375rem));
 }
 
 .control__max {
   margin-inline-end: calc(var(--thumb) / 2);
-  transform: translateX(50%);
+  transform: translateX(min(50%, 1.375rem));
 }
 
 /* "The window being adjusted takes an accent ring" — targeted at the window
@@ -1822,8 +1679,7 @@ canvas {
 
 .control--int .stepper,
 .control--toggle .switch-row,
-.control--choice .select,
-.control--seed .seed {
+.control--choice .select {
   grid-area: value;
 }
 
@@ -1834,7 +1690,7 @@ canvas {
 
 /* Disabled rows must be targeted, not inherited: every child below sets its own
    colour, so an inherited muted colour never reached any of them. */
-.control:has(:disabled) :is(.control__label, .control__help, .control__scale, .control__value) {
+.control:has(:disabled) :is(.control__label, .control__scale, .control__value) {
   color: var(--ink-soft);
 }
 
@@ -1847,8 +1703,7 @@ canvas {
       "label"
       "value"
       "input"
-      "scale"
-      "help";
+      "scale";
   }
 
   .control__value,
@@ -1856,26 +1711,6 @@ canvas {
   .control--toggle .switch-row {
     justify-self: stretch;
   }
-}
-
-/* Seed row: a window and a ghost key 8 px apart, not sharing a seam. */
-.seed {
-  display: grid;
-  grid-template-columns: minmax(7ch, 1fr) max-content;
-  gap: var(--s-2);
-}
-
-input.seed__input {
-  height: max(var(--input-h), var(--key-s));
-  text-align: right;
-  min-width: 7ch;
-  field-sizing: content;
-}
-
-.key.seed__random {
-  position: relative;
-  height: max(var(--input-h), var(--key-s));
-  padding: 0 var(--s-3);
 }
 
 /* --------------------------------------------------------------------------
@@ -2582,79 +2417,27 @@ input.window:disabled {
 
 /* --------------------------------------------------------------------------
    14  Footer and utilities
+   One quiet line: Source, the licence, the author. That is where the name and
+   the repository belong — the last thing on the page, not the first.
    -------------------------------------------------------------------------- */
 
 .footer {
-  display: grid;
-  gap: var(--s-5);
-  margin-top: var(--s-8);
-  padding: var(--s-8) var(--gutter) var(--s-10);
-}
-
-.sources {
-  max-width: 80ch;
-}
-
-.sources__title {
-  font-family: var(--font-display);
-  font-size: var(--t-20);
-  font-weight: var(--wght-title);
-  line-height: var(--lh-20);
-  letter-spacing: var(--tracking-20);
-  color: var(--ink);
-  margin-bottom: var(--s-3);
-}
-
-.sources__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  max-width: 80ch;
-}
-
-.sources__item {
-  font-size: var(--t-14);
-  line-height: var(--lh-14);
-  color: var(--ink-muted);
-  overflow-wrap: anywhere;
-}
-
-.sources__viz {
-  color: var(--ink);
-  font-weight: var(--wght-label);
-  margin-inline-end: var(--s-2);
-}
-
-.footer__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--s-3) var(--s-6);
-  font-family: var(--font-mono);
+  gap: var(--s-2) var(--s-5);
+  margin-top: var(--s-8);
+  padding: var(--s-6) var(--gutter) var(--s-8);
+  font-family: var(--font-display);
   font-size: var(--t-12);
-  font-weight: 400;
+  font-weight: var(--wght-ui);
   line-height: var(--lh-12);
-  font-stretch: var(--wdth-mono-dense);
-  letter-spacing: var(--tracking-mono);
-  font-variant-numeric: var(--num);
+  font-stretch: var(--wdth-ui);
   color: var(--ink-soft);
 }
 
-/* SC 2.1.4: the single-character shortcuts can be turned off, here. */
-.footer__shortcuts {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-3);
-  min-height: var(--row-control);
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-ui);
-  font-stretch: var(--wdth-ui);
-  color: var(--ink);
-  cursor: pointer;
+.footer a {
+  color: var(--ink-muted);
 }
 
 .visually-hidden {
@@ -2672,23 +2455,11 @@ input.window:disabled {
 
 /* --------------------------------------------------------------------------
    15  Responsive
-   >= 1100px: bench (figure + sticky rail) with hero and ledger side by side.
-   1024–1099: bench, readouts stacked.  600–1023: one column, the rail's
-   sections interleave with the figure's.  <= 599: handheld meter — index-only
-   navigation, floating transport deck, almanac readouts.
+   >= 1024px: bench — the figure beside a sticky, fixed-width rail.
+   600–1023: one column, the rail's sections interleave with the figure's.
+   <= 599: handheld — a scrolling tab strip, a floating transport deck, and
+   the exact table as an almanac.
    -------------------------------------------------------------------------- */
-
-/* The squeeze band where a 23rem hero and a 360 px ledger fought over one
-   track. They stack instead. */
-@media (max-width: 68.75rem) {
-  .readouts {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .hero {
-    max-width: none;
-  }
-}
 
 @media (max-width: 63.9375rem) {
   .bench {
@@ -2715,7 +2486,7 @@ input.window:disabled {
     order: 2;
   }
 
-  .caption {
+  .share {
     order: 3;
     margin-top: 0;
   }
@@ -2751,21 +2522,8 @@ input.window:disabled {
     --stage-aspect: var(--viz-aspect-narrow, var(--viz-aspect));
   }
 
-  .masthead__credit {
-    display: none;
-  }
-
   .tabs {
-    grid-template-columns: minmax(0, 1fr);
     padding-block: var(--s-2) var(--s-4);
-  }
-
-  .tabs__strip {
-    display: none;
-  }
-
-  .tabs__index {
-    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   /* Transport becomes a floating bottom deck. The end of the page has to clear
@@ -2807,11 +2565,11 @@ input.window:disabled {
   }
 
   .transport__play {
-    min-width: 5.5rem;
+    min-width: 4.5rem;
   }
 
   .select.transport__speed {
-    min-width: 4rem;
+    min-width: 3.25rem;
     margin-inline-start: var(--s-1);
   }
 
@@ -2838,9 +2596,16 @@ input.window:disabled {
     display: block;
   }
 
+  /* The number column is FIXED, not max-content: a max-content column takes
+     its width from the longest string in it, and the signed error is a string
+     whose length changes with the digits — "−0.06304 (1.1%)" one frame,
+     "−0.1093 (3.6%)" the next — so the whole column stepped sideways by up to
+     10 px at 360 px while a run was going. Eleven rem holds the widest reading
+     a value or an error cell can be asked for, right-aligned; the label yields
+     and ellipsizes instead when the two together are wider than the row. */
   .readout {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 11rem;
     grid-template-areas:
       "label  leader value"
       "target target error";
@@ -2906,17 +2671,17 @@ input.window:disabled {
   }
 
   .hero {
+    --hero-value-lh: 2.25rem;
     min-width: 0;
+    padding-inline: var(--s-4);
   }
 
-  .hero__value,
-  .hero__target {
+  .hero__value {
     font-size: 2rem;
-    line-height: 2.25rem;
   }
 
   .story__caption,
-  .fact__text,
+  .fact__item,
   .figure__blurb {
     max-width: none;
   }
@@ -3009,7 +2774,6 @@ input.window:disabled {
   .rail__panel,
   .transport,
   .stepper,
-  .story__step,
   .tabs__strip {
     border: 1px solid CanvasText;
   }
@@ -3057,7 +2821,6 @@ input.window:disabled {
   .switch,
   .switch::before,
   .readout__state,
-  .hero__needle,
   .range {
     forced-color-adjust: none;
   }
@@ -3113,7 +2876,7 @@ input.window:disabled {
 
   .key[aria-pressed="true"],
   .key--primary,
-  .story__step[aria-current="step"] {
+  .story__chip[aria-pressed="true"] {
     background: Highlight;
     color: HighlightText;
     border-color: Highlight;
@@ -3150,9 +2913,10 @@ input.window:disabled {
 
 /* --------------------------------------------------------------------------
    16c  Print
-   The page is a titled figure, a numbered caption, a table of measurements
-   against analytic targets, and a sources list. That is a handout. Everything a
-   reader cannot operate on paper comes off, and the permalink is printed.
+   The page is a titled figure, its headline reading, the table of measurements
+   against analytic targets, and two sourced facts. That is a handout.
+   Everything a reader cannot operate on paper comes off, the exact table is
+   opened, and the permalink is printed where the Share key was.
    -------------------------------------------------------------------------- */
 
 @media print {
@@ -3169,13 +2933,15 @@ input.window:disabled {
   .tabs,
   .transport,
   .controls,
-  .story__tape,
-  .caption__copy,
-  .fact__next,
-  .theme-toggle,
-  .footer__shortcuts,
-  .masthead__repo {
+  .story__row,
+  .share__key,
+  .exact__summary,
+  .theme-toggle {
     display: none !important;
+  }
+
+  .exact > .ledger-wrap {
+    display: block;
   }
 
   .page,
@@ -3199,13 +2965,12 @@ input.window:disabled {
 
   .plate,
   .readouts,
-  .fact,
-  .sources {
+  .fact {
     break-inside: avoid;
   }
 
-  .caption::after {
-    content: " " attr(data-permalink);
+  .share::after {
+    content: attr(data-permalink);
     font-family: var(--font-mono);
     font-size: var(--t-11);
   }

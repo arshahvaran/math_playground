@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
-import type { ParamValue, Readout, VizContext } from '../src/core/types';
+import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import {
+  DART_RATE,
   layoutPlate,
   montecarloPi,
   plotScale,
@@ -482,11 +483,9 @@ const THEME = {
   particleRadius: 2,
 };
 
+/** The two parameters the tab declares: the one fader, and the seed the URL carries. */
 const DEFAULTS: Record<string, ParamValue> = {
   darts: 100_000,
-  dartRate: 2_000,
-  showErrorPlot: true,
-  showEnvelope: true,
   seed: SEED,
 };
 
@@ -513,9 +512,18 @@ function stubViz(overrides: Record<string, ParamValue> = {}, width = 720, height
 
 type Stub = ReturnType<typeof stubViz>;
 
-/** dartRate 120 with the 120 Hz tick is exactly one dart per step. */
 function tick(v: Stub, steps: number): void {
   for (let i = 0; i < steps; i++) v.instance.step(TICK);
+}
+
+/**
+ * Ticks that certainly reach a ceiling of `darts`. The rate is fixed at
+ * `DART_RATE` per simulated second — 16.67 darts per 120 Hz tick — so an
+ * exact count comes from the ceiling, not from the tick count; the margin
+ * covers the fraction the accumulator carries between ticks.
+ */
+function ticksToReach(darts: number): number {
+  return Math.ceil((darts * 1000) / (DART_RATE * TICK)) + 2;
 }
 
 /** One frame, with the paint log cleared first so it holds exactly that frame. */
@@ -564,18 +572,18 @@ function paintedDarts(v: Stub): Array<[number, number, number, string]> {
 
 describe('montecarlo-pi instance: readouts', () => {
   it('publishes every number it draws, with the analytic target, identically for a seed', () => {
-    const a = stubViz({ dartRate: 120 });
-    const b = stubViz({ dartRate: 120 });
+    const a = stubViz({ darts: 5_000 });
+    const b = stubViz({ darts: 5_000 });
     for (const v of [a, b]) {
-      tick(v, 5_000);
+      tick(v, ticksToReach(5_000));
       paint(v);
     }
     const last = a.emitted.at(-1);
     expect(last?.map((r) => r.key)).toEqual(['darts', 'inside', 'pi', 'error', 'se']);
     const by = Object.fromEntries((last ?? []).map((r) => [r.key, r]));
     expect(by['darts']?.value).toBe(5_000);
-    // The hero is the first readout carrying a target, and it must be π.
-    expect(last?.find((r) => r.target !== undefined)?.key).toBe('pi');
+    // The hero is the one readout marked as the headline, and it must be π.
+    expect(last?.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['pi']);
     expect(by['pi']?.target).toBe(Math.PI);
     // 5,000 darts: SE = 0.0232, so 0.093 is 4σ.
     expect(Math.abs((by['pi']?.value ?? 0) - Math.PI)).toBeLessThan(4 * piStandardError(5_000));
@@ -583,6 +591,25 @@ describe('montecarlo-pi instance: readouts', () => {
     expect(by['se']?.value).toBeCloseTo(piStandardError(5_000), 12);
     expect(by['inside']?.value).toBe(Math.round(((by['pi']?.value ?? 0) * 5_000) / 4));
     expect(b.emitted.at(-1)).toEqual(last);
+  });
+
+  it('gives the simple view plain words and keeps the precise names for the exact table', () => {
+    const v = stubViz();
+    tick(v, 12);
+    paint(v);
+    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    expect(by['pi']?.plain).toBe('our estimate of pi');
+    expect(by['pi']?.label).toBe('π estimate');
+    expect(by['darts']?.plain).toBe('darts thrown');
+    expect(by['inside']?.plain).toBe('landed in the circle');
+    // Two error figures a reader without statistics would have to ask about.
+    expect(by['error']?.expertOnly).toBe(true);
+    expect(by['se']?.expertOnly).toBe(true);
+    expect(by['se']?.label).toBe(`Std. error, ${PI_SE_COEFFICIENT.toFixed(2)}/√n`);
+    // Everything that stays in the simple view has a plain label.
+    for (const r of v.emitted.at(-1) ?? []) {
+      if (r.expertOnly !== true) expect(r.plain, r.key).toBeDefined();
+    }
   });
 
   it('sets the π tolerance from the standard error at the count the run will reach', () => {
@@ -596,7 +623,7 @@ describe('montecarlo-pi instance: readouts', () => {
   });
 
   it('draws without mutating the simulation, and resets to an empty field', () => {
-    const v = stubViz({ dartRate: 120 });
+    const v = stubViz();
     tick(v, 500);
     paint(v);
     paint(v);
@@ -610,96 +637,98 @@ describe('montecarlo-pi instance: readouts', () => {
   });
 
   it('stops at the dart ceiling', () => {
-    const v = stubViz({ darts: 1_000, dartRate: 2_000 });
+    const v = stubViz({ darts: 1_000 });
     tick(v, 500);
     paint(v);
     expect(ledger(v)['darts']).toBe(1_000);
   });
 
-  it('throws the same darts at every rate: only the clock differs', () => {
-    const slow = stubViz({ dartRate: 120, darts: 4_000 });
-    const fast = stubViz({ dartRate: 1_200, darts: 4_000 });
-    tick(slow, 4_000);
-    tick(fast, 400);
-    paint(slow);
-    paint(fast);
-    expect(ledger(fast)).toEqual(ledger(slow));
+  it('throws at the fixed rate: DART_RATE darts per simulated second', () => {
+    const v = stubViz();
+    // 120 ticks of 1/120 s. The accumulator may still owe a fraction of a
+    // dart at the end of the second, so the count is the rate or one under.
+    tick(v, 120);
+    paint(v);
+    const thrown = ledger(v)['darts'] ?? 0;
+    expect(thrown).toBeGreaterThanOrEqual(DART_RATE - 1);
+    expect(thrown).toBeLessThanOrEqual(DART_RATE);
   });
 });
 
 describe('montecarlo-pi instance: parameters', () => {
-  /** The ledger after `steps` ticks of a fresh instance at this ceiling. */
-  function fresh(darts: number, steps: number): Record<string, number> {
-    const v = stubViz({ darts, dartRate: 120 });
-    tick(v, steps);
+  /** The ledger of a fresh instance run to a ceiling of `darts`. */
+  function fresh(darts: number): Record<string, number> {
+    const v = stubViz({ darts });
+    tick(v, ticksToReach(darts));
     paint(v);
     return ledger(v);
   }
 
+  it('declares the fader and the seed, and nothing the rail would render besides the fader', () => {
+    expect(montecarloPi.params.map((p) => p.key)).toEqual(['darts', 'seed']);
+    expect(montecarloPi.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
+    // The rail never renders a seed, so this is the one control on the tab.
+    expect(montecarloPi.params.filter((p) => p.kind !== 'seed').map((p) => p.key)).toEqual(['darts']);
+  });
+
   it('absorbs a raised ceiling as a prefix continuation, identical to a fresh run', () => {
-    const v = stubViz({ darts: 1_000, dartRate: 120 });
-    tick(v, 1_200);
+    const v = stubViz({ darts: 1_000 });
+    tick(v, ticksToReach(1_000));
     paint(v);
     expect(ledger(v)['darts']).toBe(1_000);
 
     expect(setParam(v, 'darts', 5_000)).toBe(true);
-    tick(v, 4_000);
+    tick(v, ticksToReach(5_000));
     paint(v);
-    expect(ledger(v)).toEqual(fresh(5_000, 5_000));
+    expect(ledger(v)).toEqual(fresh(5_000));
   });
 
   it('resets on a ceiling below the darts already thrown, so the permalink stays honest', () => {
-    const v = stubViz({ darts: 20_000, dartRate: 120 });
-    tick(v, 5_000);
+    const v = stubViz({ darts: 20_000 });
+    tick(v, ticksToReach(20_000));
     paint(v);
+    expect(ledger(v)['darts']).toBe(20_000);
     expect(setParam(v, 'darts', 1_000)).toBe(false);
     expect(ledger(v)['darts']).toBe(0);
-    tick(v, 1_200);
+    tick(v, ticksToReach(1_000));
     paint(v);
-    expect(ledger(v)).toEqual(fresh(1_000, 1_200));
+    expect(ledger(v)).toEqual(fresh(1_000));
   });
 
-  it('absorbs the rate and both overlays, and defers the seed to the shell', () => {
+  it('defers the seed to the shell', () => {
     const v = stubViz();
     tick(v, 240);
-    expect(v.instance.onParamChange?.('dartRate', 500)).toBe(true);
-    expect(v.instance.onParamChange?.('showEnvelope', false)).toBe(true);
-    expect(v.instance.onParamChange?.('showErrorPlot', false)).toBe(true);
     expect(v.instance.onParamChange?.('seed', 7)).toBe(false);
   });
 
-  it('repaints the background itself when a toggle moves the static geometry', () => {
-    const v = stubViz({ dartRate: 120 });
-    tick(v, 800);
+  it('repaints the background itself when a raised ceiling moves the axis', () => {
+    const v = stubViz({ darts: 1_000 });
+    tick(v, ticksToReach(1_000));
     paint(v);
     const before = ledger(v);
     v.bg.strokes.length = 0;
 
-    // The plot's frame and its decade axis live on the background layer, and the
-    // shell repaints that layer only for a change the visualization refuses.
-    expect(setParam(v, 'showErrorPlot', false)).toBe(true);
+    // The x axis spans the whole run, so a new ceiling is new static geometry
+    // on the background layer — and the shell repaints that layer only for a
+    // change the visualization refuses.
+    expect(setParam(v, 'darts', 100_000)).toBe(true);
     expect(v.bg.strokes.length).toBeGreaterThan(0);
     // …and the run is untouched: that is the whole reason it absorbs.
     expect(ledger(v)).toEqual(before);
-    // With the plot gone, the field takes the plate and nothing paints a curve.
-    expect(v.fg.strokes.filter((s) => s.pen === THEME.data2)).toHaveLength(0);
   });
 
-  it('drops the reference line on the toggle and keeps the measured curve', () => {
-    const on = stubViz({ dartRate: 120 });
-    tick(on, 800);
-    paint(on);
-    expect(on.fg.strokes.some((s) => s.pen === THEME.data2)).toBe(true);
-
-    expect(setParam(on, 'showEnvelope', false)).toBe(true);
-    expect(on.fg.strokes.some((s) => s.pen === THEME.data2)).toBe(false);
-    expect(on.fg.strokes.some((s) => s.pen === THEME.data1)).toBe(true);
+  it('always draws the plot and its reference line: there is nothing to switch off', () => {
+    const v = stubViz();
+    tick(v, 240);
+    paint(v);
+    expect(v.fg.strokes.some((s) => s.pen === THEME.data2)).toBe(true);
+    expect(v.fg.strokes.some((s) => s.pen === THEME.data1)).toBe(true);
   });
 });
 
 describe('montecarlo-pi instance: paint', () => {
   it('paints misses under hits, both at full strength, batched by colour', () => {
-    const v = stubViz({ dartRate: 120 });
+    const v = stubViz();
     tick(v, 2_000);
     paint(v);
     const fills = v.fg.fills.filter((f) => f.arcs.length > 0);
@@ -715,7 +744,7 @@ describe('montecarlo-pi instance: paint', () => {
   });
 
   it('paints every dart inside the square, hits inside the circle', () => {
-    const v = stubViz({ dartRate: 120 }, 720, 448);
+    const v = stubViz({}, 720, 448);
     tick(v, 1_500);
     paint(v);
     const { field } = layoutPlate(720, 448, true);
@@ -742,9 +771,9 @@ describe('montecarlo-pi instance: paint', () => {
     ];
     const counts: number[] = [];
     for (const [width, height] of plates) {
-      const v = stubViz({ dartRate: 20_000, darts: 2_000_000 }, width, height);
+      const v = stubViz({ darts: 100_000 }, width, height);
       // 100,000 darts: the ring has wrapped thirty-three times over.
-      tick(v, 600);
+      tick(v, ticksToReach(100_000));
       paint(v);
       expect(ledger(v)['darts']).toBe(100_000);
       const painted = paintedDarts(v);
@@ -763,7 +792,7 @@ describe('montecarlo-pi instance: paint', () => {
   });
 
   it('draws the two curves at 2 px, each over its own plate-coloured halo', () => {
-    const v = stubViz({ dartRate: 120 });
+    const v = stubViz();
     tick(v, 2_000);
     paint(v);
     const drawn = v.fg.strokes.filter((s) => s.segments.length > 0);
@@ -795,7 +824,7 @@ describe('montecarlo-pi instance: paint', () => {
 
   it('keeps the error curve inside the plot frame at every plate size', () => {
     for (const [width, height] of [[720, 448], [1_280, 720], [343, 490]] as const) {
-      const v = stubViz({ dartRate: 20_000, darts: 2_000_000 }, width, height);
+      const v = stubViz({ darts: 2_000_000 }, width, height);
       tick(v, 600);
       paint(v);
       const { plot } = layoutPlate(width, height, true);
@@ -817,7 +846,7 @@ describe('montecarlo-pi instance: paint', () => {
 
 describe('montecarlo-pi instance: resize', () => {
   it('leaves the counters and the estimate untouched, and re-places the darts', () => {
-    const v = stubViz({ dartRate: 120 }, 720, 448);
+    const v = stubViz({}, 720, 448);
     tick(v, 3_000);
     paint(v);
     const before = ledger(v);
@@ -836,16 +865,30 @@ describe('montecarlo-pi instance: resize', () => {
   });
 
   it('gives the same counts on any plate, so a permalink survives the recipient’s window', () => {
-    const wide = stubViz({ dartRate: 120 }, 1_280, 720);
-    const narrow = stubViz({ dartRate: 120 }, 320, 200);
+    const wide = stubViz({ darts: 4_000 }, 1_280, 720);
+    const narrow = stubViz({ darts: 4_000 }, 320, 200);
     for (const v of [wide, narrow]) {
-      tick(v, 4_000);
+      tick(v, ticksToReach(4_000));
       paint(v);
     }
     expect(ledger(narrow)).toEqual(ledger(wide));
     expect(ledger(wide)['darts']).toBe(4_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Metadata: what the page shows a newcomer
+// ---------------------------------------------------------------------------
+
+/** The words of a sentence, markup dropped. */
+function words(text: Prose): string {
+  return typeof text === 'string' ? text : text.map((s) => (typeof s === 'string' ? s : s.v)).join('');
+}
+
+/** One sentence: no full stop, question mark or exclamation mark followed by a space. */
+function oneSentence(text: Prose): boolean {
+  return !/[.!?]\s/.test(words(text));
+}
 
 describe('montecarlo-pi metadata', () => {
   it('is registered under a permanent id, in the randomness group', () => {
@@ -854,19 +897,24 @@ describe('montecarlo-pi metadata', () => {
     expect(montecarloPi.budget?.maxEntities).toBe(3_000);
   });
 
-  it('declares every parameter the contract needs, with a seed', () => {
-    expect(montecarloPi.params.map((p) => p.key)).toEqual([
-      'darts',
-      'dartRate',
-      'showErrorPlot',
-      'showEnvelope',
-      'seed',
-    ]);
-    expect(montecarloPi.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
+  it('says what it does in one plain sentence', () => {
+    expect(oneSentence(montecarloPi.blurb)).toBe(true);
+    expect(words(montecarloPi.blurb)).toMatch(/darts/);
+  });
+
+  it('offers three presets, each a hundredfold apart, each captioned in one sentence', () => {
+    const presets = montecarloPi.presets ?? [];
+    expect(presets).toHaveLength(3);
+    expect(presets.map((p) => p.values['darts'])).toEqual([100, 10_000, 1_000_000]);
+    for (const preset of presets) {
+      expect(oneSentence(preset.caption), preset.id).toBe(true);
+      // The caption slot reserves two lines of a 68ch measure; a third line
+      // would move the fact card under it, and 120 leaves room for word wrap.
+      expect(words(preset.caption).length, preset.id).toBeLessThanOrEqual(120);
+    }
   });
 
   it('sets every preset value from a declared parameter', () => {
-    expect(montecarloPi.presets).toHaveLength(4);
     for (const preset of montecarloPi.presets ?? []) {
       for (const key of Object.keys(preset.values)) {
         expect(
@@ -891,9 +939,11 @@ describe('montecarlo-pi metadata', () => {
     }
   });
 
-  it('sources every fact', () => {
-    expect(montecarloPi.facts.length).toBeGreaterThanOrEqual(3);
+  it('carries at most two facts, one sentence each, every one sourced', () => {
+    expect(montecarloPi.facts.length).toBeGreaterThanOrEqual(1);
+    expect(montecarloPi.facts.length).toBeLessThanOrEqual(2);
     for (const fact of montecarloPi.facts) {
+      expect(oneSentence(fact.text)).toBe(true);
       expect(fact.source.label.length).toBeGreaterThan(0);
       expect(fact.source.url).toMatch(/^https:\/\//);
     }

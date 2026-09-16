@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
-import { lorenz, plateTransform, tickStep } from '../src/viz/lorenz/index';
+import { gapInWords, lorenz, plateTransform, tickStep } from '../src/viz/lorenz/index';
 import {
   CLASSIC,
   DOUBLING_CLASSIC,
@@ -26,7 +26,7 @@ import {
 
 const SEED = 42;
 
-/** The tab's defaults, mirrored here so the tests measure what the tab runs. */
+/** The tab's fixed step and its defaults, mirrored here so the tests measure what the tab runs. */
 const H = 0.005;
 const SEPARATION_SAMPLE = 0.05;
 const GAP = 1e-9;
@@ -87,11 +87,12 @@ describe('rk4Step', () => {
   });
 
   it('traces one orbit at any step size, until its own truncation error grows at λ₁', () => {
-    // The "Fine step" preset's claim, and its limit. A fifth of the step lands
-    // on the same point two time units in — 6·10⁻⁶ out of an attractor forty
-    // units across — and then cannot stay there, because the truncation error
-    // is a perturbation like any other: 6·10⁻⁶ reaches order 1 after a further
-    // ln(10⁵)/0.906 ≈ 13 time units, and it does.
+    // Why the tab's step is fixed at 0.005 rather than offered as a fader, and
+    // the limit of that choice. A fifth of the step lands on the same point two
+    // time units in — 6·10⁻⁶ out of an attractor forty units across — and then
+    // cannot stay there, because the truncation error is a perturbation like
+    // any other: 6·10⁻⁶ reaches order 1 after a further ln(10⁵)/0.906 ≈ 13
+    // time units, and it does.
     const at = (h: number, until: number): Vec3 => {
       let s: Vec3 = initialState(CLASSIC);
       for (let k = 0; k < Math.round(until / h); k++) s = rk4Step(s, h, CLASSIC);
@@ -687,14 +688,8 @@ const THEME = {
 };
 
 const DEFAULTS: Record<string, ParamValue> = {
-  sigma: 10,
   rho: 28,
-  beta: 8 / 3,
-  dt: 0.005,
-  trailLength: 4_000,
-  twin: true,
   twinGap: 1e-9,
-  projection: 'xz',
   seed: SEED,
 };
 
@@ -793,8 +788,6 @@ describe('lorenz instance: readouts', () => {
     expect(by['balance']?.target).toBe(1);
     expect(by['lyapunov']?.target).toBe(LAMBDA_1_CLASSIC);
     expect(by['doubling']?.target).toBe(DOUBLING_CLASSIC);
-    // The hero is the first readout with a target — §8 — and that has to be λ₁.
-    expect((v.emitted.at(-1) ?? []).find((r) => r.target !== undefined)?.key).toBe('lyapunov');
 
     // The same fit the pure module gives, up to the refit stride: the instance
     // refits once per time unit rather than on every sample, so its cached
@@ -804,12 +797,29 @@ describe('lorenz instance: readouts', () => {
     expect(Math.abs((by['lyapunov']?.value ?? 0) - LAMBDA_1_CLASSIC)).toBeLessThan(0.2);
   });
 
-  it('drops the twin’s rows when there is no twin, rather than reporting NaN at them', () => {
-    const v = stubViz({ twin: false });
-    tick(v, 1_200);
+  it('headlines the twins’ separation in plain words, and keeps the exponent and the state for the exact table', () => {
+    const v = stubViz();
     paint(v);
-    expect(keys(v)).toEqual(['time', 'balance', 'x', 'y', 'z']);
-    expect((v.emitted.at(-1) ?? []).find((r) => r.target !== undefined)?.key).toBe('balance');
+    const rows = v.emitted.at(-1) ?? [];
+    const by = Object.fromEntries(rows.map((r) => [r.key, r]));
+    // Exactly one headline, and it is the number the tab is about.
+    expect(rows.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['separation']);
+    expect(by['separation']?.plain).toBe('how far apart the twins are now');
+    expect(by['separation']?.hint).toBe('they started a billionth apart');
+    expect(by['time']?.plain).toBe('seconds elapsed');
+    // Internals: a reader with no statistics is not shown a Lyapunov exponent
+    // or the raw state; both stay in the exact table.
+    for (const key of ['lyapunov', 'x', 'y', 'z']) expect(by[key]?.expertOnly, key).toBe(true);
+    for (const key of ['time', 'separation', 'doubling', 'balance']) {
+      expect(by[key]?.expertOnly, key).toBeUndefined();
+      expect(by[key]?.plain, key).toBeTruthy();
+    }
+    // The hint follows the starting gap the reader actually chose.
+    const close = stubViz({ twinGap: 1e-12 });
+    paint(close);
+    expect((close.emitted.at(-1) ?? []).find((r) => r.key === 'separation')?.hint).toBe(
+      'they started a trillionth apart',
+    );
   });
 
   it('offers no analytic exponent away from Lorenz’s own parameters', () => {
@@ -872,22 +882,15 @@ describe('lorenz instance: readouts', () => {
     expect(ledger(narrow)).toEqual(ledger(wide));
   });
 
-  it('keeps the clock at one time unit per second whatever the integration step is', () => {
-    // The step is an accuracy knob, not a speed one — which is what makes the
-    // "Fine step" preset legible as a claim about the mathematics rather than
-    // about the frame rate. 18,000 ticks is 150 seconds of simulation clock,
-    // and each instance's own step is the only slack it may have.
-    for (const dt of [0.0005, 0.001, 0.005, 0.01]) {
-      const v = stubViz({ dt, twin: false });
-      tick(v, 18_000);
-      paint(v);
-      // One step of slack, plus the rounding of adding h to a running total
-      // three hundred thousand times — 9·10⁻¹¹ at the finest step.
-      expect(Math.abs((ledger(v)['time'] ?? 0) - 150), `dt ${dt}`).toBeLessThan(dt + 1e-9);
-      // And every one of them is on the same attractor, closing the same exact
-      // identity: the boundary-term bound at T = 150 is 1.07/150.
-      expect(Math.abs((ledger(v)['balance'] ?? 0) - 1), `dt ${dt}`).toBeLessThan(1.07 / 150);
-    }
+  it('keeps the clock at one time unit per second, exact to one step', () => {
+    // 18,000 ticks is 150 seconds of simulation clock, and the fixed step is
+    // the only slack the clock may have: one step, plus the rounding of adding
+    // h to a running total thirty thousand times.
+    const v = stubViz();
+    tick(v, 18_000);
+    paint(v);
+    expect(Math.abs((ledger(v)['time'] ?? 0) - 150)).toBeLessThan(H + 1e-9);
+    expect(Math.abs((ledger(v)['balance'] ?? 0) - 1)).toBeLessThan(1.07 / 150);
   });
 });
 
@@ -939,63 +942,35 @@ describe('lorenz instance: painting', () => {
   });
 
   it('never paints more points than the budget, however long it runs', () => {
-    const v = stubViz({ trailLength: 20_000 });
+    const v = stubViz();
     tick(v, 18_000);
     paint(v);
     // A full repaint after the fast-forward: two trails, each capped at the ring.
-    expect(painted(v).length).toBeLessThanOrEqual(2 * (lorenz.budget?.maxEntities ?? 0) + 2);
+    const budget = lorenz.budget?.maxEntities ?? 0;
+    expect(painted(v).length).toBeLessThanOrEqual(2 * budget + 2);
     // …and the trail really is at its ceiling by now — 150 time units at one
-    // point per 0.005 is 30,000 pushes into a 20,000-point ring.
-    expect(painted(v).length).toBeGreaterThan(30_000);
+    // point per 0.005 is 30,000 pushes into a 4,000-point ring, so both trails
+    // are full and together exceed one ring.
+    expect(painted(v).length).toBeGreaterThan(budget);
   });
 
-  it('honours a shorter trail immediately rather than waiting for the fade', () => {
-    const v = stubViz({ trailLength: 8_000 });
-    tick(v, 6_000);
-    paint(v);
-    const long = painted(v).length;
-    expect(setParam(v, 'trailLength', 400)).toBe(true);
-    const short = painted(v).length;
-    expect(short).toBeLessThan(long / 4);
-    expect(short).toBeLessThanOrEqual(2 * 400 + 2);
-  });
-
-  it('keeps every painted point on the plate, in all three projections', () => {
-    for (const projection of ['xz', 'xy', 'yz']) {
-      const v = stubViz({ projection }, 700, 700);
-      tick(v, 12_000);
-      paint(v);
-      const points = painted(v);
-      expect(points.length, projection).toBeGreaterThan(1_000);
-      for (const [px, py] of points) {
-        expect(px, `${projection} x`).toBeGreaterThanOrEqual(0);
-        expect(px, `${projection} x`).toBeLessThanOrEqual(700);
-        expect(py, `${projection} y`).toBeGreaterThanOrEqual(0);
-        expect(py, `${projection} y`).toBeLessThanOrEqual(700);
-      }
-      // The attractor uses the plate it is given rather than sitting in a corner.
-      const xs = points.map(([px]) => px);
-      const ys = points.map(([, py]) => py);
-      expect(Math.max(...xs) - Math.min(...xs), projection).toBeGreaterThan(0.5 * 700);
-      expect(Math.max(...ys) - Math.min(...ys), projection).toBeGreaterThan(0.5 * 700);
-    }
-  });
-
-  it('re-projects the history already drawn instead of restarting the run', () => {
+  it('keeps every painted point on the plate, and uses the plate it is given', () => {
     const v = stubViz({}, 700, 700);
-    tick(v, 6_000);
+    tick(v, 12_000);
     paint(v);
-    const before = ledger(v);
-    const xz = painted(v);
-
-    expect(setParam(v, 'projection', 'xy')).toBe(true);
-    const xy = painted(v);
-    // Same run — the ledger did not move — and the same number of points, drawn
-    // somewhere else.
-    expect(ledger(v)).toEqual(before);
-    expect(xy.length).toBe(xz.length);
-    const moved = xy.filter((p, i) => Math.abs(p[1] - (xz[i]?.[1] ?? 0)) > 1).length;
-    expect(moved).toBeGreaterThan(xy.length / 2);
+    const points = painted(v);
+    expect(points.length).toBeGreaterThan(1_000);
+    for (const [px, py] of points) {
+      expect(px).toBeGreaterThanOrEqual(0);
+      expect(px).toBeLessThanOrEqual(700);
+      expect(py).toBeGreaterThanOrEqual(0);
+      expect(py).toBeLessThanOrEqual(700);
+    }
+    // The attractor uses the plate it is given rather than sitting in a corner.
+    const xs = points.map(([px]) => px);
+    const ys = points.map(([, py]) => py);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.5 * 700);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0.5 * 700);
   });
 
   it('re-lays-out the trail on a resize instead of stranding it', () => {
@@ -1032,14 +1007,17 @@ describe('lorenz instance: painting', () => {
 });
 
 describe('lorenz instance: parameters', () => {
-  it('absorbs the two cosmetic knobs and defers every structural one', () => {
+  it('defers both knobs, and the seed, to a reset — each one is a different experiment', () => {
     const v = stubViz();
     tick(v, 600);
-    expect(v.instance.onParamChange?.('projection', 'yz')).toBe(true);
-    expect(v.instance.onParamChange?.('trailLength', 1_000)).toBe(true);
-    for (const key of ['sigma', 'rho', 'beta', 'dt', 'twin', 'twinGap', 'seed']) {
+    for (const key of ['rho', 'twinGap', 'seed']) {
       expect(v.instance.onParamChange?.(key, 1), key).toBe(false);
     }
+    // And the reset the shell then performs really starts over: the clock is
+    // back at zero and the twins are a fresh gap apart.
+    setParam(v, 'twinGap', 1e-6);
+    expect(ledger(v)['time']).toBe(0);
+    expect((ledger(v)['separation'] ?? 0) / 1e-6).toBeCloseTo(1, 6);
   });
 
   it('reads a gap the rail has rounded to zero as the declared minimum', () => {
@@ -1066,26 +1044,27 @@ function flatten(text: Prose): string {
 }
 
 describe('lorenz metadata', () => {
-  it('declares every parameter the contract needs, with a seed', () => {
-    expect(lorenz.params.map((p) => p.key)).toEqual([
-      'sigma',
-      'rho',
-      'beta',
-      'dt',
-      'trailLength',
-      'twin',
-      'twinGap',
-      'projection',
-      'seed',
-    ]);
+  it('declares two knobs and an unrendered seed, nothing more', () => {
+    // The heat crosses the chaos threshold; the gap is what the twins are
+    // about. The seed has no control on the rail but stays a spec so a
+    // permalink's seed is honoured and Shuffle has something to write.
+    expect(lorenz.params.map((p) => p.key)).toEqual(['rho', 'twinGap', 'seed']);
+    expect(lorenz.params.filter((p) => p.kind !== 'seed')).toHaveLength(2);
     expect(lorenz.params.find((p) => p.key === 'seed')?.kind).toBe('seed');
+    const rho = lorenz.params.find((p) => p.key === 'rho');
+    expect(rho?.kind).toBe('range');
+    if (rho?.kind === 'range') {
+      expect(rho.min).toBeLessThan(hopfThreshold(CLASSIC));
+      expect(rho.max).toBeGreaterThan(hopfThreshold(CLASSIC));
+      expect(rho.default).toBe(CLASSIC.rho);
+    }
     expect(lorenz.id).toBe('lorenz');
     expect(lorenz.group).toBe('chaos');
-    expect(lorenz.budget?.maxEntities).toBe(20_000);
+    expect(lorenz.budget?.maxEntities).toBe(4_000);
   });
 
   it('sets every preset value from a declared parameter, and from its own range', () => {
-    expect(lorenz.presets).toHaveLength(4);
+    expect(lorenz.presets).toHaveLength(3);
     for (const preset of lorenz.presets ?? []) {
       for (const [key, value] of Object.entries(preset.values)) {
         const spec = lorenz.params.find((p) => p.key === key);
@@ -1101,24 +1080,60 @@ describe('lorenz metadata', () => {
     }
   });
 
-  it('sources every fact, and explains every knob', () => {
-    expect(lorenz.facts.length).toBeGreaterThanOrEqual(3);
+  it('sources both facts, and keeps every sentence to one', () => {
+    // A sentence ends at a full stop, exclamation or question mark followed by
+    // whitespace — the same test the fact card applies — so a decimal point
+    // inside a number does not count.
+    const oneSentence = (text: string): boolean => !/[.!?]\s/.test(text.trim());
+    expect(lorenz.facts).toHaveLength(2);
     for (const fact of lorenz.facts) {
       expect(fact.source.label.length).toBeGreaterThan(0);
       expect(fact.source.url).toMatch(/^https:\/\//);
+      expect(oneSentence(flatten(fact.text)), flatten(fact.text)).toBe(true);
     }
     for (const spec of lorenz.params) expect(flatten(spec.help ?? ''), spec.key).not.toBe('');
-    for (const preset of lorenz.presets ?? []) expect(flatten(preset.caption), preset.id).not.toBe('');
+    for (const preset of lorenz.presets ?? []) {
+      expect(oneSentence(flatten(preset.caption)), preset.id).toBe(true);
+    }
+    expect(oneSentence(flatten(lorenz.blurb))).toBe(true);
   });
 
   it('quotes only numbers the mathematics module actually produces', () => {
-    // The two constants the fact card asserts are both computed, not recalled,
-    // and a change to either function has to break this rather than leave the
-    // prose quietly wrong.
+    // Every number the prose asserts is computed, not recalled, so a change to
+    // the function behind it has to break this rather than leave the prose
+    // quietly wrong.
     const said = lorenz.facts.map((f) => flatten(f.text)).join(' ');
     expect(hopfThreshold(CLASSIC).toFixed(2)).toBe('24.74');
     expect(said).toContain('24.74');
+    // The heat fader's help rounds the same threshold to one decimal.
+    const help = lorenz.params.map((p) => flatten(p.help ?? '')).join(' ');
+    expect(hopfThreshold(CLASSIC).toFixed(1)).toBe('24.7');
+    expect(help).toContain('24.7');
+    // "Every ten times closer buys about 2.5 more seconds": ln 10 / λ₁.
+    expect((Math.log(10) / LAMBDA_1_CLASSIC).toFixed(1)).toBe('2.5');
+    expect(help).toContain('2.5');
+    // The captions: 10⁻⁹ to order 1 in about twenty seconds, and a thousand
+    // times closer buys ln 1000 / λ₁ ≈ 7.6 more — "about eight".
+    const captions = (lorenz.presets ?? []).map((p) => flatten(p.caption)).join(' ');
+    expect(Math.log(1e9) / LAMBDA_1_CLASSIC).toBeGreaterThan(20);
+    expect(Math.log(1e9) / LAMBDA_1_CLASSIC).toBeLessThan(25);
+    expect(captions).toContain('twenty seconds');
+    expect(Math.round(Math.log(1e3) / LAMBDA_1_CLASSIC)).toBe(8);
+    expect(captions).toContain('eight more seconds');
+    // The volume contraction is still computed; it is just no longer quoted.
     expect(volumeContraction(CLASSIC).toFixed(2)).toBe('-13.67');
-    expect(said).toContain('13.67');
+  });
+
+  it('says the starting gap in words a reader can hear', () => {
+    expect(gapInWords(1e-9)).toBe('a billionth');
+    expect(gapInWords(1e-12)).toBe('a trillionth');
+    expect(gapInWords(1e-6)).toBe('a millionth');
+    expect(gapInWords(1e-3)).toBe('a thousandth');
+    expect(gapInWords(2.5e-10)).toBe('250 trillionths');
+    expect(gapInWords(3.7e-8)).toBe('37 billionths');
+    // The rail rounds to ten decimals, so a gap can arrive a rounding under a
+    // power of a thousand; that is still "a billionth", not "1000 trillionths".
+    expect(gapInWords(9.999999999e-10)).toBe('a billionth');
+    expect(gapInWords(9.99e-10)).toBe('999 trillionths');
   });
 });

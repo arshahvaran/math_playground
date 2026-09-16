@@ -12,18 +12,16 @@ import type {
 } from '../../core/types';
 import {
   BOX_MAX_LEVEL,
-  NAMED_SYSTEMS,
-  RESTRICTIONS,
   boxCountingDimension,
   branching,
   createChaosGame,
   findSystem,
   polygonOpenSetRatio,
-  polygonSystem,
   polygonVertex,
   restrictedDimension,
   type AffineMap,
   type Bounds,
+  type NamedSystem,
   type Restriction,
 } from './ifs';
 
@@ -34,18 +32,22 @@ import {
  */
 const MAX_POINTS = 2_000_000;
 
-const MIN_VERTICES = 3;
-const MAX_VERTICES = 8;
-
-/** The `system` value that means "use the vertices and ratio sliders". */
-const CUSTOM = 'polygon';
-
-const DEFAULT_SYSTEM = 'sierpinski';
-const DEFAULT_VERTICES = 3;
-const DEFAULT_RATIO = 0.5;
 const DEFAULT_POINTS = 200_000;
-const DEFAULT_RATE = 2_000;
 const DEFAULT_SEED = 42;
+
+/**
+ * Was the "Points per frame" slider. Fixed, because speed is the transport's
+ * job and not the tab's: at 60 frames of simulation time a second this is
+ * 120,000 points a second, and the transport's multiplier scales it.
+ */
+const POINTS_PER_FRAME = 2_000;
+
+/**
+ * Was the "Colour by vertex" toggle. Fixed on: the two pens are what let a
+ * reader see that the shape is made of smaller copies of itself, and a switch
+ * for it was one more thing to explain.
+ */
+const COLOUR_BY_VERTEX = true;
 
 /**
  * Points held for the live cursor, and the chunk the plotter works in.
@@ -61,12 +63,8 @@ const RECENT = 1 << 15;
 /** Jumps drawn as a trail behind the current point. Enough to read as motion at a low rate. */
 const TRAIL = 12;
 
-/** Plate margin, CSS px: the wider one leaves room for the vertex numerals outside the polygon. */
-const MARGIN_POLYGON = 18;
-const MARGIN_PLAIN = 8;
-
-/** Gap between a vertex and its numeral, CSS px. */
-const LABEL_GAP = 11;
+/** Plate margin, CSS px. */
+const MARGIN = 8;
 
 /**
  * Absolute error inside which the box count counts as agreeing with the closed
@@ -77,7 +75,7 @@ const LABEL_GAP = 11;
  * discretisation bias: N(ε) = C·ε^−D only up to a bounded oscillation, because
  * the grid is not aligned with the attractor's own subdivision, and the
  * five-point least squares damps that oscillation to a few hundredths. Measured
- * across the systems this tab offers, at 10⁶ points and levels 4…8: +0.0117 for
+ * across the shapes this tab offers, at 10⁶ points and levels 4…8: +0.0117 for
  * the Sierpiński triangle, −0.0083 for the pentagon, −0.0136 for the filled
  * square, +0.0052 for the restricted square. 0.05 is roughly four times the
  * largest of those and is what the same regression is worth at 10⁵ points too.
@@ -86,226 +84,127 @@ const DIM_TOLERANCE = 0.05;
 
 const TAU = 2 * Math.PI;
 
-const RESTRICTION_LABELS: Readonly<Record<Restriction, string>> = {
-  none: 'None',
-  'no-repeat': 'No repeat',
-  'not-neighbour': 'Not a neighbour',
-  'not-opposite': 'Not the opposite',
-};
+// ---------------------------------------------------------------------------
+// The shape menu
+// ---------------------------------------------------------------------------
+
+/**
+ * One entry of the shape menu: a named system and the rule its jumps obey.
+ *
+ * The vertex count and the jump ratio were sliders, and the restriction rule
+ * was a third control. All three now ride on the shape. Every named system
+ * carries its own (n, r) — ½ for the triangle and the square, 1/(1 + φ) for the
+ * pentagon — so no slider can combine with a named shape into a picture whose
+ * published dimension is wrong. And the one rule the tab still teaches, the
+ * square that must never jump to the corner it just used, is a menu entry of
+ * its own: the teaching moment is then two entries apart rather than two
+ * controls apart. The other rules keep their mathematics in `ifs.ts`.
+ */
+export interface Shape {
+  readonly id: string;
+  readonly label: string;
+  readonly system: NamedSystem;
+  readonly restriction: Restriction;
+}
+
+function shape(id: string, label: string, systemId: string, restriction: Restriction = 'none'): Shape {
+  const system = findSystem(systemId);
+  // A menu entry naming a system the catalogue does not have is a programming
+  // error, and the first test that imports this module reports it.
+  if (!system) throw new Error(`chaos-game: no named system "${systemId}" for shape "${id}"`);
+  return { id, label, system, restriction };
+}
+
+const DEFAULT_SHAPE: Shape = shape('sierpinski', 'Triangle', 'sierpinski');
+
+export const SHAPES: readonly Shape[] = [
+  DEFAULT_SHAPE,
+  shape('pentagon', 'Pentagon', 'pentagon'),
+  shape('square', 'Square', 'square'),
+  shape('square-no-repeat', 'Square, never the same corner twice', 'square', 'no-repeat'),
+  shape('fern', 'Fern', 'fern'),
+  shape('dragon', 'Dragon curve', 'dragon'),
+];
+
+function findShape(id: string): Shape | undefined {
+  return SHAPES.find((s) => s.id === id);
+}
+
+// ---------------------------------------------------------------------------
+// Controls, presets, facts
+// ---------------------------------------------------------------------------
 
 const params: readonly ParamSpec[] = [
   {
     kind: 'choice',
     key: 'system',
-    label: 'System',
-    options: [
-      ...NAMED_SYSTEMS.map((s) => ({ value: s.id, label: s.label })),
-      { value: CUSTOM, label: 'Custom n-gon' },
-    ],
-    default: DEFAULT_SYSTEM,
-    help: 'The named systems carry their own vertex count and ratio; the custom n-gon takes the two sliders below.',
-  },
-  {
-    kind: 'int',
-    key: 'n',
-    label: 'Vertices',
-    min: MIN_VERTICES,
-    max: MAX_VERTICES,
-    default: DEFAULT_VERTICES,
-    help: 'Vertices of the polygon, numbered anticlockwise on the plate. Active for the custom n-gon.',
-  },
-  {
-    kind: 'range',
-    key: 'r',
-    label: 'Ratio',
-    min: 0.1,
-    max: 0.9,
-    step: 0.001,
-    default: DEFAULT_RATIO,
-    help: [
-      'Similarity ratio. Each jump multiplies the distance to the chosen vertex by ',
-      { v: 'r' },
-      ', so the point moves 1 − ',
-      { v: 'r' },
-      ' of the way toward it and ',
-      { v: 'r' },
-      ' = ½ is the classic halfway jump. Above the open-set ratio the copies overlap and the dimension formula stops holding, so the tab stops claiming it.',
-    ],
-  },
-  {
-    kind: 'choice',
-    key: 'restriction',
-    label: 'Restriction',
-    options: RESTRICTIONS.map((id) => ({ value: id, label: RESTRICTION_LABELS[id] })),
-    default: 'none',
-    help: [
-      'Which vertex the next jump may not choose, counted around the polygon from the last one. Forbidding a choice cuts the branching from ',
-      { v: 'n' },
-      ' to ',
-      { v: 'm' },
-      ' and the dimension with it. Polygon systems only.',
-    ],
+    label: 'Shape',
+    options: SHAPES.map((s) => ({ value: s.id, label: s.label })),
+    default: DEFAULT_SHAPE.id,
   },
   {
     kind: 'range',
     key: 'points',
-    label: 'Points',
+    label: 'Dots',
     min: 1_000,
     max: MAX_POINTS,
     step: 1_000,
     default: DEFAULT_POINTS,
     log: true,
-    help: 'Points plotted before the run stops.',
   },
-  {
-    kind: 'range',
-    key: 'pointsPerFrame',
-    label: 'Points per frame',
-    min: 100,
-    max: 20_000,
-    step: 100,
-    default: DEFAULT_RATE,
-    log: true,
-    help: 'Plotting rate, in points per frame of simulation time. Changes take effect without restarting.',
-  },
-  {
-    kind: 'toggle',
-    key: 'colourByVertex',
-    label: 'Colour by vertex',
-    default: false,
-    help: 'Ink alternate maps in the two pens, so the copies the attractor is made of separate.',
-  },
-  {
-    kind: 'seed',
-    key: 'seed',
-    label: 'Seed',
-    default: DEFAULT_SEED,
-    help: 'Same seed, same order of jumps. The picture is the same either way — that is the point.',
-  },
+  // Not a control: the rail never renders a seed. It stays a spec so the URL
+  // keeps carrying it, Shuffle has something to redraw, and a shared permalink
+  // still reproduces the run through coerceParams().
+  { kind: 'seed', key: 'seed', label: 'Seed', default: DEFAULT_SEED },
 ];
 
+/**
+ * Three chips that walk to the insight in order: random jumps make an exact
+ * shape; the same game on a square makes no shape at all; one rule brings the
+ * shape back. The last two differ in nothing but the rule.
+ */
 const presets: readonly Preset[] = [
   {
-    id: 'one-thousand',
-    label: 'One thousand',
-    caption:
-      'A thousand points read as scattered dust, and every one of them is already exactly on the triangle. Nothing converges here except the eye.',
-    values: {
-      system: 'sierpinski',
-      restriction: 'none',
-      points: 1_000,
-      pointsPerFrame: 100,
-      colourByVertex: false,
-    },
-  },
-  {
-    id: 'sierpinski',
-    label: 'Sierpiński',
-    caption: [
-      'Two hundred thousand jumps toward three vertices, halfway each time: the triangle, at a measured dimension of log 3 / log 2 = ',
-      { v: 'D' },
-      ' = 1.585.',
-    ],
-    values: {
-      system: 'sierpinski',
-      restriction: 'none',
-      points: 200_000,
-      pointsPerFrame: 2_000,
-      colourByVertex: false,
-    },
+    id: 'triangle',
+    label: 'Triangle',
+    caption: 'Jump halfway to a random corner, 200,000 times, and the same triangle appears every time.',
+    values: { system: 'sierpinski', points: 200_000 },
   },
   {
     id: 'square-fills',
-    label: 'The square fills',
-    caption: [
-      'Four vertices and the same halfway jump, and the square fills solid. The four half-squares tile it with nothing left over, so log 4 / log 2 = 2 and there is no fractal here at all.',
-    ],
-    values: {
-      system: 'square',
-      n: 4,
-      r: 0.5,
-      restriction: 'none',
-      points: 1_000_000,
-      pointsPerFrame: 8_000,
-      colourByVertex: false,
-    },
+    label: 'Square fills',
+    caption: 'Four corners instead of three and there is no pattern at all: the square just fills in solid.',
+    values: { system: 'square', points: 1_000_000 },
   },
   {
-    id: 'restrict-it',
-    label: 'Restrict it',
-    caption: [
-      'The same square, the same halfway jumps — but never the vertex just used. Three choices instead of four, and the dimension falls from 2 to log 3 / log 2. The restriction makes the structure, not the randomness.',
-    ],
-    values: {
-      system: 'square',
-      n: 4,
-      r: 0.5,
-      restriction: 'no-repeat',
-      points: 1_000_000,
-      pointsPerFrame: 8_000,
-      colourByVertex: false,
-    },
-  },
-  {
-    id: 'fern',
-    label: 'Barnsley fern',
+    id: 'add-a-rule',
+    label: 'Add one rule',
     caption:
-      'Four affine maps, chosen 1 : 85 : 7 : 7. The map picked one time in a hundred is degenerate — it flattens the plane onto a segment — and it is the one that draws the stem.',
-    values: { system: 'fern', points: 1_000_000, pointsPerFrame: 8_000, colourByVertex: false },
-  },
-  {
-    id: 'dragon',
-    label: 'Dragon curve',
-    caption: [
-      'Two maps, each a 45° turn and a shrink by √2, so log 2 / log √2 = 2 exactly: the dragon tiles the plane. The box count still reads about 1.8 over these five octaves, because what is fractal about a dragon is its boundary.',
-    ],
-    values: { system: 'dragon', points: 500_000, pointsPerFrame: 8_000, colourByVertex: false },
+      'Add one rule to the same square, never the corner you just used, and a pattern appears: the rule makes the shape, not the luck.',
+    values: { system: 'square-no-repeat', points: 1_000_000 },
   },
 ];
 
 const facts: readonly Fact[] = [
   {
-    text: [
-      'Michael Barnsley named the chaos game in Fractals Everywhere (1988) and put the fern in it: four affine maps ',
-      'chosen with probabilities 0.01, 0.85, 0.07 and 0.07. The 1% map is degenerate — it collapses the whole plane ',
-      'onto a vertical segment — and it is the one that draws the stem.',
-    ],
+    text: 'Michael Barnsley named the chaos game in his 1988 book Fractals Everywhere, and the fern in the shape menu is his: four jump rules, and the one used only once in a hundred jumps is what draws the stem.',
     source: {
       label: 'Barnsley, Fractals Everywhere (Academic Press, 1988), §3.8 and Table 3.8.3',
       url: 'https://en.wikipedia.org/wiki/Barnsley_fern',
     },
   },
   {
-    text: [
-      'The picture does not depend on where the game starts. Hutchinson proved in 1981 that a finite set of ',
-      'contractions has exactly one non-empty compact invariant set, and that iterating from any starting set ',
-      'converges to it — so the first few points are simply off the attractor, and this tab throws twenty of them away.',
-    ],
+    text: 'It does not matter where the first dot starts: John Hutchinson proved in 1981 that a set of jump rules like these has exactly one shape it settles onto, which is why this tab throws its first twenty dots away.',
     source: {
       label: 'Hutchinson, “Fractals and self-similarity”, Indiana Univ. Math. J. 30 (1981), 713–747',
       url: 'https://doi.org/10.1512/iumj.1981.30.30055',
     },
   },
-  {
-    text: [
-      'Under the open set condition — the copies overlapping only on their edges — an attractor made of ',
-      { v: 'n' },
-      ' copies of itself at ratio ',
-      { v: 'r' },
-      ' has dimension exactly log ',
-      { v: 'n' },
-      ' / log(1/',
-      { v: 'r' },
-      '). The condition is what fails when the ratio is raised: at ',
-      { v: 'r' },
-      ' = 0.6 the three copies of a triangle overlap, the formula returns 2.15, and a set in the plane cannot exceed 2.',
-    ],
-    source: {
-      label: 'Moran (1946); Hutchinson (1981), §5.3 — the open set condition',
-      url: 'https://en.wikipedia.org/wiki/Open_set_condition',
-    },
-  },
 ];
+
+// ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
 
 function asNumber(v: ParamValue | undefined, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
@@ -315,20 +214,9 @@ function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
 }
 
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
-}
-
 function text(values: ParamValues, key: string, fallback: string): string {
   const v = values[key];
   return typeof v === 'string' && v.length > 0 ? v : fallback;
-}
-
-/** Pixel size out of a CSS font shorthand, for sizing the readout's backing plate. */
-function fontPx(font: string): number {
-  const m = /(\d+(?:\.\d+)?)px/.exec(font);
-  return m ? Number(m[1]) : 12;
 }
 
 /** Points this run will plot, clamped the way the plotter clamps its own target. */
@@ -336,20 +224,13 @@ function pointTarget(values: ParamValues): number {
   return Math.max(1, Math.min(MAX_POINTS, Math.floor(num(values, 'points', DEFAULT_POINTS))));
 }
 
-/**
- * The system the current parameters select, with everything the readouts need.
- *
- * A named polygon system carries its own vertex count and ratio, so choosing
- * "Sierpiński pentagon" cannot be combined with a ratio slider left at ½ into a
- * picture whose published dimension is wrong. The two sliders drive the custom
- * n-gon, which is where the reader is meant to break the rules.
- */
+/** The system the shape selects, with everything the readouts need. */
 export interface ActiveSystem {
   maps: readonly AffineMap[];
   /** Polygon vertices; 0 when the system is not a polygon system. */
   n: number;
   r: number;
-  /** The rule as requested. A non-polygon system ignores it. */
+  /** The rule the shape carries. A non-polygon system has none. */
   restriction: Restriction;
   bounds?: Bounds;
   /** Vertices a jump may choose from, `n` when unrestricted. */
@@ -364,18 +245,16 @@ export interface ActiveSystem {
 }
 
 export function resolveSystem(values: ParamValues): ActiveSystem {
-  const id = text(values, 'system', DEFAULT_SYSTEM);
-  const requested = text(values, 'restriction', 'none') as Restriction;
-  const rule: Restriction = RESTRICTIONS.includes(requested) ? requested : 'none';
-  const named = id === CUSTOM ? undefined : findSystem(id);
+  const chosen = findShape(text(values, 'system', DEFAULT_SHAPE.id)) ?? DEFAULT_SHAPE;
+  const named = chosen.system;
 
-  if (named && !named.polygon) {
-    // The fern and the dragon: no vertices, no restriction, and a closed form
-    // only where the maps are similarities. The dragon has one — log 2 / log √2
-    // = 2 — but its box count does not reach it at these scales, because its
-    // boundary is a dimension-1.5236 curve and the boundary term still carries a
-    // third of the count at 1/256. Publishing 2 as a target would mean a ledger
-    // that never converges, so the dimension is reported and not claimed.
+  if (!named.polygon) {
+    // The fern and the dragon: no vertices, no rule, and a closed form only
+    // where the maps are similarities. The dragon has one — log 2 / log √2 = 2
+    // — but its box count does not reach it at these scales, because its
+    // boundary is a dimension-1.5236 curve and the boundary term still carries
+    // a third of the count at 1/256. Publishing 2 as a target would mean a
+    // ledger that never converges, so the dimension is reported and not claimed.
     const base: ActiveSystem = {
       maps: named.maps,
       n: 0,
@@ -388,25 +267,21 @@ export function resolveSystem(values: ParamValues): ActiveSystem {
     return named.bounds ? { ...base, bounds: named.bounds } : base;
   }
 
-  const n = named?.polygon
-    ? named.polygon.n
-    : Math.min(MAX_VERTICES, Math.max(MIN_VERTICES, Math.round(num(values, 'n', DEFAULT_VERTICES))));
-  const r = named?.polygon
-    ? named.polygon.r
-    : Math.min(0.99, Math.max(0.01, num(values, 'r', DEFAULT_RATIO)));
-  const m = branching(n, rule);
+  const { n, r } = named.polygon;
+  const m = branching(n, chosen.restriction);
   // Below the open-set ratio the pieces meet only on their edges, the formula is
-  // exact, and the estimate has something to converge to. Above it they overlap:
-  // log m / log(1/r) overcounts, the true dimension is capped at 2, and the tab
-  // measures without claiming.
+  // exact, and the estimate has something to converge to. Above it they overlap,
+  // log m / log(1/r) overcounts, and the true dimension is capped at 2. Every
+  // shape on the menu sits at or below its ratio — the pentagon exactly at it,
+  // hence the epsilon — and this is the guard that keeps a new entry honest.
   const open = r <= polygonOpenSetRatio(n) + 1e-9;
   return {
-    maps: named?.polygon ? named.maps : polygonSystem(n, r),
+    maps: named.maps,
     n,
     r,
-    restriction: rule,
+    restriction: chosen.restriction,
     branching: m,
-    dimension: open ? restrictedDimension(n, r, rule) : NaN,
+    dimension: open ? restrictedDimension(n, r, chosen.restriction) : NaN,
     targeted: open && m > 1,
   };
 }
@@ -448,23 +323,18 @@ function create(ctx: VizContext): VizInstance {
     restriction: active.restriction,
   });
 
-  /** Only a polygon system needs room outside the figure, for its vertex numerals. */
-  const margin = (): number => (active.n > 0 ? MARGIN_POLYGON : MARGIN_PLAIN);
-
-  let view = layoutView(ctx.width, ctx.height, game.bounds, margin());
+  let view = layoutView(ctx.width, ctx.height, game.bounds, MARGIN);
 
   /**
    * Which of the two pens last inked each finest-level cell, one bit per cell:
-   * 128 KB that lets a resize, a fast-forward or a flick of the colour toggle
-   * repaint a million points in the colours they were plotted in. The occupancy
-   * grid says *that* a cell is inked; this says which pen did it.
+   * 128 KB that lets a resize or a fast-forward repaint a million points in the
+   * colours they were plotted in. The occupancy grid says *that* a cell is
+   * inked; this says which pen did it.
    */
   const pen = new Uint32Array(Math.max(1, (game.grid.size * game.grid.size) >>> 5));
 
-  // Live parameters, absorbed without disturbing the points already down.
+  // The one live parameter, absorbed without disturbing the points already down.
   let target = pointTarget(ctx.params);
-  let rate = DEFAULT_RATE;
-  let colourByVertex = false;
 
   // Fractional points owed by the rate accumulator between ticks.
   let pending = 0;
@@ -476,12 +346,6 @@ function create(ctx: VizContext): VizInstance {
   // same pixel.
   let painted = 0;
   let repaintAll = true;
-
-  function syncLive(): void {
-    target = pointTarget(ctx.params);
-    rate = num(ctx.params, 'pointsPerFrame', DEFAULT_RATE);
-    colourByVertex = flag(ctx.params, 'colourByVertex', false);
-  }
 
   /** Finest-level cell of an attractor point, or −1 when it falls outside the grid square. */
   function cellOf(x: number, y: number): number {
@@ -515,7 +379,7 @@ function create(ctx: VizContext): VizInstance {
       // simulation time a second, whatever the display is actually doing. One
       // rng draw per point, so the sequence for a seed is the same at every
       // rate and only the clock differs.
-      pending += (rate * 60 * dt) / 1000;
+      pending += (POINTS_PER_FRAME * 60 * dt) / 1000;
       let owed = Math.min(Math.floor(pending), target - game.plotted);
       pending -= owed;
       while (owed > 0) {
@@ -543,8 +407,8 @@ function create(ctx: VizContext): VizInstance {
       // New points onto the background, which is cumulative. `painted` is a
       // render cursor, not simulation state: nothing here advances the game.
       // Two conditions need the whole picture back rather than an increment:
-      // the colour toggle, and a fast-forward that plotted more points between
-      // two frames than the cursor ring holds.
+      // a reset, and a fast-forward that plotted more points between two
+      // frames than the cursor ring holds.
       if (repaintAll || painted < game.oldestRecent) {
         paintBackground();
       } else if (painted < game.plotted) {
@@ -585,15 +449,14 @@ function create(ctx: VizContext): VizInstance {
         fg.fill();
       }
 
-      drawWindow(fg);
+      // No number on the plate: the headline under it is the reading, in words
+      // a reader can use, and a "D ≈" beside the figure was one more thing to
+      // ask about.
       ctx.emit(readouts());
     },
 
     onParamChange(key, value) {
       switch (key) {
-        case 'pointsPerFrame':
-          rate = asNumber(value, rate);
-          return true;
         case 'points': {
           // The same asymmetry as every other counted run in this app. One draw
           // per point means the run on screen is a true prefix of a longer one,
@@ -607,15 +470,9 @@ function create(ctx: VizContext): VizInstance {
           target = next;
           return true;
         }
-        case 'colourByVertex':
-          colourByVertex = value === true;
-          // Every cell remembers which pen inked it, so the whole picture
-          // recolours without replotting a point.
-          repaintAll = true;
-          return true;
         default:
-          // system, n, r, restriction, seed: a different attractor, or a
-          // different walk over the same one. The shell resets.
+          // shape, seed: a different attractor, or a different walk over the
+          // same one. The shell resets.
           return false;
       }
     },
@@ -627,7 +484,7 @@ function create(ctx: VizContext): VizInstance {
         restriction: active.restriction,
         ...(active.bounds ? { bounds: active.bounds } : {}),
       });
-      syncLive();
+      target = pointTarget(ctx.params);
       pen.fill(0);
       pending = 0;
       painted = 0;
@@ -644,23 +501,24 @@ function create(ctx: VizContext): VizInstance {
    * Repaint the whole background: the apparatus, then every point ever plotted,
    * recovered from the occupancy grid.
    *
-   * This is the resize path, the fast-forward path and the colour toggle's
-   * path. The grid is 1,024 cells across the figure and the plate is at most
-   * about 1,000 CSS px, so a cell is a pixel and this is the picture rather
-   * than an approximation of it. Zero words are skipped whole, which on a
-   * fractal is most of them.
+   * This is the resize path and the fast-forward path. The grid is 1,024 cells
+   * across the figure and the plate is at most about 1,000 CSS px, so a cell is
+   * a pixel and this is the picture rather than an approximation of it. Zero
+   * words are skipped whole, which on a fractal is most of them.
    */
   function paintBackground(): void {
     const bg = ctx.layers.background;
     const { width, height, theme } = ctx;
-    view = layoutView(width, height, game.bounds, margin());
+    view = layoutView(width, height, game.bounds, MARGIN);
     bg.clearRect(0, 0, width, height);
 
     if (active.n > 0) {
       const n = active.n;
       // The polygon is the frame the experiment happens inside, so it takes the
-      // container pen; the vertices are the experiment's own geometry — the
-      // thing a jump is aimed at — so they take the apparatus pen.
+      // container pen; the corners are the experiment's own geometry — the
+      // thing a jump is aimed at — so they take the apparatus pen. No numerals
+      // at the corners: they existed to make "not a neighbour" legible, and the
+      // one rule left on the menu is stated without them.
       bg.strokeStyle = theme.gridSoft;
       bg.lineWidth = theme.lineWidth;
       bg.beginPath();
@@ -684,22 +542,6 @@ function create(ctx: VizContext): VizInstance {
         bg.arc(x, y, radius, 0, TAU);
       }
       bg.fill();
-
-      // Numerals outside the polygon, which is what makes a restriction rule
-      // legible: "not a neighbour" is a statement about these numbers.
-      bg.font = theme.labelFont;
-      bg.fillStyle = theme.inkMuted;
-      bg.textAlign = 'center';
-      bg.textBaseline = 'middle';
-      for (let k = 0; k < n; k++) {
-        const v = polygonVertex(n, k);
-        const out = radius + LABEL_GAP;
-        bg.fillText(
-          String(k),
-          view.originX + view.scale * v.x + out * v.x,
-          view.originY - view.scale * v.y - out * v.y,
-        );
-      }
     }
 
     // The attractor goes on over the apparatus, exactly where the live points
@@ -713,12 +555,12 @@ function create(ctx: VizContext): VizInstance {
     const d = Math.max(1, Math.ceil(s));
     const off = (d - 1) / 2;
     // One pass per pen, so the fill style is set twice rather than once per
-    // cell. With the toggle off there is one pen and one pass.
-    const passes = colourByVertex ? 2 : 1;
+    // cell.
+    const passes = COLOUR_BY_VERTEX ? 2 : 1;
     for (let p = 0; p < passes; p++) {
       bg.fillStyle = p === 1 ? theme.data1 : theme.data2;
       game.grid.forEachCell((cx, cy, index) => {
-        if (colourByVertex) {
+        if (COLOUR_BY_VERTEX) {
           const bit = ((pen[index >>> 5] ?? 0) >>> (index & 31)) & 1;
           if (bit !== p) return;
         }
@@ -737,11 +579,11 @@ function create(ctx: VizContext): VizInstance {
 
   /** Paint the points plotted since chronological index `from`, batched by pen. */
   function paintRange(bg: CanvasRenderingContext2D, from: number): void {
-    const passes = colourByVertex ? 2 : 1;
+    const passes = COLOUR_BY_VERTEX ? 2 : 1;
     for (let p = 0; p < passes; p++) {
       bg.fillStyle = p === 1 ? ctx.theme.data1 : ctx.theme.data2;
       game.forEachRecent(from, (x, y, vertex) => {
-        if (colourByVertex && (vertex & 1) !== p) return;
+        if (COLOUR_BY_VERTEX && (vertex & 1) !== p) return;
         // Snapped to whole CSS pixels and painted at full strength: §7 lets a
         // sub-3 px mark through on exactly that condition, and an
         // anti-aliased point would smear the drafting pen from 9.41:1 to 2.56.
@@ -755,43 +597,17 @@ function create(ctx: VizContext): VizInstance {
     }
   }
 
-  /**
-   * The live dimension, top right, as a display window: an opaque plate of the
-   * canvas colour with a container-pen frame. Opaque because a million points
-   * read straight through a translucent one. Published through emit() as well;
-   * the canvas itself is aria-hidden.
-   */
-  function drawWindow(fg: CanvasRenderingContext2D): void {
-    const { theme, width } = ctx;
-    const d = boxCountingDimension(game.grid);
-    const label = `D ≈ ${Number.isFinite(d) ? d.toFixed(3) : '—'}`;
-    const margin = 10;
-    const pad = 5;
-    fg.font = theme.labelFont;
-    fg.textAlign = 'right';
-    fg.textBaseline = 'top';
-    const textW = fg.measureText(label).width;
-    const textH = fontPx(theme.labelFont);
-    const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
-    const plateX = Math.round(width - margin - textW - pad);
-    const plateY = Math.round(margin - pad);
-    const plateW = Math.round(textW + 2 * pad);
-    const plateH = Math.round(textH + 2 * pad);
-    fg.fillStyle = theme.canvas;
-    fg.fillRect(plateX, plateY, plateW, plateH);
-    fg.strokeStyle = theme.gridSoft;
-    fg.lineWidth = theme.lineWidth;
-    fg.strokeRect(plateX + snap, plateY + snap, plateW - 2 * snap, plateH - 2 * snap);
-    fg.fillStyle = theme.ink;
-    fg.fillText(label, width - margin, margin);
-  }
-
   function formula(): Prose {
     if (active.n === 0) return ['log 2 / log √2'];
     const count: Prose = active.restriction === 'none' ? [{ v: 'n' }] : [{ v: 'm' }];
     return ['log ', ...count, ' / log(1/', { v: 'r' }, ')'];
   }
 
+  /**
+   * The simple view shows two of these: the dimension, as the headline, and
+   * the dot count. The closed form and the box count at 1/256 are what the
+   * expert table and the tests read, and nothing a newcomer is asked to parse.
+   */
   function readouts(): Readout[] {
     const measured = boxCountingDimension(game.grid);
     const dimension: Readout = {
@@ -799,6 +615,9 @@ function create(ctx: VizContext): VizInstance {
       label: 'Box dimension',
       value: measured,
       digits: 4,
+      plain: 'how crinkly the shape is',
+      headline: true,
+      hint: 'a filled square scores 2, a line 1',
     };
     if (active.targeted) {
       dimension.target = active.dimension;
@@ -809,7 +628,7 @@ function create(ctx: VizContext): VizInstance {
       dimension.tolerance = DIM_TOLERANCE / Math.abs(active.dimension);
     }
     const out: Readout[] = [
-      { key: 'points', label: 'Points plotted', value: game.plotted, digits: 7 },
+      { key: 'points', label: 'Points plotted', value: game.plotted, digits: 7, plain: 'dots placed' },
       dimension,
     ];
     if (Number.isFinite(active.dimension)) {
@@ -819,6 +638,7 @@ function create(ctx: VizContext): VizInstance {
         value: active.dimension,
         digits: 7,
         formula: formula(),
+        expertOnly: true,
       });
     }
     out.push({
@@ -826,6 +646,7 @@ function create(ctx: VizContext): VizInstance {
       label: 'Boxes at 1/256',
       value: game.grid.count(BOX_MAX_LEVEL),
       digits: 7,
+      expertOnly: true,
     });
     return out;
   }
@@ -838,13 +659,7 @@ export const chaosGame: Viz = {
   id: 'chaos-game',
   title: 'Chaos Game',
   group: 'chaos',
-  blurb: [
-    'Jumps toward a vertex picked at random, a million times over, until an attractor of dimension log ',
-    { v: 'n' },
-    ' / log(1/',
-    { v: 'r' },
-    ') is drawn exactly.',
-  ],
+  blurb: 'Jump toward a random corner, drop a dot, repeat: the same shape appears every time.',
   // Square, because the attractors are: a triangle inscribed in the unit circle
   // and a filled square both want equal axes, and one scale has to serve both
   // directions or the figure is no longer self-similar. Square on a phone too —

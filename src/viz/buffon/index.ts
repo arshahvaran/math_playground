@@ -17,9 +17,9 @@ import { NeedleField, crossingProbability, dropNeedle, estimatePi, piStandardErr
  *
  * This is an ink budget, not a memory one, and it is what the tab is worth
  * looking at at all: at 8,000 drops a 20,000-needle field is a solid vermilion
- * mass with the floorboards buried under it, and the 200,000 preset is worse.
- * 600 is the ceiling on a full-size plate — see `INK_TARGET`, which is what
- * actually decides how many of them are painted.
+ * mass with the floorboards buried under it. 600 is the ceiling on a full-size
+ * plate — see `INK_TARGET`, which is what actually decides how many of them are
+ * painted.
  */
 const MAX_NEEDLES = 600;
 
@@ -62,21 +62,40 @@ const WEIGHT_LEVELS = 8;
 const WEIGHT_BASE = 2;
 const WEIGHT_SPREAD = 2;
 
+/**
+ * Needles per second of simulation time. This was the "Drop rate" fader
+ * (1–2,000/s); it is fixed because how fast a run goes is the transport's job,
+ * and 120 against the 120 Hz tick is exactly one needle per step.
+ */
+const DROP_RATE = 120;
+
+/**
+ * Where a run stops. This was the "Total drops" fader (100–200,000); it is
+ * fixed because 20,000 drops already pin π to about two decimals, which is the
+ * lesson, and at DROP_RATE they finish inside the shell's settle budget on a
+ * reduced-motion load.
+ */
+const MAX_DROPS = 20_000;
+
+/**
+ * The weight-by-angle overlay. This was the "Weight by angle" toggle; it is off
+ * because |sin θ| answers a question a newcomer has not asked yet. The painter
+ * still knows how to draw it, so the switch is a constant, not a deletion.
+ */
+const SHOW_ANGLE: boolean = false;
+
 const DEFAULT_SEED = 42;
 
 const params: readonly ParamSpec[] = [
   {
     kind: 'range',
     key: 'ratio',
-    label: 'Needle length L/d',
+    label: 'Needle length',
     min: 0.1,
     max: 1,
     step: 0.01,
     default: 0.8,
-    help: [
-      'Needle length as a fraction of the line spacing. The formula 2', { v: 'L' }, '/(', { v: 'π' }, { v: 'd' }, ') ',
-      'needs ', { v: 'L' }, ' ≤ ', { v: 'd' }, '.',
-    ],
+    help: 'As a fraction of the gap between the lines: 1 means the needle is exactly as long as the gap.',
   },
   {
     kind: 'int',
@@ -86,115 +105,53 @@ const params: readonly ParamSpec[] = [
     max: 160,
     default: 64,
     unit: 'px',
-    help: ['Distance ', { v: 'd' }, ' between the ruled lines.'],
   },
-  {
-    kind: 'range',
-    key: 'dropRate',
-    label: 'Drop rate',
-    min: 1,
-    max: 2000,
-    step: 1,
-    default: 120,
-    unit: '/s',
-    log: true,
-    help: 'Needles dropped per second of simulation time.',
-  },
-  {
-    kind: 'range',
-    key: 'maxDrops',
-    label: 'Total drops',
-    min: 100,
-    max: 200_000,
-    step: 100,
-    default: 20_000,
-    log: true,
-    help: `Stop after this many drops. At most ${MAX_NEEDLES} needles stay on screen; the counts keep going.`,
-  },
-  {
-    kind: 'toggle',
-    key: 'showAngle',
-    label: 'Weight by angle',
-    default: false,
-    help: [
-      'Crossing depends only on |sin ', { v: 'θ' }, '|: needles thicken toward vertical and thin toward horizontal.',
-    ],
-  },
+  // Not a control — the rail never renders this kind — but the spec is what
+  // binds the seed to the URL: without it a permalink's seed is dropped on the
+  // way in and the transport's Shuffle key has nothing to set.
   {
     kind: 'seed',
     key: 'seed',
     label: 'Seed',
     default: DEFAULT_SEED,
-    help: 'Same seed, same needles, same estimate.',
   },
 ];
 
 const presets: readonly Preset[] = [
   {
-    id: 'slow-motion',
-    label: 'Slow motion',
-    caption: [
-      'Two needles a second: each one either crosses a line or misses, and the ', { v: 'π' },
-      ' estimate lurches after every drop.',
-    ],
-    values: { dropRate: 2, maxDrops: 200 },
-  },
-  {
     id: 'short-needle',
     label: 'Short needle',
-    caption: 'A short needle rarely crosses, so each drop carries little information and the estimate wanders for longer.',
+    caption: 'A short needle hardly ever lands on a line, so the estimate of π wanders for a long time.',
     values: { ratio: 0.3 },
   },
   {
     id: 'full-length',
     label: 'Full length',
-    caption: [
-      { v: 'L' }, ' = ', { v: 'd' }, ' gives the largest crossing probability, 2/', { v: 'π' },
-      ', and the most information per drop — the fastest route to ', { v: 'π' }, '.',
-    ],
+    caption: 'A needle as long as the gap crosses a line most often, and that is the quickest way to a good estimate of π.',
     values: { ratio: 1 },
   },
   {
-    id: 'two-hundred-thousand',
-    label: 'Two hundred thousand',
-    caption: [
-      'Even 200,000 drops pin ', { v: 'π' }, ' to about two decimals: the error shrinks as 1/√', { v: 'N' },
-      ', and that slowness is the lesson.',
-    ],
-    values: { dropRate: 2000, maxDrops: 200_000 },
+    id: 'wider-boards',
+    label: 'Wider boards',
+    caption:
+      'The gap doubles and the needle grows with it, yet the estimate is no different: only the needle compared with the gap matters.',
+    values: { spacing: 128 },
   },
 ];
 
 const facts: readonly Fact[] = [
   {
-    text:
-      "Buffon posed the needle problem in 1777 in his Essai d'arithmétique morale, " +
-      'asking what a gambler should pay to bet that a dropped stick would cross a floorboard joint. ' +
-      'It is the earliest problem in geometric probability.',
+    text: 'Buffon posed the needle problem in 1777, asking what a gambler should pay to bet that a dropped stick would cross a floorboard joint.',
     source: {
       label: "Buffon, Essai d'arithmétique morale (1777), Histoire naturelle, Supplément t. IV",
       url: 'https://mathshistory.st-andrews.ac.uk/Biographies/Buffon/',
     },
   },
   {
-    text: [
-      'In 1901 Mario Lazzarini reported 3,408 throws giving ', { v: 'π' },
-      ' ≈ 3.1415929 — exactly 355/113, correct to six decimals. With ', { v: 'L' }, '/', { v: 'd' },
-      ' = 5/6 the estimate hits 355/113 whenever the throw count is a multiple of 213 and the crossings ',
-      'cooperate; 3,408 = 16 × 213, and stopping there was almost certainly a choice made after the fact.',
-    ],
+    text: 'In 1901 Mario Lazzarini reported 3,408 throws giving π correct to six decimals, and he almost certainly stopped counting at the moment the answer looked best.',
     source: {
-      label: "Badger, 'Lazzarini's Lucky Approximation of π', Mathematics Magazine 67(2), 1994; Gridgeman, Scripta Mathematica 25, 1960",
+      label: "Badger, 'Lazzarini's Lucky Approximation of π', Mathematics Magazine 67(2), 1994",
       url: 'https://doi.org/10.2307/2690682',
-    },
-  },
-  {
-    text:
-      'Dropping needles to measure π is, in effect, the first Monte Carlo method: a random experiment run many times ' +
-      'to estimate a deterministic quantity, a century and a half before the name was coined at Los Alamos.',
-    source: {
-      label: "Wikipedia, Buffon's needle problem",
-      url: 'https://en.wikipedia.org/wiki/Buffon%27s_needle_problem',
     },
   },
 ];
@@ -205,11 +162,6 @@ function asNumber(v: ParamValue | undefined, fallback: number): number {
 
 function num(values: ParamValues, key: string, fallback: number): number {
   return asNumber(values[key], fallback);
-}
-
-function flag(values: ParamValues, key: string, fallback: boolean): boolean {
-  const v = values[key];
-  return typeof v === 'boolean' ? v : fallback;
 }
 
 /** Pixel size out of a CSS font shorthand, for sizing the readout's backing plate. */
@@ -267,11 +219,6 @@ function create(ctx: VizContext): VizInstance {
   let spacing = 64;
   let length = 0.8 * spacing;
 
-  // Live parameters: absorbed without touching the needles already dropped.
-  let dropRate = 120;
-  let maxDrops = 20_000;
-  let showAngle = false;
-
   // Where the ruled lines and the strips are on the current plate. Purely a
   // painting concern: the needles themselves are stored unscaled, so this is
   // re-derived on every resize and the field re-lays-out with it.
@@ -279,12 +226,6 @@ function create(ctx: VizContext): VizInstance {
 
   // Fractional needles owed by the drop-rate accumulator between ticks.
   let pending = 0;
-
-  function syncLive(): void {
-    dropRate = num(ctx.params, 'dropRate', 120);
-    maxDrops = num(ctx.params, 'maxDrops', 20_000);
-    showAngle = flag(ctx.params, 'showAngle', false);
-  }
 
   function syncStructure(): void {
     spacing = Math.max(1, Math.round(num(ctx.params, 'spacing', 64)));
@@ -297,8 +238,8 @@ function create(ctx: VizContext): VizInstance {
     const drops = field.drops;
     const crossings = field.crossings;
     return [
-      { key: 'drops', label: 'Drops', value: drops, digits: 6 },
-      { key: 'crossings', label: 'Crossings', value: crossings, digits: 6 },
+      { key: 'drops', label: 'Drops', value: drops, digits: 6, plain: 'needles dropped' },
+      { key: 'crossings', label: 'Crossings', value: crossings, digits: 6, plain: 'crossed a line' },
       // §5: the hero prints "analytic" and the closed form behind the target.
       // L is the needle length, d the line spacing.
       {
@@ -307,6 +248,7 @@ function create(ctx: VizContext): VizInstance {
         value: crossings / drops,
         target: crossingProbability(length, spacing),
         formula: ['2', { v: 'L' }, '/(', { v: 'π' }, { v: 'd' }, ')'],
+        expertOnly: true,
       },
       {
         key: 'pi',
@@ -314,27 +256,30 @@ function create(ctx: VizContext): VizInstance {
         value: estimatePi(drops, crossings, length, spacing),
         digits: 5,
         target: Math.PI,
+        plain: 'our estimate of pi',
+        headline: true,
+        hint: 'the real value is 3.14159',
       },
       {
         key: 'se',
         label: 'Std. error of π',
         value: piStandardError(drops, length, spacing),
         digits: 3,
+        expertOnly: true,
       },
     ];
   }
 
   const instance: VizInstance = {
     step(dt) {
-      if (field.drops >= maxDrops) {
+      if (field.drops >= MAX_DROPS) {
         pending = 0;
         return;
       }
-      pending += (dropRate * dt) / 1000;
-      // Drops per tick depend only on dt and dropRate, and each drop consumes
-      // exactly four rng draws, so the needle sequence for a seed is the same
-      // at every drop rate — only the clock differs.
-      while (pending >= 1 && field.drops < maxDrops) {
+      pending += (DROP_RATE * dt) / 1000;
+      // Each drop consumes exactly four rng draws, so the needle sequence for a
+      // seed is the same whatever the clock does.
+      while (pending >= 1 && field.drops < MAX_DROPS) {
         field.push(dropNeedle(ctx.rng, length, spacing));
         pending -= 1;
       }
@@ -378,14 +323,14 @@ function create(ctx: VizContext): VizInstance {
       // and E|sin θ| over θ ~ U[0, π) is 2/π — the same 2/π that caps the
       // crossing probability — so the overlay inks about 1.6× as much per
       // needle and buys correspondingly fewer of them.
-      const meanWeight = WEIGHT_BASE + (showAngle ? (WEIGHT_SPREAD * 2) / Math.PI : 0);
+      const meanWeight = WEIGHT_BASE + (SHOW_ANGLE ? (WEIGHT_SPREAD * 2) / Math.PI : 0);
       const perNeedle = Math.max(1, length * meanWeight * theme.lineWidth);
       const affordable = Math.ceil((-Math.log(1 - INK_TARGET) * width * height) / perNeedle);
       const skip = Math.max(0, field.count - affordable);
       field.forEach((u, v, t, cos, sin, crosses) => {
         // The field hands back the direction it stored at push, so no needle
         // costs a sin/cos here — a pair each a frame was a measurable slice.
-        const level = showAngle ? Math.round(Math.abs(sin) * top) : top;
+        const level = SHOW_ANGLE ? Math.round(Math.abs(sin) * top) : top;
         const b = crosses ? WEIGHT_LEVELS + level : level;
         const path = paths[b] ?? (paths[b] = new Path2D());
         // The stored draws are fractions, so the plate in front of us now — not
@@ -403,7 +348,7 @@ function create(ctx: VizContext): VizInstance {
       // whole of it; with it off, `level` is `top` for every needle and the
       // spread is zero, so all of them are drawn at exactly the same 2 px.
       fg.lineCap = 'butt';
-      const spread = showAngle ? WEIGHT_SPREAD : 0;
+      const spread = SHOW_ANGLE ? WEIGHT_SPREAD : 0;
       for (let b = 0; b < 2 * WEIGHT_LEVELS; b++) {
         const path = paths[b];
         if (!path) continue;
@@ -445,40 +390,12 @@ function create(ctx: VizContext): VizInstance {
       ctx.emit(readouts());
     },
 
-    onParamChange(key, value) {
-      switch (key) {
-        case 'dropRate':
-          dropRate = asNumber(value, dropRate);
-          return true;
-        case 'maxDrops': {
-          // Asymmetric, because the ceiling is not a property of the needles:
-          // a drop consumes the same four draws whatever it is, so the run on
-          // screen is the first `field.drops` of the run a fresh load at the new
-          // ceiling would produce — a true prefix — as long as the new ceiling
-          // is at least that. Raising it therefore continues the same sequence
-          // rather than restarting it. Below the drops already counted there is
-          // no reading of the ledger that is honest: it would go on reporting
-          // 20,000 drops while the control, the caption and the permalink all
-          // said 1,000, and the permalink the page advertises would show its
-          // recipient a different, shorter run. So the shell resets instead.
-          const next = asNumber(value, maxDrops);
-          if (next < field.drops) return false;
-          maxDrops = next;
-          return true;
-        }
-        case 'showAngle':
-          showAngle = value === true;
-          return true;
-        default:
-          // ratio, spacing, seed: the needles already down belong to a different
-          // experiment, so the shell resets.
-          return false;
-      }
-    },
+    // No onParamChange: every knob left — ratio, spacing, seed — is structural.
+    // The needles already down belong to a different experiment, so the shell
+    // resets on each of them.
 
     reset() {
       syncStructure();
-      syncLive();
       ctx.rng.reseed(num(ctx.params, 'seed', DEFAULT_SEED));
       field.reset();
       pending = 0;
@@ -497,7 +414,7 @@ export const buffon: Viz = {
   id: 'buffon',
   title: "Buffon's Needle",
   group: 'randomness',
-  blurb: ['Drops needles on ruled lines and recovers ', { v: 'π' }, ' from the fraction that cross one.'],
+  blurb: ['Drops needles onto a lined floor, and the share that land across a line gives an estimate of ', { v: 'π' }, '.'],
   // Landscape, like the floor it models: whole strips are what the estimator
   // samples, and the field is centred on them. Square on a phone, where a 1.6
   // bed fits three floorboards and a square fits five.
