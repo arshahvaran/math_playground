@@ -53,20 +53,33 @@ import { findViz, registry } from './viz/registry';
 const FAST_FORWARD_TICKS = 240;
 
 /**
- * Ticks per batch while settling a reduced-motion cold start, and the ceiling
- * and wall-clock budget on the whole settle.
+ * Ticks in the first batch while settling a reduced-motion cold start, the
+ * largest batch that follows, and the ceiling and wall-clock budget on the
+ * whole settle.
  *
  * DESIGN §6 requires every tab to open on the *completed* state of its default
  * configuration, and for a reduced-motion reader — who gets no autoplay — that
  * opening state is also the resting state: without this the bed is empty, the
  * ledger reads NaN against its analytic target, and nothing on the page is a
  * measurement. The shell cannot know when a visualization is "finished", so it
- * runs Fast-forward batches until the readouts stop moving. The batch is large
- * because every batch costs a full `draw()`, and the two limits are what keep a
- * one-drop-per-second configuration from hanging the load: 300 s of simulated
- * time is enough for both shipped defaults (Galton needs 50 s, Buffon 167 s).
+ * runs Fast-forward batches until the readouts stop moving. 300 s of simulated
+ * time is enough for every shipped default (Galton needs 50 s, Buffon 167 s).
+ *
+ * A tick is not a fixed cost, which is what makes the batch a measured quantity
+ * rather than a constant. A tick of the Galton board is a few dozen balls; a
+ * tick of the coupled oscillators is four mean-field passes over the crowd, and
+ * a tick of the Ising sheet is two passes over 128². A single fixed batch of
+ * 2,400 spent 932 ms on the first of those at the top of its fader and 716 ms
+ * on the second, all of it before the deadline below was looked at even once —
+ * a frozen page with no spinner and no partial frame, on a URL the tab itself
+ * writes into the address bar. So the first batch is short enough that the
+ * dearest tick in the app cannot overrun on it, and every batch after it is
+ * sized from what the last one actually cost against the budget that is left.
+ * The cap on that is the old batch doubled: a cheap tab reaches the ceiling in
+ * seven batches instead of fifteen, and each batch costs a full `draw()`.
  */
-const SETTLE_BATCH_TICKS = 2_400;
+const SETTLE_FIRST_BATCH_TICKS = 600;
+const SETTLE_MAX_BATCH_TICKS = 4_800;
 const SETTLE_MAX_TICKS = 36_000;
 const SETTLE_BUDGET_MS = 400;
 
@@ -490,12 +503,30 @@ function settle(): void {
   if (!instance) return;
   const deadline = now() + SETTLE_BUDGET_MS;
   let previous = emitted();
-  for (let ticks = 0; ticks < SETTLE_MAX_TICKS; ticks += SETTLE_BATCH_TICKS) {
-    engine.fastForward(SETTLE_BATCH_TICKS);
+  let batch = SETTLE_FIRST_BATCH_TICKS;
+  let ticks = 0;
+  while (ticks < SETTLE_MAX_TICKS) {
+    const run = Math.min(batch, SETTLE_MAX_TICKS - ticks);
+    const before = now();
+    engine.fastForward(run);
+    const spent = now() - before;
+    ticks += run;
+
     const current = emitted();
     if (current === previous) return;
     previous = current;
-    if (now() >= deadline) return;
+
+    const left = deadline - now();
+    if (left <= 0) return;
+    // What the last batch cost per tick is the only honest estimate of what the
+    // next one will, so the next batch is whatever fits in the budget that is
+    // left. A batch that measured as free — a cheap tab on a clock too coarse
+    // to see it — takes the cap rather than dividing by zero.
+    const perTick = spent / run;
+    batch =
+      perTick > 0
+        ? Math.max(1, Math.min(SETTLE_MAX_BATCH_TICKS, Math.floor(left / perTick)))
+        : SETTLE_MAX_BATCH_TICKS;
   }
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { byClass, installDom, type Harness } from './dom-harness';
 import type { ParamSpec } from '../src/core/types';
+import { registry } from '../src/viz/registry';
 import {
   createControls,
   intEntry,
@@ -34,15 +35,27 @@ const RANGES: ReadonlyArray<readonly [number, number]> = [
 
 /**
  * Every integer-stepped log fader in the registry, as `[label, min, max, step]`.
- * The Lorenz starting gap (10⁻¹² → 10⁻³ on a 10⁻¹² step) is the one log fader
- * left out: walking its value grid a step at a time is a billion iterations.
+ *
+ * Read off the registry rather than listed by hand. The hand-written list was
+ * four entries and went stale the moment a tab was added — and a fader missing
+ * from it is exactly a fader nobody checked. The filter is the whole grid being
+ * integers: the Lorenz starting gap (10⁻¹² → 10⁻³ on a 10⁻¹² step) drops out on
+ * its own, which is what we want, because walking its value grid a step at a
+ * time is a billion iterations.
  */
-const LOG_SPECS: ReadonlyArray<readonly [string, number, number, number]> = [
-  ['galton balls', 1, 5_000, 1],
-  ['montecarlo-pi darts', 100, 2_000_000, 100],
-  ['dla particles', 100, 50_000, 100],
-  ['chaos-game points', 1_000, 2_000_000, 1_000],
-];
+const LOG_SPECS: ReadonlyArray<readonly [string, number, number, number]> = registry.flatMap(
+  (viz) =>
+    viz.params
+      .filter(
+        (spec): spec is Extract<ParamSpec, { kind: 'range' }> =>
+          spec.kind === 'range' &&
+          spec.log === true &&
+          Number.isInteger(spec.min) &&
+          Number.isInteger(spec.max) &&
+          Number.isInteger(spec.step),
+      )
+      .map((spec) => [`${viz.id} ${spec.key}`, spec.min, spec.max, spec.step] as const),
+);
 
 describe('mapLogPosition', () => {
   it('maps the ends exactly', () => {

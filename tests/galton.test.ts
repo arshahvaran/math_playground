@@ -758,7 +758,9 @@ describe('galton viz instance', () => {
     expect(by['landed']!.label).toBe('Balls landed');
     expect(by['mean']!.headline).toBe(true);
     expect(by['mean']!.plain).toBe('average landing spot');
-    expect(by['mean']!.hint).toBe('the maths says it should be 6');
+    // No hint: the verdict under the hero already prints "matches the
+    // prediction of 6", so a hint quoting it again says the same thing twice.
+    expect(by['mean']!.hint).toBeUndefined();
     expect(by['landed']!.plain).toBe('balls landed');
     expect(emitted.at(-1)!.filter((r) => r.headline).length).toBe(1);
     for (const key of ['tallest', 'mode', 'bins']) expect(by[key]!.expertOnly).toBe(true);
@@ -779,12 +781,12 @@ describe('galton viz instance', () => {
     expect(pile(seven)).not.toEqual(pile(fortyTwo));
   });
 
-  it('phrases the hint for the rows in force', () => {
+  it('moves the prediction with the rows in force', () => {
     const { instance, emitted } = stubViz({ ...defaults, rows: 15 });
     instance.draw();
     const mean = emitted.at(-1)!.find((r) => r.key === 'mean')!;
     expect(mean.target).toBe(7.5);
-    expect(mean.hint).toBe('the maths says it should be 7.5');
+    expect(mean.hint).toBeUndefined();
   });
 
   it('defers every control change to the shell: rows and balls are both a new experiment', () => {

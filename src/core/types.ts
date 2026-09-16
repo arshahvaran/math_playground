@@ -127,7 +127,15 @@ export interface Readout {
   plain?: string;
   /** The one number a newcomer should read first. Mark exactly one per visualization. */
   headline?: boolean;
-  /** One short sentence of context, shown only in the simple view. */
+  /**
+   * One short sentence of context, shown under the headline reading and
+   * nowhere else — the simple view shows one reading, so a hint on any other
+   * one has no surface to appear on and a test rejects it.
+   *
+   * It answers "why does this matter?", never "what should it be?": the
+   * verdict line above it already prints the prediction the reading is being
+   * held to, so a hint that quotes the same number again says it twice.
+   */
   hint?: string;
   /** Internals — bin counts, index of the mode — that only the expert table shows. */
   expertOnly?: boolean;

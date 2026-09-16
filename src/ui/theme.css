@@ -332,7 +332,10 @@
   --input-h: 2.25rem;        /* 36 */
   /* The hero's three fixed lines — 44 px numeral, 20 px label, 22 px sentence —
      plus two 4 px gaps and 32 px of padding. A FLOOR, never a fit: the region
-     under the plate must not change height while a run is going. */
+     under the plate must not change height while a run is going. The hint line
+     under the verdict is the one row outside it; it exists only on a reading
+     that declares one, and whether a reading declares one is fixed for as long
+     as the tab is on screen. */
   --hero-h: 8.75rem;
   --row-control: 2.75rem;
   --deck-h: 4rem;            /* 64 handheld transport deck */
@@ -1049,8 +1052,11 @@ canvas {
 .hero {
   --hero-value-lh: var(--lh-hero);
   display: grid;
-  /* Three rows of FIXED height: the numeral, the label, the sentence. */
-  grid-template-rows: var(--hero-value-lh) var(--lh-14) var(--lh-14);
+  /* Three rows of FIXED height: the numeral, the label, the sentence. The
+     fourth is the hint, which is empty on most readings and collapses to
+     nothing there — it is a property of the reading, not of its value, so it
+     cannot appear or vanish while a run is going. */
+  grid-template-rows: var(--hero-value-lh) var(--lh-14) var(--lh-14) auto;
   align-content: start;
   row-gap: var(--s-1);
   min-height: var(--hero-h);
@@ -1120,6 +1126,22 @@ canvas {
 
 .hero__verdict {
   color: var(--window-ink-muted);
+}
+
+/* The hint. It is a whole sentence of context rather than a label, so it wraps
+   instead of being clipped, and it is quieter than the verdict above it: the
+   verdict answers "does this agree?", the hint answers "why does that matter?".
+   Empty on most readings, where it takes no height at all. */
+.hero__hint {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-display);
+  font-variant-numeric: var(--num);
+  color: var(--window-ink-muted);
+  text-wrap: pretty;
 }
 
 /* The check keeps its box whether or not it shows, so the words after it never

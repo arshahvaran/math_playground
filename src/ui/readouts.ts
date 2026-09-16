@@ -106,7 +106,9 @@ export function verdictOf(readout: Readout): Reading {
   if (!Number.isFinite(readout.value)) return { text: 'not measured yet', state: 'none' };
   const target = readout.target;
   if (target === undefined) return { text: readout.hint ?? '', state: 'none' };
-  const shown = num(target, readout.digits ?? 4);
+  // With its unit, where there is one: the hero prints "79.3 %" above this
+  // line, and a prediction of "78.5" under it is a different quantity.
+  const shown = num(target, readout.digits ?? 4) + (readout.unit ? ` ${readout.unit}` : '');
   if (agrees(readout, target)) return { text: `matches the prediction of ${shown}`, state: 'agree' };
   const off = target === 0 ? Infinity : Math.abs((readout.value - target) / target);
   if (off < SETTLING_FROM) return { text: `within ${percent(off)} of ${shown}`, state: 'near' };
@@ -269,6 +271,7 @@ interface Hero {
   unit: Text;
   label: Text;
   verdict: Text;
+  hint: Text;
   /** Glyphs currently reserved for the number, in ch. Only ever grows within a structure. */
   reserved: number;
 }
@@ -278,6 +281,7 @@ function buildHero(): Hero {
   const unit = document.createTextNode('');
   const label = document.createTextNode('');
   const verdict = document.createTextNode('');
+  const hint = document.createTextNode('');
   const number = h('span', { class: 'hero__number' }, value);
   const root = h(
     'div',
@@ -293,8 +297,13 @@ function buildHero(): Hero {
     // words, and the mark keeps its box whether or not it is showing so the
     // words never shift when agreement arrives.
     h('p', { class: 'hero__verdict' }, h('span', { class: 'hero__mark', 'aria-hidden': 'true' }, '✓'), verdict),
+    // The hint is context, not a comparison, so it gets a line of its own under
+    // the verdict rather than taking its place. The row collapses to nothing
+    // when the reading carries no hint, and a hint belongs to the reading
+    // rather than to its value, so nothing here moves as a digit changes.
+    h('p', { class: 'hero__hint' }, hint),
   );
-  return { root, number, value, unit, label, verdict, reserved: 0 };
+  return { root, number, value, unit, label, verdict, hint, reserved: 0 };
 }
 
 interface Exact {
@@ -439,6 +448,10 @@ function writeHero(hero: Hero, readout: Readout): void {
   setText(hero.label, plainLabel(readout));
   const reading = verdictOf(readout);
   setText(hero.verdict, reading.text);
+  // Where there is no prediction the verdict line is already carrying the hint
+  // — that is what `verdictOf()` falls back to — so printing it again here
+  // would say the same sentence twice.
+  setText(hero.hint, readout.target === undefined ? '' : (readout.hint ?? ''));
   hero.root.dataset['state'] = reading.state;
   hero.root.dataset['measured'] = String(measured);
 }
@@ -466,12 +479,20 @@ function reserve(hero: Hero, glyphs: number): void {
  * reserved for the widest of them from the first frame: the Lorenz separation
  * goes from `1.00e−9` through `0.0000512` to `3.64` in one run, and a box
  * reserved from the digits alone grew under it. Martian Mono is fixed pitch,
- * so `ch` counts glyphs exactly, and the box is invisible unless a unit
- * follows it.
+ * so `ch` counts glyphs exactly.
+ *
+ * A unit is the exception, because the box is invisible only while nothing
+ * follows it: the unit is parked at the reservation's end, so slack that costs
+ * nothing on a bare number strands `min` 196 px from `10.05` at a 1,440 px
+ * viewport. A reading that carries a unit is a measurement in something — a
+ * wait in minutes, a share in per cent — and those are quoted plainly rather
+ * than in exponent form, so the reservation is the significant figures plus a
+ * sign and a point. A reading that outgrows even that widens the box once,
+ * which is the one move `reserve()` has always allowed.
  */
 function budgetOf(readout: Readout): number {
   const digits = Math.max(1, Math.round(readout.digits ?? 4));
-  return digits + 8;
+  return digits + (readout.unit ? 2 : 8);
 }
 
 function writeRow(parts: RowParts, readout: Readout): void {

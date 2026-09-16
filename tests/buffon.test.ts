@@ -501,7 +501,9 @@ describe('buffon instance: readouts', () => {
     const headline = last.filter((r) => r.headline === true);
     expect(headline.map((r) => r.key)).toEqual(['pi']);
     expect(headline[0]?.plain).toBe('our estimate of pi');
-    expect(headline[0]?.hint).toBe('the real value is 3.14159');
+    // No hint: the verdict line already prints "matches the prediction of
+    // 3.14159", and a hint under it saying the same thing is that sentence twice.
+    expect(headline[0]?.hint).toBeUndefined();
 
     // What a newcomer reads is the counts and the estimate; the crossing
     // fraction and the standard error are for the exact table only.

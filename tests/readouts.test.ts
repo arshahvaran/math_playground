@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { byClass, fire, installDom, type Harness, type MElement } from './dom-harness';
-import type { Readout } from '../src/core/types';
+import { DEFAULT_CANVAS_THEME } from '../src/core/canvas';
+import { createRng } from '../src/core/rng';
+import type { ParamValue, Readout, Viz, VizContext } from '../src/core/types';
+import { registry } from '../src/viz/registry';
 import {
   createReadouts,
   headlineOf,
@@ -106,6 +109,44 @@ describe('the simple view', () => {
     }
   });
 
+  it('prints the hint under the verdict rather than instead of it', () => {
+    const h = mount();
+    const withHint: Readout[] = [
+      {
+        key: 'below',
+        label: 'Below the stake',
+        value: 78.7,
+        digits: 3,
+        target: 78.5,
+        headline: true,
+        plain: 'players poorer than when they started',
+        hint: 'the coin has to land heads 56% of the time just to break even',
+      },
+    ];
+    h.update(withHint);
+    expect(verdict()).toBe('matches the prediction of 78.5');
+    expect(byClass(dom, 'hero__hint')[0]?.textContent).toBe(
+      'the coin has to land heads 56% of the time just to break even',
+    );
+
+    // With no prediction the verdict line is already carrying the hint, so the
+    // line below it stays empty and the sentence is not said twice.
+    h.update([
+      {
+        key: 'below',
+        label: 'Below the stake',
+        value: 78.7,
+        digits: 3,
+        headline: true,
+        plain: 'players poorer than when they started',
+        hint: 'nothing settles here',
+      },
+    ]);
+    vi.advanceTimersByTime(250);
+    expect(verdict()).toBe('nothing settles here');
+    expect(byClass(dom, 'hero__hint')[0]?.textContent).toBe('');
+  });
+
   it('keeps the precise table, every row of it, behind the disclosure', () => {
     mount().update(galton(5.981, 10_723));
     const table = byClass(dom, 'ledger')[0];
@@ -156,6 +197,11 @@ describe('the verdict', () => {
     const pi: Readout = { key: 'pi', label: 'π estimate', value: 3.138, digits: 6, target: Math.PI, tolerance: 0.0001 };
     expect(verdictOf(pi)).toEqual({ text: 'within 0.2% of 3.14159', state: 'near' });
     expect(verdictOf({ ...pi, tolerance: 0.02 })).toEqual({ text: 'matches the prediction of 3.14159', state: 'agree' });
+  });
+
+  it('prints the prediction with its unit, so the sentence names the same quantity as the number', () => {
+    const share: Readout = { key: 'below', label: 'Below the stake', value: 78.7, digits: 3, unit: '%', target: 78.5 };
+    expect(verdictOf(share).text).toBe('matches the prediction of 78.5 %');
   });
 
   it('falls back to the hint where there is no prediction', () => {
@@ -228,6 +274,26 @@ describe('nothing moves when a digit changes', () => {
     }
   });
 
+  it('keeps the unit beside its digits rather than at the end of a Lorenz-sized reservation', () => {
+    // The reservation is what stops the unit shifting as digits change, so it
+    // is made from the form a measurement in something actually takes: the
+    // significant figures plus a sign and a point. The eight glyphs a bare
+    // reading gets — for `1.00e-9` on its way to `3.64` — stranded `min` seven
+    // glyphs past `10.05`, which reads as a broken layout and not a promise.
+    const h = mount();
+    const wait = (value: number): Readout[] => [
+      { key: 'wait', label: 'Average wait', value, digits: 4, unit: 'min', target: 10, headline: true, plain: 'average wait' },
+    ];
+    h.update(wait(10.05));
+    expect(numberBox().style.getPropertyValue('min-width')).toBe('6ch');
+    expect(byClass(dom, 'hero__unit')[0]?.textContent).toBe('min');
+    for (const value of [5.5, 10.05, 100.5]) {
+      h.update(wait(value));
+      vi.advanceTimersByTime(250);
+      expect(numberBox().style.getPropertyValue('min-width')).toBe('6ch');
+    }
+  });
+
   it('keeps the check mark in the line whether or not it shows', () => {
     const h = mount();
     h.update(galton(9, 1));
@@ -292,5 +358,109 @@ describe('the disclosure', () => {
     mount().update(galton(6, 1));
     details().open = true;
     expect(() => fire(details(), 'toggle')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The contract every tab's readouts are held to
+// ---------------------------------------------------------------------------
+
+/**
+ * A recording 2D context, enough for any tab to paint one frame into. Every
+ * method is a no-op and the two whose return value is read back — `measureText`
+ * and `createImageData` — answer plausibly, so nothing here depends on a real
+ * canvas being present.
+ */
+function stubContext(): CanvasRenderingContext2D {
+  const state: Record<string, unknown> = {
+    fillStyle: '#000',
+    strokeStyle: '#000',
+    lineWidth: 1,
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
+    font: '10px sans-serif',
+    textAlign: 'start',
+    textBaseline: 'alphabetic',
+    imageSmoothingEnabled: true,
+    measureText: (text: string) => ({ width: 6 * String(text).length }),
+    createImageData: (w: number, h: number) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+    getContext: () => null,
+  };
+  return new Proxy(state, {
+    get: (target, key) => (key in target ? target[key as string] : () => undefined),
+    set: (target, key, value) => {
+      target[key as string] = value;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+}
+
+/** Every tab's readouts, taken from one painted frame of its default configuration. */
+function readoutsOf(viz: Viz): readonly Readout[] {
+  const params: Record<string, ParamValue> = {};
+  for (const spec of viz.params) params[spec.key] = spec.default;
+  let emitted: readonly Readout[] = [];
+  const ctx: VizContext = {
+    layers: { background: stubContext(), foreground: stubContext() },
+    width: 640,
+    height: 400,
+    rng: createRng(1),
+    params,
+    theme: DEFAULT_CANVAS_THEME,
+    emit: (readouts) => {
+      emitted = readouts;
+    },
+    reducedMotion: false,
+  };
+  const instance = viz.create(ctx);
+  instance.drawBackground?.();
+  instance.draw();
+  instance.destroy();
+  return emitted;
+}
+
+describe('every tab in the registry', () => {
+  it('marks exactly one headline reading', () => {
+    for (const viz of registry) {
+      const marked = readoutsOf(viz).filter((r) => r.headline === true);
+      expect(marked.map((r) => r.key), viz.id).toHaveLength(1);
+    }
+  });
+
+  it('declares a hint only on that headline, where the hero has a line to print it on', () => {
+    // The simple view shows one reading. A hint on any other one is a sentence
+    // written for a surface that does not exist — eleven of them shipped this
+    // way across the new tabs, and the reader never saw one.
+    for (const viz of registry) {
+      const stranded = readoutsOf(viz)
+        .filter((r) => r.hint !== undefined && r.headline !== true)
+        .map((r) => r.key);
+      expect(stranded, `${viz.id}: a hint belongs on the headline reading`).toEqual([]);
+    }
+  });
+
+  it('never says in a hint what the verdict line above it already prints', () => {
+    // "matches the prediction of 3.14159" with "the real value is 3.14159"
+    // under it is the same sentence twice. A hint says why the reading
+    // matters, not what it should have been.
+    for (const viz of registry) {
+      for (const r of readoutsOf(viz)) {
+        if (r.hint === undefined || r.target === undefined) continue;
+        const shown = verdictOf(r).text;
+        const quoted = shown.replace(/^.*?of /, '');
+        expect(r.hint, `${viz.id}/${r.key}`).not.toContain(quoted);
+      }
+    }
+  });
+
+  it('never prints a word a sixteen-year-old would have to ask about', () => {
+    for (const viz of registry) {
+      for (const r of readoutsOf(viz)) {
+        if (r.expertOnly === true) continue;
+        for (const text of [r.plain, r.hint]) {
+          if (text !== undefined) expect(text, `${viz.id}/${r.key}`).not.toMatch(BANNED);
+        }
+      }
+    }
   });
 });

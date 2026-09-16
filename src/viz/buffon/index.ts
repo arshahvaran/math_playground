@@ -258,7 +258,6 @@ function create(ctx: VizContext): VizInstance {
         target: Math.PI,
         plain: 'our estimate of pi',
         headline: true,
-        hint: 'the real value is 3.14159',
       },
       {
         key: 'se',

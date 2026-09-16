@@ -357,7 +357,6 @@ function create(ctx: VizContext): VizInstance {
         formula: [{ v: 'n' }, '·', { v: 'p' }],
         plain: 'average landing spot',
         headline: true,
-        hint: `the maths says it should be ${meanTarget}`,
       },
       {
         key: 'variance',
@@ -375,7 +374,6 @@ function create(ctx: VizContext): VizInstance {
         // as the balls come down instead of being true from the first landing.
         tolerance: 3 * Math.sqrt(2 / ballTarget(ctx.params)),
         plain: 'spread of the pile',
-        hint: `the maths says it should be ${varianceTarget}`,
       },
       { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6, expertOnly: true },
       { key: 'mode', label: 'Tallest bin index', value: mode, digits: 2, expertOnly: true },

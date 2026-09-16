@@ -520,7 +520,7 @@ function create(ctx: VizContext): VizInstance {
         formula: [{ v: 'δ' }],
         plain: 'the doubling ratio',
         headline: true,
-        hint: 'the gaps between splits shrink by this much each time — the true value is 4.669',
+        hint: 'the gaps between splits shrink by this much each time',
         ...(Number.isFinite(ratio.tolerance) ? { tolerance: ratio.tolerance } : {}),
       },
       { key: 'iterations', label: 'Map iterations', value: iterations, digits: 9, plain: 'times the rule has run' },

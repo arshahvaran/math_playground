@@ -571,7 +571,9 @@ describe('bifurcation instance: the ledger', () => {
     expect(readouts.filter((r) => r.headline === true).map((r) => r.key)).toEqual(['feigenbaum']);
     const feigenbaum = row(v, 'feigenbaum');
     expect(feigenbaum.plain).toBe('the doubling ratio');
-    expect(feigenbaum.hint).toContain('4.669');
+    // Why the reading matters, not what it should have been: the verdict line
+    // above it already quotes 4.66920.
+    expect(feigenbaum.hint).toBe('the gaps between splits shrink by this much each time');
     // The precise names and values stay exactly as they were for the table.
     expect(feigenbaum.label).toBe('Feigenbaum ratio');
     expect(feigenbaum.digits).toBe(6);

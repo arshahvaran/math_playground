@@ -301,6 +301,15 @@ function fakeContext(): FakeContext {
     // The only two calls whose return value is read back.
     measureText: (text: never) => ({ width: String(text).length * 6 }),
     getContext: () => null,
+    // A real buffer, not a recorded call: the Ising sheet writes its spins into
+    // the alpha bytes of one of these and blits it, so a stub that answered
+    // `undefined` here made that tab throw on its first frame under the
+    // harness — a failure of this file and not of the tab.
+    createImageData: (w: never, h: never) => ({
+      width: Number(w),
+      height: Number(h),
+      data: new Uint8ClampedArray(Math.max(0, Number(w) * Number(h) * 4)),
+    }),
   };
   return new Proxy(state, {
     get(target, key) {
