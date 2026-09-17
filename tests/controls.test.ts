@@ -488,19 +488,25 @@ describe('the rail, driven', () => {
   // -- the log fader the position grid cannot resolve -----------------------
 
   /**
-   * The Lorenz starting gap is the one fader in the registry whose value grid
-   * is finer than any slider can be: 10⁻¹² across nine decades is a billion
-   * values, and `logPositions()` caps at a million.
+   * A fader whose value grid is finer than any slider can be: 10⁻¹² across nine
+   * decades is a billion values, and `logPositions()` caps at a million.
+   *
+   * This is a LOCAL fixture on purpose. It used to read the Lorenz starting-gap
+   * spec out of the registry, which tied a test of the log-fader arithmetic to
+   * one visualization continuing to exist — and it broke the moment that tab was
+   * removed. The defect being pinned belongs to controls.ts, so the input
+   * belongs here.
    */
-  const twinGap = ((): Extract<ParamSpec, { kind: 'range' }> => {
-    const spec = registry
-      .find((viz) => viz.id === 'lorenz')
-      ?.params.find(
-        (s): s is Extract<ParamSpec, { kind: 'range' }> => s.kind === 'range' && s.key === 'twinGap',
-      );
-    if (!spec) throw new Error('lorenz.twinGap is gone from the registry');
-    return spec;
-  })();
+  const twinGap: Extract<ParamSpec, { kind: 'range' }> = {
+    kind: 'range',
+    key: 'twinGap',
+    label: 'Starting gap',
+    min: 1e-12,
+    max: 1e-3,
+    step: 1e-12,
+    default: 1e-9,
+    log: true,
+  };
 
   /** A value the fader can display but whose own position decodes elsewhere. */
   function unreachable(): number {
@@ -556,20 +562,32 @@ describe('the rail, driven', () => {
     ]);
   });
 
-  it('mounts every Lorenz preset on the position it decodes back to', () => {
-    // These are the gaps the "Try:" chips write. A preset that mounts half a
-    // position off is a preset the first touch of the fader silently rewrites.
-    const gaps = (registry.find((viz) => viz.id === 'lorenz')?.presets ?? [])
-      .map((preset) => preset.values[twinGap.key])
-      .filter((value): value is number => typeof value === 'number');
-    expect(gaps.length).toBeGreaterThan(0);
-    for (const gap of gaps) {
-      const position = logPositionFor(gap, twinGap.min, twinGap.max, twinGap.step);
-      expect({ gap, at: logValueFor(position, twinGap.min, twinGap.max, twinGap.step) }).toEqual({
-        gap,
-        at: gap,
-      });
+  it('mounts a reachable value on the position it decodes back to', () => {
+    // A preset that mounts half a position off is a preset the first touch of
+    // the fader silently rewrites.
+    //
+    // On a fader this fine the value grid is far denser than the slider: nine
+    // decades at a 1e-12 step is a billion values against a million positions,
+    // so most numbers are simply not reachable and a preset has to be written
+    // from one that is. The invariant that actually guards the defect is
+    // therefore a FIXED POINT — a value the fader can land on must survive
+    // being mounted — so the values are taken from the grid rather than
+    // guessed, which is also what stops this test depending on any one
+    // visualization continuing to exist.
+    const { min, max, step } = twinGap;
+    const positions = [0, 1, 250_000, 500_000, 750_000, 999_999, 1_000_000];
+    let checked = 0;
+    for (const position of positions) {
+      const reachable = logValueFor(position, min, max, step);
+      if (!Number.isFinite(reachable)) continue;
+      const remounted = logPositionFor(reachable, min, max, step);
+      expect({
+        from: reachable,
+        at: logValueFor(remounted, min, max, step),
+      }).toEqual({ from: reachable, at: reachable });
+      checked++;
     }
+    expect(checked).toBeGreaterThan(3);
   });
 
   // -- an off-grid value from the address bar -------------------------------

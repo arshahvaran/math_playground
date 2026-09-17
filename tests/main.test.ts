@@ -378,17 +378,17 @@ function backgroundPaints(): number {
 
 describe('the reduced-motion settle', () => {
   it('runs in slices rather than holding the main thread for the whole budget', async () => {
-    // The Lorenz gap moves on every tick, so this settle never finishes early:
-    // it spends the entire budget, which is what makes it the honest case. The
+    // The cluster grows on every tick, so this settle never finishes early: it
+    // spends the entire budget, which is what makes it the honest case. The
     // opening sentence is the observable — it is held until the measurement it
     // describes exists — so finding it unspoken here means slices were still
     // owed when activate() returned, instead of 400 ms of frozen page.
-    await bootReduced('#/lorenz');
+    await bootReduced('#/dla');
     expect(summary()).toBe('');
 
     settleFully();
 
-    expect(summary()).toMatch(/^Lorenz/);
+    expect(summary()).toMatch(/^Diffusion/);
   });
 
   it('re-settles after a knob instead of leaving the page unmeasured', async () => {

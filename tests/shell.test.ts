@@ -284,19 +284,23 @@ describe('the tab strip', () => {
   it('walks from the tab the reader is on, not the one the route selected', () => {
     const handle = mount();
     const strip = tabs();
-    expect(strip.length).toBeGreaterThan(8);
+    // Walk to the middle of whatever the registry holds. Pinning a tab COUNT
+    // here made this test fail every time the owner pruned the set, which says
+    // nothing about the roving-tabindex behaviour it exists to guard.
+    const steps = Math.max(1, Math.floor(strip.length / 2));
+    expect(strip.length).toBeGreaterThan(steps + 1);
 
     strip[0]?.focus();
-    for (let i = 0; i < 5; i++) fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
-    expect(focused()).toBe(strip[5]);
+    for (let i = 0; i < steps; i++) fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(focused()).toBe(strip[steps]);
 
     // Back, or a pasted link: the route moves without the strip being touched.
-    const elsewhere = registry[2];
+    const elsewhere = registry[registry.length - 1];
     if (elsewhere) handle.setActiveTab(elsewhere.id);
-    expect(focused()).toBe(strip[5]);
+    expect(focused()).toBe(strip[steps]);
 
     fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
-    expect(focused()).toBe(strip[6]);
+    expect(focused()).toBe(strip[steps + 1]);
   });
 
   it('falls back to the selected tab when the focus is outside the strip', () => {
@@ -551,10 +555,14 @@ describe('the tab strip scroller', () => {
 
     const last = registry[registry.length - 1];
     if (last) handle.setActiveTab(last.id);
-    // The ninth tab spans 1200–1340 in a 400 px port, so it is only fully on
-    // screen from 952 with the 12 px of clearance — and the shell moves no
-    // further than it has to.
-    expect(port.scrollLeft).toBe(952);
+    // The last tab spans [n−1]·150 to +140 in a 400 px port, so it is only
+    // fully on screen once the strip has moved far enough to show its right
+    // edge plus the 12 px of clearance — and the shell moves no further than it
+    // has to. Computed from the registry rather than written down, because a
+    // hardcoded offset here failed every time the owner pruned a tab, which
+    // says nothing about the reveal behaviour under test.
+    const lastRight = (registry.length - 1) * 150 + 140;
+    expect(port.scrollLeft).toBe(lastRight - 400 + 12);
 
     const first = registry[0];
     if (first) handle.setActiveTab(first.id);
