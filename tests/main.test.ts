@@ -93,8 +93,13 @@ function ballsLanded(): number {
   return Number(match[1].replace(/,/g, ''));
 }
 
+/**
+ * The permalink the page is currently naming. The Share key that used to carry
+ * it is gone — the address bar already holds the link — so the attribute now
+ * rides a carrier that paints nothing on screen and is rendered only by print.
+ */
 function permalink(): string {
-  return byClass(dom, 'share')[0]?.getAttribute('data-permalink') ?? '';
+  return byClass(dom, 'permalink')[0]?.getAttribute('data-permalink') ?? '';
 }
 
 function tab(title: string): MElement {
@@ -581,13 +586,16 @@ describe('a fragment that names the state already on screen', () => {
 });
 
 describe('the readouts', () => {
-  it('open on one plain sentence and keep the exact table behind a disclosure', async () => {
+  it('open on one plain sentence, with nothing left to open', async () => {
     await boot('#/galton');
     fastForward();
     const hero = byClass(dom, 'hero')[0];
     expect(hero?.textContent).not.toMatch(/analytic|converged|residual/i);
-    expect(byClass(dom, 'exact__summary')[0]?.textContent).toBe('Show the exact numbers');
-    // The disclosure holds every readout the visualization emits.
+    // The disclosure is gone: no summary, no line offering to show anything.
+    expect(byClass(dom, 'exact__summary')).toHaveLength(0);
+    expect(byClass(dom, 'readouts')[0]?.textContent).not.toMatch(/Show the exact numbers/);
+    // The table it used to open still exists, unrendered, because it is the
+    // accessible representation of a canvas nothing else describes.
     expect(byClass(dom, 'ledger')[0]?.textContent).toMatch(/Balls landed/);
     expect(byClass(dom, 'ledger')[0]?.textContent).toMatch(/Bins/);
   });

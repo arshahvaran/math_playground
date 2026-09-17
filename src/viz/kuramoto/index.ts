@@ -900,7 +900,9 @@ export const kuramoto: Viz = {
   id: 'kuramoto',
   title: 'Coupled Oscillators',
   group: 'waves',
-  blurb: 'Lets a crowd of fireflies nudge one another, and past one exact strength of nudge they all flash together.',
+  blurb:
+    'Lets fireflies flash at their own speeds, each nudging its neighbours a little, and past one precise ' +
+    'strength of nudge the whole swarm snaps into unison, like pacemaker cells or a wobbling footbridge.',
   // Landscape, because the plate holds two panels: a square of oscillators and
   // the plot of the reading against the coupling beside it. Portrait on a
   // phone, where the plot goes under the crowd instead.

@@ -4,11 +4,16 @@ import type { Readout, VizContext, VizInstance } from '../src/core/types';
 import { dropRateFor, galton, pileMetrics } from '../src/viz/galton/index';
 import { binomialPmf, normalPdf } from '../src/core/stats';
 import { proseText } from '../src/ui/dom';
+import { snapToStep } from '../src/core/grid';
 import { testable, verdictOf } from '../src/ui/readouts';
 import {
   DEFAULT_BOARD,
   GRAVITY_PX,
   MAX_ROWS,
+  PEG_RESTITUTION_MAX,
+  PEG_RESTITUTION_MIN,
+  STRIKE_MAX,
+  STRIKE_MIN,
   binCentreX,
   createSim,
   lateralToPx,
@@ -21,6 +26,9 @@ import {
   type GaltonParams,
   type GaltonSim,
 } from '../src/viz/galton/sim';
+
+/** The ball ceiling the registry entry declares, mirrored here so both move together. */
+const MAX_BALLS_EXPECTED = 5_000;
 
 /** The engine's tick: 120 Hz. */
 const TICK = 1000 / 120;
@@ -282,6 +290,10 @@ interface Sample {
   path: number;
   bin: number;
   stack: number;
+  /** Impact parameter of the contact this flight ends at, radians. */
+  strike: number;
+  /** How recently the ball hit something, 1 at contact and 0 once the squash has faded. */
+  impact: number;
 }
 
 /** Every ball's history at `dt` ms resolution until all are at rest. */
@@ -296,7 +308,7 @@ function trace(sim: GaltonSim, balls: number, dt: number): Sample[][] {
     sim.forEachActive((b, i) => {
       out[i]!.push({
         t, x: b.x, y: b.y * ASPECT, vx: b.vx, vy: b.vy, row: b.row, done: b.done, settled: b.settled,
-        path: b.path, bin: b.bin, stack: b.stack,
+        path: b.path, bin: b.bin, stack: b.stack, strike: b.strike, impact: b.impact,
       });
     });
   }
@@ -526,6 +538,262 @@ describe('galton sim: motion', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Variety — the complaint this rebuild answers
+// ---------------------------------------------------------------------------
+
+/** Population standard deviation. */
+function sd(xs: readonly number[]): number {
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / xs.length);
+}
+
+/** Every ball's impact parameter at each peg row, in release order. */
+function strikesPerBall(runs: readonly Sample[][], rows: number): number[][] {
+  return runs.map((run) => {
+    const out: number[] = [];
+    let seen = -1;
+    for (const smp of run) {
+      if (smp.row >= rows || smp.row <= seen) continue;
+      seen = smp.row;
+      out[smp.row] = smp.strike;
+    }
+    return out;
+  });
+}
+
+describe('galton sim: every bounce is its own bounce', () => {
+  const rows = 6;
+  const balls = 400;
+
+  it('strikes a different point of the shoulder every time, and never two the same', () => {
+    // The complaint: "for right there is only one right path, and for left
+    // there is only one left trajectory". It was true, and the cause was that
+    // the impact parameter was solved rather than varied, so a ball arriving
+    // at a peg by a given route always struck it in the same place and left
+    // along the same arc. Here the collision is drawn, and the strike it
+    // produces is compared *within a route* — balls that took exactly the same
+    // left/right decisions through exactly the same pegs, which is the case
+    // the old board rendered identically.
+    const sim = make(23, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 0.5);
+    const strikes = strikesPerBall(runs, rows);
+
+    // No ball is missing a strike, and every one is on the shoulder.
+    for (const perRow of strikes) {
+      expect(perRow.length).toBe(rows);
+      for (const theta of perRow) {
+        expect(theta).toBeGreaterThanOrEqual(STRIKE_MIN - 1e-9);
+        expect(theta).toBeLessThanOrEqual(STRIKE_MAX + 1e-9);
+      }
+    }
+
+    // No two balls follow an identical arc: the sequence of impact parameters
+    // is the arc's fingerprint, and all four hundred of them are distinct.
+    const fingerprints = new Set(strikes.map((perRow) => perRow.map((t) => t.toFixed(9)).join(' ')));
+    expect(fingerprints.size).toBe(balls);
+
+    // And the spread within one route is wide, not a rounding error. Measured
+    // on this seed: 5 to 7 degrees of standard deviation per group, against a
+    // band 41 degrees wide.
+    let groups = 0;
+    let worst = Infinity;
+    for (const r of [1, 3, 5]) {
+      const byRoute = new Map<number, number[]>();
+      runs.forEach((run, i) => {
+        const route = (run[0]?.path ?? 0) & ((1 << (r + 1)) - 1);
+        const theta = strikes[i]?.[r];
+        if (theta === undefined) return;
+        const bucket = byRoute.get(route);
+        if (bucket) bucket.push(theta);
+        else byRoute.set(route, [theta]);
+      });
+      for (const angles of byRoute.values()) {
+        if (angles.length < 8) continue;
+        groups++;
+        worst = Math.min(worst, sd(angles));
+        expect(new Set(angles.map((t) => t.toFixed(9))).size).toBe(angles.length);
+      }
+    }
+    expect(groups).toBeGreaterThan(10);
+    // 0.03 rad is 1.7 degrees. The old board scored exactly zero here.
+    expect(worst).toBeGreaterThan(0.03);
+  });
+
+  it('puts balls on one route in visibly different places at the same height', () => {
+    // The same claim read off the picture rather than off the peg: where a
+    // ball is when it crosses the middle of a row. Balls on the same route are
+    // in the same corridor, so anything above zero here is arc variety.
+    const sim = make(31, { rows, p: 0.5, balls, dropRate: 1e6 });
+    const runs = trace(sim, balls, 0.5);
+    const spreads: number[] = [];
+    for (const r of [2, 4]) {
+      const level = (r - 0.5) * ASPECT;
+      const byRoute = new Map<number, number[]>();
+      for (const run of runs) {
+        const crossing = run.find((smp) => smp.row === r && smp.y >= level);
+        if (!crossing) continue;
+        const route = crossing.path & ((1 << (r + 1)) - 1);
+        const bucket = byRoute.get(route);
+        if (bucket) bucket.push(crossing.x);
+        else byRoute.set(route, [crossing.x]);
+      }
+      for (const xs of byRoute.values()) {
+        if (xs.length < 8) continue;
+        expect(new Set(xs.map((x) => x.toFixed(9))).size).toBe(xs.length);
+        spreads.push(sd(xs));
+      }
+    }
+    expect(spreads.length).toBeGreaterThan(8);
+    // Hundredths of a peg pitch, on a board whose pitch is tens of pixels.
+    expect(Math.min(...spreads)).toBeGreaterThan(0.005);
+  });
+
+  it('gives back a different, plausible fraction of the speed at every peg', () => {
+    // Complaint two: the impact was unconvincing. It is a real collision now —
+    // the ball meets the peg's surface, the rebound is along the contact
+    // normal, and the restitution is drawn per bounce inside a band a pin
+    // could return. That is what makes one hop taller than the next.
+    const sim = make(5, { rows: 12, p: 0.5, balls: 120, dropRate: 1e6 });
+    const runs = trace(sim, 120, 0.25);
+    const restitutions: number[] = [];
+    for (const run of runs) {
+      for (let i = 1; i < run.length; i++) {
+        const prev = run[i - 1]!;
+        const cur = run[i]!;
+        if (cur.row === prev.row || prev.row >= 12) continue;
+        const s = (cur.path >>> prev.row) & 1 ? 1 : -1;
+        const nx = s * Math.sin(prev.strike);
+        const ny = -Math.cos(prev.strike);
+        const into = prev.vx * nx + prev.vy * ny;
+        const away = cur.vx * nx + cur.vy * ny;
+        expect(into).toBeLessThan(0);
+        expect(away).toBeGreaterThan(0);
+        restitutions.push(away / -into);
+      }
+    }
+    expect(restitutions.length).toBeGreaterThan(1000);
+    // A 0.25 ms sample is taken a shade after the contact, so gravity has had
+    // time to shave a little off: the window is the band plus that slack.
+    const slack = 0.03;
+    expect(Math.min(...restitutions)).toBeGreaterThan(PEG_RESTITUTION_MIN - slack);
+    expect(Math.max(...restitutions)).toBeLessThan(PEG_RESTITUTION_MAX + slack);
+    // And it really is drawn, not a constant with noise on it.
+    expect(sd(restitutions)).toBeGreaterThan(0.04);
+  });
+
+  it('hops a visibly different height off the same peg', () => {
+    const sim = make(8, { rows: 12, p: 0.5, balls: 120, dropRate: 1e6 });
+    const runs = trace(sim, 120, 0.5);
+    const hops: number[] = [];
+    for (const run of runs) {
+      let launchY = Number.NaN;
+      let top = Number.NaN;
+      let from = -1;
+      for (let i = 1; i < run.length; i++) {
+        const prev = run[i - 1]!;
+        const cur = run[i]!;
+        if (cur.row !== prev.row) {
+          if (from >= 1) hops.push(launchY - top);
+          from = prev.row < 12 ? prev.row : -1;
+          launchY = cur.y;
+          top = cur.y;
+        } else if (cur.y < top) {
+          top = cur.y;
+        }
+      }
+    }
+    expect(hops.length).toBeGreaterThan(500);
+    // Measured on the default board: 0.05 to 0.39 of a peg pitch. The point is
+    // the ratio — the tallest hop is several times the shortest, which is what
+    // stops the board reading as a mechanism.
+    expect(Math.max(...hops) / Math.min(...hops)).toBeGreaterThan(3);
+    expect(sd(hops)).toBeGreaterThan(0.02);
+  });
+
+  it('flies a true parabola between contacts, rather than being steered to its next peg', () => {
+    // The flight carries a small constant lateral correction where the drawn
+    // collision cannot quite reach the shoulder the route names. It has to stay
+    // small, or the "physics" is a puppeteer: a correction near gravity would
+    // be a ball on a wire.
+    const sim = make(15, { rows: 12, p: 0.5, balls: 120, dropRate: 1e6 });
+    const runs = trace(sim, 120, 0.5);
+    const residual: number[] = [];
+    for (const run of runs) {
+      for (let i = 2; i < run.length; i++) {
+        const a = run[i - 1]!;
+        const b = run[i]!;
+        if (a.row !== b.row || b.row >= 12) continue;
+        residual.push(Math.abs((b.vx - a.vx) / ((b.t - a.t) / 1000)) / sim.gravity);
+      }
+    }
+    residual.sort((x, y) => x - y);
+    expect(residual.length).toBeGreaterThan(2000);
+    // Measured: median 2% of gravity, ninetieth percentile 9%, never past 20%.
+    expect(residual[Math.floor(residual.length / 2)]!).toBeLessThan(0.05);
+    expect(residual[Math.floor(residual.length * 0.9)]!).toBeLessThan(0.15);
+    expect(residual.at(-1)!).toBeLessThan(0.35);
+  });
+
+  it('marks a contact for the renderer to squash, and only a contact', () => {
+    const sim = make(4, { rows: 8, p: 0.5, balls: 40, dropRate: 1e6 });
+    const runs = trace(sim, 40, 0.5);
+    for (const run of runs) {
+      // The entry drop strikes nothing, so nothing is squashed on it.
+      for (const smp of run) {
+        expect(smp.impact).toBeGreaterThanOrEqual(0);
+        expect(smp.impact).toBeLessThanOrEqual(1);
+        if (smp.row === 0) expect(smp.impact).toBe(0);
+      }
+      // Every bounce leaves a mark that is strong when fresh and gone later.
+      expect(run.filter((smp) => smp.impact > 0.5).length).toBeGreaterThan(3);
+      expect(run.filter((smp) => smp.impact === 0).length).toBeGreaterThan(3);
+    }
+    sim.forEachBall((b) => {
+      if (b.settled) expect(b.impact).toBe(0);
+    });
+  });
+});
+
+describe('galton sim: the case around the board', () => {
+  it.each([
+    ['the default board', 12, null],
+    ['a desktop plate', 12, boardFor(480, 600, 12, 500)],
+    ['sixteen rows on the narrowest phone', 16, boardFor(320, 480, 16, 5_000)],
+  ] as ReadonlyArray<[string, number, BoardPhysics | null]>)(
+    'never lets a ball out of the case on %s',
+    (_, n, board) => {
+      // A real Galton board is a sealed case, and `drawBackground` now draws
+      // one: two side walls half a bin outside the outer bins, a floor, and
+      // the partitions between the bins. Nothing bounces off the walls because
+      // nothing can reach them — the route can only carry a ball to the outer
+      // bin's centre line — and this is the test that says so, rather than dead
+      // code pretending to catch a ball that never arrives.
+      const balls = 80;
+      const sim = make(21, { rows: n, p: 0.5, balls, dropRate: 1e6 });
+      if (board) sim.setBoard(board);
+      const pitch = board?.pitch ?? DEFAULT_BOARD.pitch;
+      const dot = (board?.dotRadius ?? DEFAULT_BOARD.dotRadius) / pitch;
+      const ball = 3 / pitch;
+      const wall = n / 2 + 0.5;
+      const runs = trace(sim, balls, 0.5);
+      let samples = 0;
+      for (const run of runs) {
+        for (const smp of run) {
+          expect(Math.abs(smp.x) + ball).toBeLessThanOrEqual(wall);
+          samples++;
+        }
+      }
+      expect(samples).toBeGreaterThan(5_000);
+      // And the pile that is left behind sits inside its own compartment.
+      sim.forEachBall((b) => {
+        expect(Math.abs(b.x) + dot).toBeLessThanOrEqual(wall + 1e-9);
+        expect(Math.abs(b.x - (b.bin - n / 2)) + dot).toBeLessThanOrEqual(0.5 + 1e-9);
+      });
+    },
+  );
+});
+
 describe('galton geometry', () => {
   const sizes: ReadonlyArray<[number, number]> = [
     [800, 600],
@@ -610,10 +878,11 @@ describe('galton viz metadata', () => {
     const balls = galton.params.find((p) => p.key === 'balls');
     expect(balls?.kind).toBe('range');
     if (balls?.kind === 'range') {
-      expect(balls.min).toBe(1);
+      expect(balls.min).toBe(50);
       expect(balls.max).toBe(5_000);
       expect(balls.default).toBe(500);
       expect(balls.log).toBe(true);
+      expect(balls.step).toBe(50);
     }
     const rows = galton.params.find((p) => p.key === 'rows');
     if (rows?.kind === 'int') {
@@ -740,10 +1009,14 @@ describe('galton viz instance', () => {
       v.instance.draw();
     }
     const last = a.emitted.at(-1)!;
-    expect(last.map((r) => r.key)).toEqual(['landed', 'mean', 'variance', 'tallest', 'mode', 'bins']);
+    expect(last.map((r) => r.key)).toEqual(['landed', 'mean', 'meanBin', 'variance', 'tallest', 'mode', 'bins']);
     const by = Object.fromEntries(last.map((r) => [r.key, r]));
     expect(by['landed']!.value).toBeGreaterThan(0);
-    expect(by['mean']!.target).toBe(6);
+    // The headline is a z-score, so its prediction is exactly zero; the raw
+    // mean it is built from keeps its own row in the table.
+    expect(by['mean']!.target).toBe(0);
+    expect(by['meanBin']!.target).toBe(6);
+    expect(by['mean']!.value).toBeCloseTo((by['meanBin']!.value - 6) / Math.sqrt(3), 12);
     expect(by['variance']!.target).toBe(3);
     expect(by['bins']!.value).toBe(13);
     expect(by['tallest']!.value).toBeGreaterThan(0);
@@ -755,16 +1028,17 @@ describe('galton viz instance', () => {
     instance.draw();
     const by = Object.fromEntries(emitted.at(-1)!.map((r) => [r.key, r]));
     // The precise labels stay: they are what the expert table and the tests read.
-    expect(by['mean']!.label).toBe('Mean bin');
+    expect(by['mean']!.label).toBe('Mean landing, z');
+    expect(by['meanBin']!.label).toBe('Mean bin');
     expect(by['landed']!.label).toBe('Balls landed');
     expect(by['mean']!.headline).toBe(true);
-    expect(by['mean']!.plain).toBe('average landing spot');
+    expect(by['mean']!.plain).toBe('average landing spot, in standard deviations from the middle');
     // No hint: the verdict under the hero already prints "matches the
     // prediction of 6", so a hint quoting it again says the same thing twice.
     expect(by['mean']!.hint).toBeUndefined();
     expect(by['landed']!.plain).toBe('balls landed');
     expect(emitted.at(-1)!.filter((r) => r.headline).length).toBe(1);
-    for (const key of ['tallest', 'mode', 'bins']) expect(by[key]!.expertOnly).toBe(true);
+    for (const key of ['meanBin', 'tallest', 'mode', 'bins']) expect(by[key]!.expertOnly).toBe(true);
     for (const key of ['landed', 'mean', 'variance']) expect(by[key]!.expertOnly).toBeUndefined();
   });
 
@@ -785,8 +1059,15 @@ describe('galton viz instance', () => {
   it('moves the prediction with the rows in force', () => {
     const { instance, emitted } = stubViz({ ...defaults, rows: 15 });
     instance.draw();
-    const mean = emitted.at(-1)!.find((r) => r.key === 'mean')!;
-    expect(mean.target).toBe(7.5);
+    const last = emitted.at(-1)!;
+    const mean = last.find((r) => r.key === 'mean')!;
+    const meanBin = last.find((r) => r.key === 'meanBin')!;
+    // The z-score predicts zero at every row count -- that is the point of it
+    // -- so what moves with the rows is the span it can occupy and the bin
+    // the raw mean is held to.
+    expect(mean.target).toBe(0);
+    expect(mean.range).toEqual([-7.5 / Math.sqrt(3.75), 7.5 / Math.sqrt(3.75)]);
+    expect(meanBin.target).toBe(7.5);
     expect(mean.hint).toBeUndefined();
   });
 
@@ -881,31 +1162,44 @@ describe('galton viz instance', () => {
       expect(half(key, 1), key).toBeGreaterThan(half(key, frames - 1));
       // 1/SQRT(n) of the balls in the slots, not of the balls the fader asked
       // for: the run is only part way through and the band says so.
-      const sigma = key === 'mean' ? Math.sqrt(3) : 3 * Math.SQRT2;
+      // One landing carries exactly one standard deviation once the reading is
+      // a z-score; the variance still carries sigma^2*SQRT(2).
+      const sigma = key === 'mean' ? 1 : 3 * Math.SQRT2;
       expect(half(key, frames - 1), key).toBeCloseTo((3 * sigma) / Math.sqrt(landed), 12);
     }
   });
 
   it('gives the headline a band the board can satisfy, and the span a landing can occupy', () => {
-    // The ledger's 1% default sat at 0.77 standard errors of the default run,
-    // failed by 42% of statistically perfect finished piles, and no setting of
-    // the two faders brings the headline's own noise inside it: the best the
-    // board can do is 3/SQRT(16*5000) = 1.06%. Three standard errors of a
-    // Binomial(rows, 1/2) landing over the balls in hand is 3.87% at the
-    // defaults, which is the honest resolution of the measurement and the
-    // number the ledger's ceiling was chosen to admit.
+    // The headline is the average landing spot in standard deviations from the
+    // middle, so the prediction is exactly 0 and one ball carries exactly one
+    // standard deviation. Three standard errors is then 3/SQRT(n) -- the same
+    // claim the raw mean used to make in bins, 3.87% of n*p at the defaults,
+    // and the number the ledger's ceiling was chosen to admit.
+    //
+    // A prediction of zero is no scale of its own, so the reading has to
+    // declare the span it can occupy or `readouts.ts` correctly refuses any
+    // verdict at all. That span is the two edge slots in these units.
     const balls = 500;
     const { instance, emitted } = stubViz({ ...defaults, balls });
-    const mean = runViz(instance, emitted, balls)['mean']!;
-    expect(mean.band).toEqual({ kind: 'sampled', sigma: Math.sqrt(3), samples: balls });
+    const by = runViz(instance, emitted, balls);
+    const mean = by['mean']!;
+    expect(mean.target).toBe(0);
+    expect(mean.band).toEqual({ kind: 'sampled', sigma: 1, samples: balls });
     expect(mean.tolerance).toBeUndefined();
-    expect(mean.range).toEqual([0, 12]);
-    const half = (3 * Math.sqrt(3)) / Math.sqrt(balls);
-    expect(half / mean.target!).toBeCloseTo(0.0387, 4);
-    expect(Math.abs(mean.value - mean.target!)).toBeLessThanOrEqual(half);
+    const span = 6 / Math.sqrt(3);
+    expect(mean.range).toEqual([-span, span]);
+
+    const half = 3 / Math.sqrt(balls);
+    // Same width as the band the raw mean declares, read in bins.
+    expect(half * Math.sqrt(3)).toBeCloseTo((3 * Math.sqrt(3)) / Math.sqrt(balls), 12);
+    expect((half * Math.sqrt(3)) / 6).toBeCloseTo(0.0387, 4);
+    expect(Math.abs(mean.value)).toBeLessThanOrEqual(half);
+    // Narrow enough to be a test: a twentieth of the span a landing can reach.
+    expect(half).toBeLessThan(0.05 * 2 * span);
     // And the verdict the reader actually sees, from the one rule that writes it.
     expect(testable(mean)).toBe(true);
     expect(verdictOf(mean).state).toBe('agree');
+    expect(verdictOf(mean).text).toContain('0');
   });
 
   it('says what one ball can show instead of settling for ever', () => {
@@ -930,6 +1224,66 @@ describe('galton viz instance', () => {
     const many = stubViz({ ...defaults, balls: 500 });
     many.instance.draw();
     expect(many.emitted.at(-1)!.find((r) => r.key === 'mean')!.hint).toBeUndefined();
+  });
+});
+
+describe('galton controls and prose', () => {
+  it('moves the Balls fader fifty at a time, and keeps the round counts every link is written in', () => {
+    // The complaint: the fader crawled one ball at a time. A range parameter
+    // lives on one grid -- `min + k*step`, in core/grid.ts, which the rail and
+    // the router both read -- so the step and the minimum decide together
+    // which counts are reachable at all. A step of 50 from a minimum of 1
+    // would put them at 1, 51, 101 ..., and `#/galton?balls=100` would quietly
+    // run 101 balls. Fifty from fifty keeps the round hundreds.
+    const spec = galton.params.find((p) => p.key === 'balls');
+    expect(spec?.kind).toBe('range');
+    if (spec?.kind !== 'range') throw new Error('balls must be a range param');
+    expect(spec.step).toBe(50);
+    expect(spec.min).toBe(50);
+    expect(spec.max).toBe(MAX_BALLS_EXPECTED);
+    for (const count of [50, 100, 500, 1_000, 2_500, 5_000]) {
+      expect(snapToStep(count, spec.min, spec.max, spec.step), `${count} balls`).toBe(count);
+    }
+    // Both ends are reachable exactly, which is what the fader's stops report.
+    expect(snapToStep(spec.max, spec.min, spec.max, spec.step)).toBe(spec.max);
+    expect(snapToStep(spec.default, spec.min, spec.max, spec.step)).toBe(spec.default);
+    // A hundred steps of travel: enough to drag, few enough that a pixel of
+    // wobble is not a new experiment.
+    expect((spec.max - spec.min) / spec.step).toBe(99);
+  });
+
+  it('keeps One ball at one ball, below the fader floor on purpose', () => {
+    // The chosen resolution of the two the owner offered: the floor stays at
+    // fifty so the round counts survive, and the preset carries its own value
+    // underneath it. A preset writes straight into the parameters, so the board
+    // really does drop one ball; the fader simply shows its own floor while it
+    // does.
+    const one = galton.presets?.find((preset) => preset.id === 'one-ball');
+    expect(one?.values['balls']).toBe(1);
+    const spec = galton.params.find((p) => p.key === 'balls');
+    if (spec?.kind !== 'range') throw new Error('balls must be a range param');
+    for (const preset of galton.presets ?? []) {
+      const value = preset.values['balls'];
+      if (typeof value !== 'number' || preset.id === 'one-ball') continue;
+      expect(snapToStep(value, spec.min, spec.max, spec.step), `preset ${preset.id}`).toBe(value);
+    }
+    // And it still runs: one ball, one route, one landing.
+    const { instance, emitted } = stubViz({ rows: 12, balls: 1, seed: 42 });
+    const by = runViz(instance, emitted, 1);
+    expect(by['landed']!.value).toBe(1);
+  });
+
+  it('says what the tab is in words a newcomer reads without stopping', () => {
+    // "Drops balls through a staggered lattice of pegs" was the complaint.
+    const blurb = proseText(galton.blurb);
+    expect(blurb).toContain('bell curve');
+    for (const jargon of ['lattice', 'binomial', 'staggered', 'distribution']) {
+      expect(blurb.toLowerCase(), `blurb still says "${jargon}"`).not.toContain(jargon);
+    }
+    // One or two sentences, and no sentence long enough to lose a reader.
+    const sentences = blurb.split(/(?<=[.!?])\s+/).filter((part) => part.trim().length > 0);
+    expect(sentences.length).toBeLessThanOrEqual(2);
+    for (const sentence of sentences) expect(sentence.split(/\s+/).length).toBeLessThanOrEqual(34);
   });
 });
 
@@ -1063,3 +1417,5 @@ describe('pileMetrics', () => {
     }
   });
 });
+
+

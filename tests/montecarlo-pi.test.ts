@@ -962,6 +962,18 @@ function oneSentence(text: Prose): boolean {
   return !/[.!?]\s/.test(words(text));
 }
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it: the blurb, the simple view, the rail's help and
+ * the story captions.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows, which is the one place a reader has
+ * asked for the technical term.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
 describe('montecarlo-pi metadata', () => {
   it('is registered under a permanent id, in the randomness group', () => {
     expect(montecarloPi.id).toBe('montecarlo-pi');
@@ -972,6 +984,32 @@ describe('montecarlo-pi metadata', () => {
   it('says what it does in one plain sentence', () => {
     expect(oneSentence(montecarloPi.blurb)).toBe(true);
     expect(words(montecarloPi.blurb)).toMatch(/darts/);
+  });
+
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = words(montecarloPi.blurb);
+    // The plate is a square with a circle in it; the reason to watch is how
+    // grudgingly the estimate sharpens. Both have to be in the one line a
+    // visitor is guaranteed to read.
+    expect(blurb).toMatch(/square/i);
+    expect(blurb).toMatch(/circle/i);
+    expect(blurb).toContain('π');
+    expect(blurb).toMatch(/decimal place/i);
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about', () => {
+    for (const preset of montecarloPi.presets ?? []) expect(words(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of montecarloPi.facts) expect(words(fact.text)).not.toMatch(JARGON);
+    for (const p of montecarloPi.params) expect(words(p.help ?? ''), p.key).not.toMatch(JARGON);
+
+    const v = stubViz();
+    tick(v, 200);
+    for (const r of v.emitted.at(-1) ?? []) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain ?? '', r.key).not.toMatch(JARGON);
+      expect(r.hint ?? '', r.key).not.toMatch(JARGON);
+    }
   });
 
   it('offers three presets, each a hundredfold apart, each captioned in one sentence', () => {

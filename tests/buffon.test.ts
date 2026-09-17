@@ -834,6 +834,18 @@ function text(prose: Prose): string {
 /** A full stop followed by a new sentence. A decimal point has no space after it. */
 const SECOND_SENTENCE = /[.!?]\s+\S/;
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it: the blurb, the simple view, the rail's help and
+ * the story captions.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows, which is the one place a reader has
+ * asked for the technical term.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
 describe('buffon metadata', () => {
   it('shows two knobs and keeps the seed for the URL only', () => {
     expect(buffon.params.map((p) => p.key)).toEqual(['ratio', 'spacing', 'seed']);
@@ -871,5 +883,31 @@ describe('buffon metadata', () => {
     const blurb = text(buffon.blurb);
     expect(blurb).not.toMatch(SECOND_SENTENCE);
     expect(blurb).toMatch(/^Drops /);
+  });
+
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = text(buffon.blurb);
+    // The line under the title is the only thing a visitor is guaranteed to
+    // read, and it failed review by describing the procedure. It has to name
+    // what is on the plate — needles, a ruled floor — and the reason anyone
+    // should care, which is that π comes out of them.
+    expect(blurb).toMatch(/needle/i);
+    expect(blurb).toMatch(/floor/i);
+    expect(blurb).toContain('π');
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about', () => {
+    for (const preset of buffon.presets ?? []) expect(text(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of buffon.facts) expect(text(fact.text)).not.toMatch(JARGON);
+    for (const p of buffon.params) expect(text(p.help ?? ''), p.key).not.toMatch(JARGON);
+
+    const v = stubViz();
+    tick(v, 200);
+    for (const r of v.emitted.at(-1) ?? []) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain ?? '', r.key).not.toMatch(JARGON);
+      expect(r.hint ?? '', r.key).not.toMatch(JARGON);
+    }
   });
 });

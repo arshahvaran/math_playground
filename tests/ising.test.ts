@@ -973,6 +973,19 @@ function text(prose: Prose): string {
 /** A full stop followed by a new sentence. A decimal point has no space after it. */
 const SECOND_SENTENCE = /[.!?]\s+\S/;
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it: the blurb, the simple view, the rail's help and
+ * the story captions. The readouts are held to the same list where they are
+ * emitted, above.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows, which is the one place a reader has
+ * asked for the technical term.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
 describe('ising metadata', () => {
   it('shows two knobs and keeps the seed for the URL only', () => {
     expect(ising.params.map((p) => p.key)).toEqual(['temp', 'size', 'seed']);
@@ -1020,5 +1033,23 @@ describe('ising metadata', () => {
     const blurb = text(ising.blurb);
     expect(blurb).not.toMatch(SECOND_SENTENCE);
     expect(blurb).toMatch(/^Heats /);
+  });
+
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = text(ising.blurb);
+    // A visitor has to be told what a square on the plate is, that the whole
+    // sheet flips at one exact temperature and not gradually, and where they
+    // have already met the effect. The fridge magnet is the part that makes it
+    // land.
+    expect(blurb).toMatch(/neighbour/i);
+    expect(blurb).toMatch(/one exact temperature/i);
+    expect(blurb).toMatch(/fridge magnet/i);
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about in the rail or the story', () => {
+    for (const preset of ising.presets ?? []) expect(text(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of ising.facts) expect(text(fact.text)).not.toMatch(JARGON);
+    for (const p of ising.params) expect(text(p.help ?? ''), p.key).not.toMatch(JARGON);
   });
 });

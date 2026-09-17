@@ -1120,6 +1120,18 @@ function flatten(text: Prose): string {
     : text.map((seg) => (typeof seg === 'string' ? seg : seg.v)).join('');
 }
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it: the blurb, the simple view, the rail's help and
+ * the story captions.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows, which is the one place a reader has
+ * asked for the technical term.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
 describe('lorenz metadata', () => {
   it('declares two knobs and an unrendered seed, nothing more', () => {
     // The heat crosses the chaos threshold; the gap is what the twins are
@@ -1173,6 +1185,32 @@ describe('lorenz metadata', () => {
       expect(oneSentence(flatten(preset.caption)), preset.id).toBe(true);
     }
     expect(oneSentence(flatten(lorenz.blurb))).toBe(true);
+  });
+
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = flatten(lorenz.blurb);
+    // What makes this worth a look is that nothing in it is random and the two
+    // twins still separate, and that the separation is the reason a forecast
+    // has a shelf life. A line that only says "two paths diverge" leaves both
+    // of those out.
+    expect(blurb).toMatch(/no randomness/i);
+    expect(blurb).toMatch(/billionth/i);
+    expect(blurb).toMatch(/forecast/i);
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about', () => {
+    for (const preset of lorenz.presets ?? []) expect(flatten(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of lorenz.facts) expect(flatten(fact.text)).not.toMatch(JARGON);
+    for (const spec of lorenz.params) expect(flatten(spec.help ?? ''), spec.key).not.toMatch(JARGON);
+
+    const v = stubViz();
+    tick(v, 600);
+    for (const r of v.emitted.at(-1) ?? []) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain ?? '', r.key).not.toMatch(JARGON);
+      expect(r.hint ?? '', r.key).not.toMatch(JARGON);
+    }
   });
 
   it('quotes only numbers the mathematics module actually produces', () => {

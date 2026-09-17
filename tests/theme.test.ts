@@ -209,25 +209,40 @@ describe('the bench cannot starve the figure column', () => {
 });
 
 /**
- * The title and the blurb shared a baseline row from `min-width: 64rem` of
- * VIEWPORT — a question only the figure column and this tab's title can answer.
- * The title's track was `auto` and the blurb's was `minmax(0, 1fr)`, which is
- * allowed to reach zero, so a long title took the whole column: measured on
- * Diffusion-Limited Aggregation the blurb's track was 0 px at 1024, 51 px at
- * 1100 and 135 px at 1200, and one word per line made the head 565 / 539 /
- * 227 px tall with the plate below the fold at every one of them.
+ * The figure head.
  *
- * A wrapping flex line cannot starve anything, because an item whose basis will
- * not fit moves to the next line and is full width there.
+ * It has been laid out three ways. A `min-width: 64rem` grid asked the VIEWPORT
+ * a question only the figure column and this tab's title could answer, and a
+ * long title took the whole column — measured on Diffusion-Limited Aggregation,
+ * the blurb's track was 0 px at 1024 and 51 px at 1100, making the head 565 and
+ * 539 px tall with the plate below the fold. A wrapping flex line fixed the
+ * starvation and kept the wrong shape: beside a 42 px title, a 16 px blurb is
+ * aligned on a BASELINE and on nothing else, so their left edges agreed with
+ * each other and with the plate at no width at all, and whether they shared a
+ * line at all changed per tab.
+ *
+ * Stacked, there is one edge and it is the figure column's, on every tab, at
+ * every width, at every text size — and nothing can starve anything, because
+ * there is no longer a line for two items to compete over.
  */
 describe('the figure head', () => {
   const head = rule(RULES, '.figure__head');
 
-  it('breaks the line instead of starving a track', () => {
+  it('stacks the title and the blurb on one left edge', () => {
     expect(decl(head, 'display')).toBe('flex');
-    expect(decl(head, 'flex-wrap')).toBe('wrap');
-    expect(decl(rule(RULES, '.figure__blurb'), 'flex')).toBe('1 1 var(--blurb-min)');
-    expect(decl(root, '--blurb-min')).toMatch(/^\d+(?:\.\d+)?ch$/);
+    expect(decl(head, 'flex-direction')).toBe('column');
+    expect(decl(head, 'align-items')).toBe('flex-start');
+    // A flex COLUMN cannot put them on a shared baseline, which is the whole
+    // point: `align-items: baseline` here is what the fix removes.
+    expect(head).not.toMatch(/align-items:\s*baseline/);
+    expect(decl(head, 'gap')).toBe('var(--s-2)');
+  });
+
+  it('gives neither of them a margin of its own to disagree about', () => {
+    // The gap owns the space between them. A margin on either would be a second
+    // owner, and the two drifted apart at exactly the widths nobody checked.
+    expect(decl(rule(RULES, '.figure__title'), 'margin')).toBe('0');
+    expect(decl(rule(RULES, '.figure__blurb'), 'margin')).toBe('0');
   });
 
   it('is never laid out by a viewport breakpoint again', () => {
@@ -246,6 +261,154 @@ describe('the figure head', () => {
    */
   it('lets a long word break before it widens the document', () => {
     expect(decl(rule(RULES, '.figure__title'), 'overflow-wrap')).toBe('anywhere');
+  });
+});
+
+/**
+ * The masthead.
+ *
+ * "The 'Math Playground' text is very very small. If you look at the Galton
+ * Board text and compare it to the Math Playground, you can see that it's very
+ * very very small." Measured at 1,440 px: 18 px of wordmark under a 42 px
+ * title, so the name of the site was 43 % of the name of one of its tabs and
+ * read as a breadcrumb.
+ *
+ * The fix is a RATIO rather than a second size, which is what makes the two a
+ * scale instead of two unrelated numbers — and what keeps the file's one
+ * clamp() the only one.
+ */
+describe('the type scale', () => {
+  const wordmark = token('--wordmark-size');
+  const ratio = Number(/\*\s*(\d*\.?\d+)\s*\)/.exec(wordmark)?.[1] ?? NaN);
+
+  it('sizes the wordmark from the title, so the two move together', () => {
+    expect(wordmark).toMatch(/calc\(\s*var\(--title-size\)\s*\*/);
+    expect(decl(rule(RULES, '.masthead__wordmark'), 'font-size')).toBe('var(--wordmark-size)');
+  });
+
+  it('puts the wordmark second in the scale, well clear of every other label', () => {
+    // Comparable to the title, and unambiguously below it: the subject of the
+    // screen still wins. 0.78 is 32.8 px against 42 at 1,440 px.
+    expect(ratio).toBeGreaterThan(0.6);
+    expect(ratio).toBeLessThan(1);
+    // And far above the next thing down, which is the 20 px section title.
+    expect(ratio * px('2.625rem')).toBeGreaterThan(px(token('--t-20')) * 1.4);
+  });
+
+  it('still holds clamp() to a single appearance', () => {
+    expect([...RULES.matchAll(/\bclamp\(/g)]).toHaveLength(1);
+  });
+});
+
+/**
+ * The canvas contract, and the dark bed.
+ *
+ * core/canvas.ts reads these thirteen properties with getComputedStyle and
+ * hands them straight to ctx.fillStyle. An unregistered custom property is not
+ * resolved at computed-value time, so a `light-dark()` or a `color-mix()` among
+ * them would arrive at the canvas as its own literal text and paint nothing —
+ * silently, on all nine tabs at once. That is why the dark scheme is a
+ * RESTATEMENT under a selector rather than the pair every chrome token uses.
+ */
+describe('the canvas pens', () => {
+  const PENS = [
+    '--canvas',
+    '--ink',
+    '--ink-muted',
+    '--grid',
+    '--grid-soft',
+    '--data-1',
+    '--data-2',
+    '--data-3',
+    '--data-3-fill',
+    '--accent',
+  ];
+
+  /**
+   * Every declaration block that hands the canvas a bed — that is, every block
+   * declaring `--canvas`. Three of the pen names (`--ink`, `--ink-muted`,
+   * `--accent`) are ALSO chrome tokens on `:root`, where a light-dark() pair is
+   * exactly right; it is only where they are the canvas contract that they must
+   * be literals, so the scope of the rule is the block and not the name.
+   */
+  function plateBlocks(): string[] {
+    return [...RULES.matchAll(/\{([^{}]*--canvas:[^{}]*)\}/g)].map((m) => m[1] ?? '');
+  }
+
+  it('writes every pen as a literal, in every block that hands out a bed', () => {
+    const found = plateBlocks();
+    // The light bed, the dark bed, the OS-dark bed, forced colors, and print.
+    expect(found.length).toBeGreaterThanOrEqual(5);
+    for (const body of found) {
+      for (const pen of PENS) {
+        const value = new RegExp(`(?:^|;)\\s*${pen}:\\s*([^;]+);`).exec(body)?.[1]?.trim();
+        if (value === undefined) continue;
+        // A system keyword is the one legal exception, and only inside the
+        // forced-colors block, where the chrome is remapped wholesale.
+        if (/^[A-Z][A-Za-z]+$/.test(value)) continue;
+        expect(value, `${pen}: ${value}`).toMatch(/^#[0-9a-f]{6}$/i);
+      }
+    }
+  });
+
+  it('gives the dark scheme its own bed rather than the white one', () => {
+    const dark = rule(RULES, ':root[data-theme="dark"] .plate');
+    expect(decl(dark, '--canvas')).not.toBe('#ffffff');
+    // A bed, not a wash: it has to be nearer black than the page it sits on.
+    expect(decl(dark, '--canvas')).toBe('#0e1214');
+    for (const pen of PENS) expect(decl(dark, pen), pen).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  it('answers to the OS as well as to the toggle', () => {
+    // shell.ts writes data-theme in both directions at startup, so the
+    // attribute rule is what fires in the app — but a document that renders
+    // before that line runs must not be left with a white bed on a dark page.
+    const media = blocks(RULES, '@media (prefers-color-scheme: dark)').join('\n');
+    expect(media).toMatch(/:root:not\(\[data-theme="light"\]\)\s+\.plate/);
+    expect(media).toMatch(/--canvas:\s*#0e1214/);
+  });
+
+  it('forces the light bed back for print, where the dark one is 96 % coverage', () => {
+    const print = blocks(RULES, '@media print').join('\n');
+    expect(rule(print, '.plate')).toMatch(/--canvas:\s*#ffffff/);
+  });
+});
+
+/**
+ * The tab strip.
+ *
+ * Nine tabs in a 1,345 px box that wanted 1,397, with no arrows, no drag and a
+ * permanent 10 px fade: six of the nine tabs were unreachable and nothing on
+ * screen said so. The stylesheet's half of the fix is that the scroller is real
+ * and that the fade is CONDITIONAL — a permanent one on both ends softens the
+ * first and last label at a width where nothing is hidden, which says "there is
+ * more" when there is not.
+ */
+describe('the tab strip', () => {
+  const strip = rule(RULES, '.tabs__strip');
+
+  it('is a real scroller that touch can pan', () => {
+    expect(decl(strip, 'overflow-x')).toBe('auto');
+    expect(decl(strip, 'touch-action')).toBe('pan-x');
+    expect(decl(rule(RULES, '.tabs'), 'display')).toBe('flex');
+  });
+
+  it('fades only the edge it is actually running past', () => {
+    expect(strip).not.toMatch(/mask-image/);
+    expect(decl(rule(RULES, '.tabs__strip[data-fade="none"]'), 'mask-image')).toBe('none');
+    for (const state of ['start', 'end', 'both']) {
+      expect(rule(RULES, `.tabs__strip[data-fade="${state}"]`)).toMatch(/linear-gradient/);
+    }
+  });
+
+  /**
+   * Snapping fought all three ways in: an arrow step was dragged back to the
+   * nearest tab centre, a drag rubber-banded on release, and the shell's own
+   * "bring the selected tab into view" landed somewhere it had not asked for.
+   */
+  it('does not snap, so a scripted scroll lands where it was sent', () => {
+    expect(RULES).not.toMatch(/scroll-snap-type/);
+    expect(RULES).not.toMatch(/scroll-snap-align/);
   });
 });
 
@@ -273,7 +436,7 @@ describe('hit-target extensions', () => {
     expect(decl(small, 'inset-block')).toBe('var(--hit-extend-small)');
     // Nothing reaches out on the axis the page edge is on; the floor for a key
     // that is ever narrower than its target lives on the ::after, so it cannot
-    // overrule the width .share__key reserves for its two labels.
+    // overrule a width the key itself reserves.
     expect(decl(small, 'inset-inline')).toBe('0');
     expect(decl(small, 'min-width')).toBe('var(--key-h-touch)');
   });

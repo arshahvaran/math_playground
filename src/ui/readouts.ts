@@ -1,19 +1,28 @@
 /**
- * The readouts: one number in plain words, and the exact table behind a
- * disclosure.
+ * The readouts: one number in plain words.
  *
- * The default view is written for a reader with no statistics. It shows the
- * headline reading at 40 px, its plain-language label, and one sentence that
- * says whether the reading agrees with what the mathematics predicts —
- * "matches the prediction of 6", "within 2% of 3.1416", "still settling". The
- * full Measured / Analytic / Error table is still here, unchanged, under
- * "Show the exact numbers"; it is the accessible representation of the plate
- * and the text the convergence tests read, so nothing is lost by demoting it.
+ * The page is written for a reader with no statistics, and this region is now
+ * one thing: the headline reading at 40 px, its plain-language label, and one
+ * sentence that says whether the reading agrees with what the mathematics
+ * predicts — "matches the prediction of 6", "within 2% of 3.1416", "still
+ * settling". The "Show the exact numbers" disclosure that used to sit under it
+ * is gone, and the Measured / Analytic / Error table went with it: a control
+ * whose entire job is to reveal a second, more technical copy of the answer is
+ * a question asked of every reader on every tab, and the owner's answer was no.
  *
- * One rule decides agreement. The verdict sentence, the table row's state and
+ * The ledger itself survives, unrendered, because it is not decoration. A canvas
+ * is opaque to assistive technology and ARCHITECTURE.md makes the readout list
+ * the accessible representation of what a visualization actually produced — the
+ * headline is one of a tab's five or six readings, and the other four are only
+ * here. So the table is built exactly as before and clipped out of the visual
+ * layer (`.readouts__ledger`, theme.css §8), which leaves it to a screen reader
+ * and to print, where §16c lays the page out as a handout. Nothing on screen
+ * refers to it and nothing opens it.
+ *
+ * One rule decides agreement. The verdict sentence, the ledger row's state and
  * the live-region sentence the shell speaks on pause all go through
- * `verdictOf()`, with the band each readout declares, so the simple view can
- * never disagree with the exact one.
+ * `verdictOf()`, with the band each readout declares, so the spoken answer can
+ * never disagree with the printed one.
  *
  * The band is the whole of the honesty of this page. It has to shrink as the
  * run gathers evidence, it has to be narrow enough to rule something out, and
@@ -22,10 +31,10 @@
  * why it is where it is.
  *
  * Nothing here may move when a digit changes. Every number sits in a box whose
- * width is reserved up front from the digits the reading can need, the hero's
- * three lines have fixed heights, and the table is laid out with fixed columns.
- * Rows are keyed and reused, and writes are throttled to ~10 Hz with a trailing
- * flush so the frame a run pauses on always reaches the page.
+ * width is reserved up front from the digits the reading can need, and the
+ * hero's three lines have fixed heights. Rows are keyed and reused, and writes
+ * are throttled to ~10 Hz with a trailing flush so the frame a run pauses on
+ * always reaches the page.
  */
 
 import type { Readout } from '../core/types';
@@ -91,9 +100,6 @@ const GROUP_FROM = 10_000;
 
 /** Stands in for a reading that does not exist yet, rather than a 40 px "NaN". */
 const EM_DASH = '—';
-
-/** Namespaced like the scheme preference, so a sibling project on the same origin cannot collide. */
-const EXACT_KEY = 'mp:exact';
 
 // ---------------------------------------------------------------------------
 // The one rule of agreement — shared with the live region in main.ts
@@ -318,8 +324,8 @@ export function createReadouts(host: HTMLElement): ReadoutsHandle {
 
   const summary = h('p', { class: 'readouts__summary visually-hidden', 'aria-live': 'polite' });
   const hero = buildHero();
-  const exact = buildExact();
-  host.append(summary, hero.root, exact.root);
+  const ledger = buildLedger();
+  host.append(summary, hero.root, ledger.root);
 
   let structure = '';
   const rows = new Map<string, RowParts>();
@@ -331,7 +337,7 @@ export function createReadouts(host: HTMLElement): ReadoutsHandle {
   function rebuild(readouts: readonly Readout[], signature: string): void {
     structure = signature;
     rows.clear();
-    clear(exact.tbody);
+    clear(ledger.tbody);
 
     const first = headlineOf(readouts);
     hero.root.hidden = first === undefined;
@@ -343,9 +349,9 @@ export function createReadouts(host: HTMLElement): ReadoutsHandle {
     for (const readout of readouts) {
       const parts = buildRow(readout);
       rows.set(readout.key, parts);
-      exact.tbody.append(parts.tr);
+      ledger.tbody.append(parts.tr);
     }
-    exact.root.hidden = readouts.length === 0;
+    ledger.root.hidden = readouts.length === 0;
   }
 
   function write(readouts: readonly Readout[]): void {
@@ -401,7 +407,6 @@ export function createReadouts(host: HTMLElement): ReadoutsHandle {
       pending = null;
       rows.clear();
       structure = '';
-      exact.destroy();
       clear(host);
     },
   };
@@ -468,78 +473,65 @@ function buildHero(): Hero {
   return { root, number, value, unit, label, verdict, hint, reserved: 0 };
 }
 
-interface Exact {
-  root: HTMLDetailsElement;
+interface Ledger {
+  root: HTMLElement;
   tbody: HTMLElement;
-  destroy(): void;
 }
 
 /**
- * The disclosure and the table inside it. Built once per mount, so the open
- * state survives every rebuild within a route; across routes it is read back
- * from storage, which is allowed to be missing or to throw.
+ * Every reading the visualization publishes, as a table — clipped out of the
+ * visual layer and left to a screen reader and to print.
+ *
+ * There is no disclosure and no control of any kind here any more. What is left
+ * is the obligation the disclosure happened to be discharging: every number a
+ * tab draws on its canvas also goes through `emit()` precisely so that a reader
+ * who cannot see the canvas still has them, and the hero shows exactly one of
+ * them. Dropping the table would have taken "Balls landed", "Bins", "Crossings"
+ * and every analytic target off the page for that reader entirely.
  */
-function buildExact(): Exact {
+function buildLedger(): Ledger {
   const tbody = h('tbody', { role: 'rowgroup' });
   const head = (text: string): HTMLElement =>
     h('th', { class: 'ledger__head', role: 'columnheader', scope: 'col' }, text);
-  // The whole role chain is explicit, the `<table>` included: at ≤ 599 px the
-  // table, its `tbody`, its rows and its cells all take a new `display`, and
+  // The whole role chain is explicit, the `<table>` included: the table, its
+  // `tbody`, its rows and its cells all take a new `display` at ≤ 599 px, and
   // Chrome and Firefox drop the implicit table role from an element whose
   // display is not a table display — orphaning every row and cell role below.
   const root = h(
-    'details',
-    { class: 'exact' },
-    h('summary', { class: 'exact__summary' }, 'Show the exact numbers'),
+    'div',
+    { class: 'ledger-wrap readouts__ledger' },
     h(
-      'div',
-      { class: 'ledger-wrap' },
+      'table',
+      { class: 'ledger', role: 'table' },
       h(
-        'table',
-        { class: 'ledger', role: 'table' },
-        h(
-          'colgroup',
-          null,
-          h('col', { class: 'ledger__col ledger__col--label' }),
-          h('col', { class: 'ledger__col ledger__col--value' }),
-          h('col', { class: 'ledger__col ledger__col--target' }),
-          h('col', { class: 'ledger__col ledger__col--error' }),
-        ),
-        h(
-          'thead',
-          { role: 'rowgroup' },
-          h(
-            'tr',
-            { role: 'row' },
-            h(
-              'th',
-              { class: 'ledger__head', role: 'columnheader', scope: 'col' },
-              h('span', { class: 'visually-hidden' }, 'Quantity'),
-            ),
-            head('Measured'),
-            head('Analytic'),
-            head('Error'),
-          ),
-        ),
-        tbody,
+        'colgroup',
+        null,
+        h('col', { class: 'ledger__col ledger__col--label' }),
+        h('col', { class: 'ledger__col ledger__col--value' }),
+        h('col', { class: 'ledger__col ledger__col--target' }),
+        h('col', { class: 'ledger__col ledger__col--error' }),
       ),
+      h(
+        'thead',
+        { role: 'rowgroup' },
+        h(
+          'tr',
+          { role: 'row' },
+          h(
+            'th',
+            { class: 'ledger__head', role: 'columnheader', scope: 'col' },
+            h('span', { class: 'visually-hidden' }, 'Quantity'),
+          ),
+          head('Measured'),
+          head('Analytic'),
+          head('Error'),
+        ),
+      ),
+      tbody,
     ),
   );
 
-  root.open = exactOpen;
-  const onToggle = (): void => {
-    exactOpen = root.open;
-    writeStore(EXACT_KEY, root.open ? 'open' : 'closed');
-  };
-  root.addEventListener('toggle', onToggle);
-
-  return {
-    root,
-    tbody,
-    destroy() {
-      root.removeEventListener('toggle', onToggle);
-    },
-  };
+  return { root, tbody };
 }
 
 interface RowParts {
@@ -677,8 +669,8 @@ function writeRow(parts: RowParts, readout: Readout): void {
   }
 
   // One rule, one call: the row's state is the hero's verdict translated into
-  // the table's vocabulary, so the simple view and the exact one cannot
-  // disagree about whether a number arrived.
+  // the ledger's vocabulary, so what a screen reader is told and what the hero
+  // prints cannot disagree about whether a number arrived.
   const reading = verdictOf(readout);
   const ok = reading.state === 'agree';
   setText(parts.target, num(target, digits));
@@ -734,34 +726,4 @@ function setText(node: Text, text: string): void {
 
 function clock(): number {
   return typeof performance === 'object' ? performance.now() : Date.now();
-}
-
-/**
- * Whether the exact table is open, for the life of the page.
- *
- * The ledger is rebuilt from scratch on every route change, so storage was
- * being asked to carry a preference across two components one tab click apart —
- * and where storage is blocked, or writes throw, the reader's choice evaporated
- * on every tab change and the disclosure could not be kept open (or, with
- * writes failing and a stale value stored, could not be kept closed). Memory is
- * the source of truth and storage is a mirror read once, so a blocked origin
- * costs persistence across a reload, which is all it can honestly cost.
- */
-let exactOpen = readStore(EXACT_KEY) === 'open';
-
-/** localStorage throws outright in some privacy modes; a missing preference is not an error. */
-function readStore(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStore(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Session-only, then. The disclosure still opens and closes.
-  }
 }

@@ -609,9 +609,12 @@ export const coprime: Viz = {
   title: 'Visible Stars',
   group: 'numbers',
   blurb: [
-    'Plants a tree at every point of a grid and lights the ones still in view from the corner — about six in ten, which is 6/',
+    'Plants an orchard on a square grid and looks down it from the corner: a tree hides when a nearer one lines ' +
+      'up in front of it, and the six in ten still visible come to 6/',
     { v: 'π' },
-    '².',
+    '², so a grid with nothing round in it hands back ',
+    { v: 'π' },
+    '.',
   ],
   // The lattice is square, so the plate is very nearly one: `layoutOrchard`
   // takes the smaller of the two sides, and any more width than this is margin

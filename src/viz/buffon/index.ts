@@ -429,7 +429,11 @@ export const buffon: Viz = {
   id: 'buffon',
   title: "Buffon's Needle",
   group: 'randomness',
-  blurb: ['Drops needles onto a lined floor, and the share that land across a line gives an estimate of ', { v: 'π' }, '.'],
+  blurb: [
+    'Drops needles onto a ruled floor, where the fraction that cross a line is enough to pull ',
+    { v: 'π' },
+    ' out of nothing but sticks and floorboards.',
+  ],
   // Landscape, like the floor it models: whole strips are what the estimator
   // samples, and the field is centred on them. Square on a phone, where a 1.6
   // bed fits three floorboards and a square fits five.

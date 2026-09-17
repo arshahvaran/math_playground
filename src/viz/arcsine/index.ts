@@ -673,7 +673,8 @@ export const arcsine: Viz = {
   title: 'The Long Lead',
   group: 'randomness',
   blurb:
-    'Plays a long game of coin flips over and over, and counts how much of each game one side spent in front.',
+    'Flips a fair coin thousands of times and watches who is ahead: one side leads for nearly the whole game, ' +
+    'and the even split everyone expects is the rarest outcome there is.',
   // Landscape: the histogram wants twenty-one bars side by side and the traces
   // want a long time axis, and both run the same way across the plate. Square
   // on a phone, where a 1.6 bed leaves the fan a 60 px strip.

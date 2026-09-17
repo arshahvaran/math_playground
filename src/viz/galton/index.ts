@@ -40,6 +40,13 @@ const DEFAULT_BALLS = 500;
 const DEFAULT_SEED = 42;
 
 /**
+ * Grain of the Balls fader. One ball at a time is a fader nobody can drive:
+ * a pile only changes shape by the hundred, and 5,000 steps of travel is
+ * 5,000 chances to restart a run by a pixel.
+ */
+const BALLS_STEP = 50;
+
+/**
  * Probability of going right at a peg. Not a control: the tool is for
  * students meeting the bell for the first time, and a fair coin is the
  * experiment. The simulation and the targets below stay general in `p` so
@@ -74,16 +81,17 @@ const SHOW_TRAILS: boolean = true;
 const TRAIL_FADE = 0.1;
 
 /**
- * Length of the floor tick under each bin edge, CSS px.
+ * Length of the axis tick under the floor, one per whole standard deviation,
+ * CSS px.
  *
- * A histogram needs a baseline and a scale, not a grid of cells: full-height
- * dividers boxed every bin and cut the distribution into strips. The ticks hang
- * below the floor, where the pile can never cover them and where they read as
- * the axis furniture they are.
+ * The ticks hang below the floor of the case, where the pile can never cover
+ * them and where they read as the axis furniture they are. The partitions
+ * between the bins are a different mark and live above the floor, inside the
+ * case, under the pile.
  */
 const BIN_TICK = 4;
 
-/** Gap between the floor ticks and the bin index numerals, CSS px. */
+/** Gap between the axis ticks and the axis numerals, CSS px. */
 const LABEL_GAP = 3;
 
 /**
@@ -101,6 +109,14 @@ const DOT_BUDGET = 4_000;
  */
 const HEADROOM = 1.15;
 
+/**
+ * How far a ball deforms at the instant of a contact, as a fraction added to
+ * its radius along the direction of travel and taken off across it. Area is
+ * preserved, so the ball does not appear to grow. A third is enough to read at
+ * a 3 px radius and small enough that the ball never stops being a ball.
+ */
+const SQUASH = 0.34;
+
 const TAU = 2 * Math.PI;
 
 const params: readonly ParamSpec[] = [
@@ -117,12 +133,22 @@ const params: readonly ParamSpec[] = [
     kind: 'range',
     key: 'balls',
     label: 'Balls',
-    min: 1,
+    // Fifty at a time. A range parameter lives on one grid — `min + k·step`,
+    // and `core/grid.ts` is the only definition of it — so a step of 50 from a
+    // minimum of 1 would put the reachable counts at 1, 51, 101 … and a
+    // permalink asking for 100 balls would quietly run 101. The minimum is 50
+    // instead, which keeps the round hundreds every shared link and every
+    // preset is written in.
+    //
+    // The "One ball" preset is below that floor on purpose: a preset writes
+    // its values straight into the parameters, so the board really does drop
+    // exactly one ball, and the fader shows its own floor while it does.
+    min: BALLS_STEP,
     max: MAX_BALLS,
-    step: 1,
+    step: BALLS_STEP,
     default: DEFAULT_BALLS,
     log: true,
-    help: 'Balls released before the stream stops.',
+    help: 'Balls released before the stream stops, fifty at a time.',
   },
   // Not a control: the rail skips seed specs, and "the same experiment,
   // another draw" is the transport's Shuffle key. It is declared all the same
@@ -349,6 +375,12 @@ function create(ctx: VizContext): VizInstance {
     const rows = sim.rows;
     const meanTarget = rows * BIAS;
     const varianceTarget = rows * BIAS * (1 - BIAS);
+    // The headline is the average landing spot in standard deviations from the
+    // middle. One landing is Binomial(rows, p), so (k − n·p)/σ has mean 0 and
+    // standard deviation exactly 1 — which is what makes the band below the
+    // simplest one on the page, and the prediction exactly zero.
+    const sigma = Math.sqrt(varianceTarget);
+    const z = sigma > 0 ? (mean - meanTarget) / sigma : Number.NaN;
     // One ball is one route: it lands in one slot and the run is over. There is
     // no pile to have a shape, so the hero says so rather than leaving the
     // reader watching a sentence that is waiting for evidence that is never
@@ -361,28 +393,44 @@ function create(ctx: VizContext): VizInstance {
       // from. n is the row count, p the bias — both italic, both variables.
       {
         key: 'mean',
+        label: 'Mean landing, z',
+        value: z,
+        target: 0,
+        digits: 3,
+        formula: ['(mean − ', { v: 'n' }, '·', { v: 'p' }, ') / √(', { v: 'n' }, { v: 'p' }, '(1−', { v: 'p' }, '))'],
+        plain: 'average landing spot, in standard deviations from the middle',
+        headline: true,
+        // In these units one ball carries exactly one standard deviation, so
+        // three standard errors of the mean is 3/√n and the ledger does the
+        // division from the balls that have actually landed. That is the same
+        // claim the raw mean used to make — 3·√(n·p(1−p))/√n bins, 3.87 % of
+        // the prediction at the defaults — written in the units the reader is
+        // now shown, and it still narrows as the pile grows.
+        band: { kind: 'sampled', sigma: 1, samples: n },
+        // A prediction of exactly zero is no scale at all, so the ledger has
+        // nothing to judge the band against unless the reading says how far it
+        // could ever travel. A landing is somewhere between the two edge
+        // slots, which in these units is this: −n·p/σ to n·(1−p)/σ, ±3.46 on
+        // the default twelve rows. Without it `readouts.ts` would correctly
+        // refuse to give a verdict at all.
+        range: sigma > 0 ? [-meanTarget / sigma, (rows - meanTarget) / sigma] : [-1, 1],
+        ...(oneBall
+          ? { hint: 'one ball lands in one slot, so there is no pile to have a shape — raise Balls to build one' }
+          : {}),
+      },
+      {
+        key: 'meanBin',
         label: 'Mean bin',
         value: mean,
         target: meanTarget,
         formula: [{ v: 'n' }, '·', { v: 'p' }],
-        plain: 'average landing spot',
-        headline: true,
-        // A landing slot is Binomial(rows, p), so one ball carries
-        // √(rows·p(1−p)) of standard deviation and the ledger divides it by the
-        // balls that have actually landed. The headline used to take the
-        // ledger's 1 % default, which no setting of the two faders can satisfy
-        // — the best the board can do is 3/√(16·5000) = 1.06 % — so a correct
-        // run could not reliably agree with it; three standard errors at the
-        // *final* ball count has the opposite fault, being true from the first
-        // landing. This is the same 3.87 % at the end of the default run and
-        // honest before it.
-        band: { kind: 'sampled', sigma: Math.sqrt(rows * BIAS * (1 - BIAS)), samples: n },
-        // A ball lands somewhere between the two edge slots, so the band is
-        // judged against the smaller of the prediction and this.
+        // The same measurement in bins, kept for the table: the z-score above
+        // is this number minus n·p over σ, and a reader who wants the slot
+        // rather than the standard deviation should not have to do it in their
+        // head. Same band, in bins.
+        band: { kind: 'sampled', sigma, samples: n },
         range: [0, rows],
-        ...(oneBall
-          ? { hint: 'one ball lands in one slot, so there is no pile to have a shape — raise Balls to build one' }
-          : {}),
+        expertOnly: true,
       },
       {
         key: 'variance',
@@ -427,7 +475,46 @@ function create(ctx: VizContext): VizInstance {
       const rows = g.rows;
       bg.clearRect(0, 0, width, height);
 
-      // Pegs: one path, one fill. 136 arcs at sixteen rows.
+      // The case, the floor, the bin partitions and the axis all contain the
+      // experiment rather than being part of it, so they take the container
+      // pen; the pegs are the only near-black geometry on the plate (DESIGN
+      // §7). An odd-width line centred on a half-pixel covers whole device
+      // pixels at DPR 1; on an integer it smears across two, and an even-width
+      // one is the other way round.
+      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
+      const frameWidth = 2 * theme.lineWidth;
+      const frameSnap = frameWidth % 2 === 1 ? 0.5 : 0;
+      const half = g.pegSpacing / 2;
+      const left = Math.round(binCentreX(g, 0) - half);
+      const right = Math.round(binCentreX(g, rows) + half);
+      const floor = Math.round(g.binBottom);
+      const mouth = Math.round(g.binTop) + snap;
+      // A real board is a sealed case: glass front, two side walls, a floor.
+      // Half a row pitch of head room above the release point is where the
+      // hopper would sit, and `layoutBoard` always leaves at least that much.
+      const lid = Math.round(Math.max(frameWidth, g.releaseY - g.rowSpacing / 2));
+
+      bg.strokeStyle = theme.gridSoft;
+      bg.lineWidth = frameWidth;
+      bg.lineJoin = 'miter';
+      bg.strokeRect(left + frameSnap, lid + frameSnap, right - left, floor - lid);
+
+      // The partitions between the bins, rising from the floor to the mouth.
+      // They are hairlines in the container pen and they are painted *under*
+      // the pile: the opaque histogram wash covers them wherever there are
+      // balls, so what a reader sees is a comb of empty compartments above the
+      // pile, which is what a real board looks like — not the cage of
+      // full-height rules DESIGN §7 rules out, which was a `--grid` mistake.
+      bg.lineWidth = theme.lineWidth;
+      bg.beginPath();
+      for (let k = 1; k <= rows; k++) {
+        const x = Math.round(binCentreX(g, k) - half) + snap;
+        bg.moveTo(x, mouth);
+        bg.lineTo(x, floor);
+      }
+      bg.stroke();
+
+      // Pegs, inside the case: one path, one fill. 136 arcs at sixteen rows.
       bg.fillStyle = theme.grid;
       bg.beginPath();
       for (let r = 0; r < rows; r++) {
@@ -439,36 +526,37 @@ function create(ctx: VizContext): VizInstance {
       }
       bg.fill();
 
-      // Floor and bin ticks. These contain the experiment rather than being part
-      // of it, so they take the container pen, not the peg pen — the pegs are
-      // the only near-black geometry on the plate. An odd-width line centred on
-      // a half-pixel covers whole device pixels at DPR 1; on an integer it
-      // smears across two.
-      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
-      const half = g.pegSpacing / 2;
-      const left = binCentreX(g, 0) - half;
-      const right = binCentreX(g, rows) + half;
-      const floor = Math.round(g.binBottom) + snap;
-      bg.strokeStyle = theme.gridSoft;
-      bg.lineWidth = theme.lineWidth;
-      bg.beginPath();
-      for (let k = 0; k <= rows + 1; k++) {
-        const x = Math.round(left + k * g.pegSpacing) + snap;
-        bg.moveTo(x, floor);
-        bg.lineTo(x, floor + BIN_TICK);
-      }
-      bg.moveTo(left, floor);
-      bg.lineTo(right, floor);
-      bg.stroke();
+      // The axis under the floor is the scale the headline is quoted in:
+      // standard deviations from the middle, zero dead centre. Bin indices
+      // would be a second scale for the same distance, and the one number the
+      // page asks a reader to judge is the z-score.
+      const sigma = Math.sqrt(sim.rows * BIAS * (1 - BIAS));
+      if (sigma > 0) {
+        const mu = sim.rows * BIAS;
+        const zLo = -Math.floor(mu / sigma + 1e-9);
+        const zHi = Math.floor((sim.rows - mu) / sigma + 1e-9);
+        const zx = (z: number): number => binCentreX(g, mu + z * sigma);
+        bg.strokeStyle = theme.gridSoft;
+        bg.lineWidth = theme.lineWidth;
+        bg.beginPath();
+        for (let z = zLo; z <= zHi; z++) {
+          const x = Math.round(zx(z)) + snap;
+          bg.moveTo(x, floor);
+          bg.lineTo(x, floor + BIN_TICK);
+        }
+        bg.stroke();
 
-      // Bin indices. Narrow bins take every other label so "10" and "11" do not collide.
-      const every = g.pegSpacing >= 18 ? 1 : 2;
-      bg.font = theme.labelFont;
-      bg.fillStyle = theme.inkMuted;
-      bg.textAlign = 'center';
-      bg.textBaseline = 'top';
-      for (let k = 0; k <= rows; k += every) {
-        bg.fillText(String(k), binCentreX(g, k), g.binBottom + BIN_TICK + LABEL_GAP);
+        // A signed numeral is two glyphs of Martian Mono; below about 26 px of
+        // spacing they touch, so the odd ones step aside.
+        const every = sigma * g.pegSpacing >= 26 ? 1 : 2;
+        bg.font = theme.labelFont;
+        bg.fillStyle = theme.inkMuted;
+        bg.textAlign = 'center';
+        bg.textBaseline = 'top';
+        for (let z = zLo; z <= zHi; z++) {
+          if (z !== 0 && Math.abs(z) % every !== 0) continue;
+          bg.fillText(z === 0 ? '0' : z < 0 ? `−${-z}` : `+${z}`, zx(z), g.binBottom + BIN_TICK + LABEL_GAP);
+        }
       }
     },
 
@@ -546,12 +634,31 @@ function create(ctx: VizContext): VizInstance {
       // A moving ball is wherever the physics put it, in flight, in its bin
       // or bouncing on the pile: one mapping for all three, because the bin
       // continues the lattice's own vertical scale.
+      //
+      // A ball that has just hit something is drawn flattened across its
+      // direction of travel and stretched along it, fading back to a circle
+      // over the few frames `BallView.impact` takes to decay. Right after a
+      // bounce the direction of travel *is* the contact normal, so the flat
+      // face is the one that met the peg — which is what makes the collision
+      // read as a collision rather than as a corner in a polyline. A round
+      // ball takes the cheaper `arc`; only the handful in contact pay for an
+      // ellipse, and both go in the same path and the same fill.
       const R = theme.particleRadius;
       sim.forEachActive((b) => {
         const x = lateralToPx(g, b.x);
         const y = progressToPy(g, b.y);
-        fg.moveTo(x + R, y);
-        fg.arc(x, y, R, 0, TAU);
+        const speed = Math.hypot(b.vx, b.vy);
+        if (b.impact > 0 && speed > 0) {
+          const stretch = 1 + SQUASH * b.impact;
+          const rx = R * stretch;
+          const ry = R / stretch;
+          const angle = Math.atan2(b.vy, b.vx);
+          fg.moveTo(x + rx * Math.cos(angle), y + rx * Math.sin(angle));
+          fg.ellipse(x, y, rx, ry, angle, 0, TAU);
+        } else {
+          fg.moveTo(x + R, y);
+          fg.arc(x, y, R, 0, TAU);
+        }
       });
       fg.fill();
 
@@ -647,7 +754,9 @@ export const galton: Viz = {
   id: 'galton',
   title: 'Galton Board',
   group: 'randomness',
-  blurb: 'Drops balls through a staggered lattice of pegs, one coin flip per row, and piles up the binomial distribution.',
+  blurb:
+    'Balls fall through a grid of pegs, bouncing left or right at random. They pile up into a bell curve every ' +
+    'single time — which is why so much of nature, from heights to measurement errors, ends up that shape.',
   // The board is taller than it is wide: layoutBoard() takes the smaller of the
   // width- and height-derived peg spacings, so on the default 1.6 bed the height
   // binds and half the plate is blank. Portrait again on a phone, where a

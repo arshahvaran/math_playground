@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
-import type { ParamValue, Readout, VizContext } from '../src/core/types';
+import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import { arrivalBand, dla, frameCount, viewReach, walkSpeedFor } from '../src/viz/dla/index';
 import {
   CONTACT,
@@ -852,6 +852,23 @@ function expectOneSentence(text: string): void {
   expect(text).not.toMatch(/[.!?]\s/);
 }
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it: the blurb, the simple view, the rail's help and
+ * the story captions.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows, which is the one place a reader has
+ * asked for the technical term.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
+/** Prose as the page prints it. */
+function flatten(prose: Prose): string {
+  return typeof prose === 'string' ? prose : prose.map((s) => (typeof s === 'string' ? s : s.v)).join('');
+}
+
 describe('dla metadata', () => {
   it('declares two controls and the seed, and nothing else', () => {
     expect(dla.id).toBe('dla');
@@ -869,6 +886,33 @@ describe('dla metadata', () => {
     const blurb = typeof dla.blurb === 'string' ? dla.blurb : '';
     expect(blurb.length).toBeGreaterThan(0);
     expectOneSentence(blurb);
+  });
+
+  it('spends that sentence on the mechanism and what it makes, not on what the code does', () => {
+    const blurb = typeof dla.blurb === 'string' ? dla.blurb : '';
+    // Why branches and not a blob is the whole content of the picture: a
+    // wanderer meets a tip before it finds a gap. Saying only that particles
+    // stick leaves a visitor with no reason to keep watching, and naming
+    // something they have actually seen — frost, lightning — is the payoff.
+    expect(blurb).toMatch(/\bfreeze\b|\bstick/i);
+    expect(blurb).toMatch(/\btip\b/i);
+    expect(blurb).toMatch(/\bbranch/i);
+    expect(blurb).toMatch(/frost|lightning/i);
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about', () => {
+    for (const preset of dla.presets ?? []) expect(flatten(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of dla.facts) expect(flatten(fact.text)).not.toMatch(JARGON);
+    for (const p of dla.params) expect(flatten(p.help ?? ''), p.key).not.toMatch(JARGON);
+
+    const v = stubViz();
+    tick(v, 400);
+    for (const r of v.emitted.at(-1) ?? []) {
+      if (r.expertOnly === true) continue;
+      expect(r.plain ?? '', r.key).not.toMatch(JARGON);
+      expect(r.hint ?? '', r.key).not.toMatch(JARGON);
+    }
   });
 
   it('walks three presets from one particle to the stickiness moment, each with one plain caption', () => {

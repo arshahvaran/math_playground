@@ -1070,6 +1070,22 @@ describe('coprime metadata', () => {
     expect(blurb).toMatch(/^Plants /);
   });
 
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = text(coprime.blurb);
+    // Three things or the line has not earned its place: where the viewer is
+    // standing, why a tree goes dark, and the fact that a grid with nothing
+    // round anywhere in it still hands back π.
+    expect(blurb).toMatch(/corner/i);
+    expect(blurb).toMatch(/hide|in front/i);
+    expect(blurb).toMatch(/nothing round/i);
+    expect(blurb).toContain('π');
+  });
+
+  it('keeps the story captions and the facts free of the same words', () => {
+    for (const preset of coprime.presets ?? []) expect(text(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of coprime.facts) expect(text(fact.text)).not.toMatch(JARGON);
+  });
+
   it('never prints a word a newcomer would have to ask about', () => {
     const v = stubViz();
     until(v, 2_000);

@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { byLabel, fire, installDom, makeEvent, type Harness, type MElement } from './dom-harness';
 import {
   SPEEDS,
+  STEP_TICKS,
   createPressGuard,
   createTransport,
   type PressGuard,
   type TransportCallbacks,
+  type TransportHandle,
 } from '../src/ui/transport';
 
 /**
@@ -313,8 +315,8 @@ describe('holding Fast-forward', () => {
 /**
  * The cluster itself. The seed field left the rail, so Shuffle is the only way
  * a reader asks for another draw — it has to be there for every seeded
- * visualization and absent for one with nothing to shuffle. And every key but
- * Play/Pause is a glyph with a name: no captions to read, no ticks to count.
+ * visualization and absent for one with nothing to shuffle. And every key says
+ * in words what it will do.
  */
 describe('the cluster', () => {
   let dom: Harness | null = null;
@@ -356,13 +358,157 @@ describe('the cluster', () => {
     expect(byLabel(dom as Harness, 'Reset')).toBeDefined();
   });
 
-  it('labels every key but Play/Pause with a name and no caption', () => {
+  it('gives every key its name in words, not just a tooltip', () => {
     mountWith(true);
+    // They were 44 px glyph squares whose names lived in `aria-label` and a
+    // `title`, and the owner read three of the five as broken: nothing on a key
+    // said what it would do, and a tooltip only reaches a mouse that has
+    // already guessed. The visible word and the accessible name are the same
+    // string, which is SC 2.5.3 read forwards.
     for (const name of ['Step', 'Fast-forward', 'Reset', 'Shuffle']) {
       const key = byLabel(dom as Harness, name);
       expect(key, name).toBeDefined();
-      expect(key?.textContent).toBe('');
+      expect(key?.textContent, name).toBe(name);
+      expect(key?.getAttribute('title'), name).toBe(name);
     }
     expect(byLabel(dom as Harness, 'Pause')?.textContent).toBe('Pause');
+  });
+
+  /**
+   * Step advanced the engine by exactly one fixed timestep — 1/120 s — which is
+   * the right unit for the engine and the wrong one for a key. Measured on the
+   * shipped defaults, one tick lands 0.2 of a Galton ball and moves the coupled
+   * oscillators' order parameter below the fourth significant figure the
+   * readouts print, so the key changed nothing on screen on two of the nine
+   * tabs and was reported as dead. A press is a tenth of a second of simulated
+   * time instead: still a discrete, countable quantum, and the smallest one
+   * that moves a reading on every tab in the registry.
+   */
+  it('advances a countable quantum of simulated time per press of Step', () => {
+    const { calls } = mountWith(true);
+    const step = byLabel(dom as Harness, 'Step');
+    expect(step).toBeDefined();
+    fire(step as MElement, 'click');
+    expect(calls).toHaveLength(STEP_TICKS);
+    expect(new Set(calls)).toEqual(new Set(['step']));
+    expect(STEP_TICKS).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * The speed control.
+ *
+ * A bare `<select>` was the wrong instrument for five fixed rates: it hides
+ * four of the five behind a press, it paints the operating system's own menu
+ * over the bench, and there is nothing to discover inside it. A radio group
+ * shows the whole range, shows where in it the run is without being opened, and
+ * takes its keyboard model from the platform pattern rather than from a listbox
+ * nobody can see.
+ */
+describe('the speed control', () => {
+  let dom: Harness | null = null;
+  let speeds: number[] = [];
+
+  beforeEach(() => {
+    dom = installDom();
+    speeds = [];
+    const host = dom.document.createElement('div');
+    dom.app.appendChild(host);
+    const cb: TransportCallbacks = {
+      onPlay: () => undefined,
+      onPause: () => undefined,
+      onStep: () => undefined,
+      onFastForward: () => undefined,
+      onReset: () => undefined,
+      onShuffle: () => undefined,
+      onSpeed: (m) => speeds.push(m),
+    };
+    handle = createTransport(host as unknown as HTMLElement, cb, {
+      reducedMotion: false,
+      seeded: true,
+    });
+  });
+
+  afterEach(() => {
+    handle?.destroy();
+    handle = null;
+    dom?.teardown();
+    dom = null;
+  });
+
+  let handle: TransportHandle | null = null;
+
+  function options(): MElement[] {
+    return (dom as Harness).findAll((el) => el.getAttribute('role') === 'radio');
+  }
+
+  function checked(): string | undefined {
+    return options().find((o) => o.getAttribute('aria-checked') === 'true')?.textContent;
+  }
+
+  it('shows every rate at once, with the one in force marked', () => {
+    expect(options().map((o) => o.textContent)).toEqual(SPEEDS.map((m) => `${m}×`));
+    expect((dom as Harness).findAll((el) => el.tagName === 'select')).toEqual([]);
+    expect(checked()).toBe('1×');
+    // Roving tabindex: tabbing in lands on the rate that is actually running.
+    expect(options().filter((o) => o.tabIndex === 0)).toHaveLength(1);
+    expect(options().find((o) => o.tabIndex === 0)?.textContent).toBe('1×');
+  });
+
+  it('reports a rate once when it changes, and never for the one already set', () => {
+    const [half, one, two] = options();
+    fire(two as MElement, 'click');
+    expect(speeds).toEqual([2]);
+    expect(checked()).toBe('2×');
+
+    // Pressing the option already in force is a no-op, as it is in every radio
+    // group: the engine must not be handed a rate it is already running at.
+    fire(two as MElement, 'click');
+    expect(speeds).toEqual([2]);
+
+    fire(half as MElement, 'click');
+    fire(one as MElement, 'click');
+    expect(speeds).toEqual([2, 0.5, 1]);
+  });
+
+  it('moves the selection with the arrow keys, and the ends with Home and End', () => {
+    const group = (dom as Harness).find((el) => el.getAttribute('role') === 'radiogroup');
+    expect(group).toBeDefined();
+    fire(group as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(checked()).toBe('2×');
+    expect(speeds).toEqual([2]);
+
+    fire(group as MElement, 'keydown', { key: 'ArrowLeft' });
+    expect(checked()).toBe('1×');
+
+    fire(group as MElement, 'keydown', { key: 'End' });
+    expect(checked()).toBe(`${SPEEDS[SPEEDS.length - 1]}×`);
+    fire(group as MElement, 'keydown', { key: 'Home' });
+    expect(checked()).toBe(`${SPEEDS[0]}×`);
+    // It is a radio group, so the arrows carry the selection and not just the
+    // focus — and the focus follows it.
+    expect((dom as Harness).document.activeElement).toBe(options()[0]);
+  });
+
+  it('shows the nearest rate it can when the engine is set to one it has no slot for', () => {
+    // A permalink can carry any multiplier; the control still has to say
+    // something true rather than nothing.
+    handle?.setSpeed(5);
+    expect(checked()).toBe('4×');
+    handle?.setSpeed(0.1);
+    expect(checked()).toBe('0.5×');
+    handle?.setSpeed(1);
+    expect(checked()).toBe('1×');
+    // setSpeed is the shell telling the control what the engine is doing, so it
+    // must not report back and start a loop.
+    expect(speeds).toEqual([]);
+  });
+
+  it('moves the tile by index rather than by laying out five columns', () => {
+    const group = (dom as Harness).find((el) => el.getAttribute('role') === 'radiogroup');
+    expect(group?.style.getPropertyValue('--seg-n')).toBe(String(SPEEDS.length));
+    expect(group?.style.getPropertyValue('--seg-i')).toBe(String(SPEEDS.indexOf(1)));
+    fire(options()[4] as MElement, 'click');
+    expect(group?.style.getPropertyValue('--seg-i')).toBe('4');
   });
 });

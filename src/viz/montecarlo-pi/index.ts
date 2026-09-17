@@ -749,7 +749,11 @@ export const montecarloPi: Viz = {
   id: 'montecarlo-pi',
   title: 'Monte Carlo π',
   group: 'randomness',
-  blurb: ['Throws darts at a square and works out ', { v: 'π' }, ' from how many land inside the circle.'],
+  blurb: [
+    'Throws darts at random into a square with a circle inside it: the share landing in the circle measures ',
+    { v: 'π' },
+    ', and it takes a hundred times the darts to gain one more decimal place.',
+  ],
   // Landscape, because the plate holds two panels: a square field of darts and
   // the convergence plot beside it. Portrait on a phone, where the plot goes
   // under the field instead and a 1.6 bed would leave it 60 px tall.

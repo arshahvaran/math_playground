@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { byClass, fire, installDom, type Harness, type MElement } from './dom-harness';
+import { byClass, installDom, type Harness, type MElement } from './dom-harness';
 import { DEFAULT_CANVAS_THEME } from '../src/core/canvas';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Readout, Viz, VizContext } from '../src/core/types';
@@ -18,12 +18,13 @@ import {
 
 /**
  * The readouts, as a visitor with no statistics meets them: one number, one
- * plain label, one sentence — and, behind a disclosure, the exact table the
- * convergence tests read.
+ * plain label, one sentence. That is the whole region — the "Show the exact
+ * numbers" disclosure is gone, and the table it opened is now clipped out of
+ * the visual layer and left to a screen reader and to print.
  *
  * Two things here are contracts with the rest of the page. The verdict under
- * the number and the state of the table row come from one rule, so the simple
- * view can never disagree with the exact one. And nothing lays out when a
+ * the number and the state of the ledger row come from one rule, so what is
+ * spoken can never disagree with what is printed. And nothing lays out when a
  * digit changes: the number's box is reserved before the first frame from the
  * digits the reading can need, and only ever grows.
  */
@@ -162,14 +163,33 @@ describe('the simple view', () => {
     expect(byClass(dom, 'hero__hint')[0]?.textContent).toBe('');
   });
 
-  it('keeps the precise table, every row of it, behind the disclosure', () => {
+  /**
+   * The disclosure is gone and there is no control in this region at all. What
+   * is NOT gone is the obligation it happened to be discharging: a canvas is
+   * opaque to assistive technology, ARCHITECTURE.md makes the readout list the
+   * accessible representation of what a tab produced, and the hero shows one of
+   * a tab's five or six readings. Dropping the table would have taken "Balls
+   * landed", "Bins" and every analytic target off the page for a reader who
+   * cannot see the plate.
+   */
+  it('publishes every reading to assistive technology, with nothing to open', () => {
     mount().update(galton(5.981, 10_723));
+    expect(byClass(dom, 'exact')).toEqual([]);
+    expect(byClass(dom, 'exact__summary')).toEqual([]);
+    expect(dom.findAll((el) => el.tagName === 'details')).toEqual([]);
+    expect(dom.findAll((el) => el.tagName === 'summary')).toEqual([]);
+
     const table = byClass(dom, 'ledger')[0];
     expect(table?.textContent).toContain('Mean bin');
     expect(table?.textContent).toContain('Balls landed');
     expect(table?.textContent).toContain('Bins');
     expect(table?.textContent).toContain('10,723');
-    expect(byClass(dom, 'exact__summary')[0]?.textContent).toBe('Show the exact numbers');
+    // Clipped, not display:none and not aria-hidden — the construction that
+    // keeps a table in the accessibility tree while taking it out of layout.
+    const wrap = byClass(dom, 'readouts__ledger')[0];
+    expect(wrap).toBeDefined();
+    expect(wrap?.hidden).toBe(false);
+    expect(wrap?.getAttribute('aria-hidden')).toBeNull();
   });
 });
 
@@ -579,33 +599,6 @@ describe('writes', () => {
     vi.advanceTimersByTime(100);
     // …and lands, because the frame a run pauses on has to reach the page.
     expect(row('Mean bin').children[1]?.textContent).toBe('5.950');
-  });
-});
-
-describe('the disclosure', () => {
-  const details = (): MElement & { open?: boolean } => {
-    const el = byClass(dom, 'exact')[0];
-    if (!el) throw new Error('no disclosure');
-    return el;
-  };
-
-  it('is collapsed by default and remembers being opened', () => {
-    mount().update(galton(6, 1));
-    expect(details().open).toBe(false);
-
-    details().open = true;
-    fire(details(), 'toggle');
-
-    handle?.destroy();
-    mount().update(galton(6, 1));
-    expect(details().open).toBe(true);
-  });
-
-  it('survives a storage that throws', () => {
-    dom.breakStorage();
-    mount().update(galton(6, 1));
-    details().open = true;
-    expect(() => fire(details(), 'toggle')).not.toThrow();
   });
 });
 

@@ -660,7 +660,8 @@ export const ising: Viz = {
   title: 'The Ising Magnet',
   group: 'chaos',
   blurb:
-    'Heats a sheet of tiny magnets until they stop agreeing with their neighbours, and cools it until one direction takes the whole sheet.',
+    'Heats a sheet of atoms that each want to match their neighbours, then cools it past one exact temperature ' +
+    'where the whole sheet picks a side, which is why a fridge magnet stops working if you heat it enough.',
   // Portrait: the lattice is square and wants nearly the full width of the
   // plate, and the plot of what was measured against Onsager's exact curve goes
   // under it, with one line of caption between them. 0.74 is what leaves the

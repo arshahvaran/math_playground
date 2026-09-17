@@ -557,8 +557,8 @@ export const dla: Viz = {
   title: 'Diffusion-Limited Aggregation',
   group: 'randomness',
   blurb:
-    'Lets particles wander in at random and freeze wherever they first touch, growing the branching shapes of ' +
-    'frost, coral and lightning.',
+    'Lets particles wander in at random and freeze where they first touch, and since a tip is easier to hit ' +
+    'than a gap, the cluster grows branches rather than a blob, like frost or lightning.',
   // The cluster grows radially and the view is a disc, so the plate is square:
   // a 1.6 bed would scale the whole picture by its height and leave a third of
   // the plate empty on both sides.

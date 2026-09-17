@@ -66,8 +66,8 @@
      4  Masthead                     12  Windows and keys
      5  Tab bar                      13  Native controls
      6  Bench, figure, plate         14  Footer and utilities
-     7  Share                        15  Responsive
-     8  Readouts: hero + exact table 16  Reduced motion, forced colors, print
+     7  Permalink                    15  Responsive
+     8  Readouts: the one reading    16  Reduced motion, forced colors, print
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -96,6 +96,20 @@
   initial-value: 1.6;
 }
 
+/* The speed control's selected index. It is consumed inside a translate, so an
+   empty or malformed value would invalidate that declaration and strand the
+   travelling tile at slot 0 with no error anywhere. Registered as an <integer>,
+   a bad write falls back to 1 — the multiplier every tab opens at. */
+@property --seg-i {
+  syntax: "<integer>";
+  /* INHERITED. The shell writes it on the group and the travelling tile is a
+     CHILD of that group, so `inherits: false` handed the tile the initial value
+     on every press: the index moved, the transform did not, and the highlight
+     sat on 1x for the life of the page. */
+  inherits: true;
+  initial-value: 1;
+}
+
 /* --viz-aspect-narrow is deliberately NOT registered, so
    `var(--viz-aspect-narrow, …)` can fall back. */
 
@@ -118,14 +132,21 @@
        light   page → raised 1.08 · raised → plate 1.10 · page → plate 1.19
                page → sunk 1.11 · raised → sunk 1.20
        dark    page → raised 1.11 · page → sunk 1.08 · raised → mat 1.15
-               mat  → plate 13.92 (the page → plate cliff is 17.82) */
+               mat  → plate 1.35 · page → plate 1.06
+
+     --canvas is NOT here. It is the canvas contract and lives on .plate alone,
+     in both schemes, as a literal — see RULE 0 in §6. The chrome that used to
+     borrow it (the display windows, the select, the two knobs) reads
+     --window-face and --knob instead, which is what let the dark scheme stop
+     being four lit white rectangles on a dark page. */
   --surface: light-dark(#e8ecef, #15181b);        /* page ground, masthead, gutter, footer */
   --surface-raised: light-dark(#f1f5f8, #1e2225); /* rail panel, fact card, active tab */
   --surface-sunk: light-dark(#dde1e5, #0c0f11);   /* tab trough, fader channel, ledger head */
-  --canvas: #ffffff;                              /* plotter bed and every display window */
 
-  /* The bezel that mats the white plate at night. Transparent in light, so one
-     shadow string serves both schemes. */
+  /* The bezel around the plate at night. Transparent in light, so one shadow
+     string serves both schemes. It is LIGHTER than both the page and the dark
+     bed (1.28:1 and 1.35:1), which is what makes it read as a bezel rather than
+     as more page. */
   --mat: light-dark(transparent, #282d30);
   --mat-w: 12px;
 
@@ -150,16 +171,39 @@
      Nothing else may use it on the sunk ground. The ledger's head band is sunk,
      so its column heads take --ink-muted at 5.55. */
 
-  /* ---- Ink and rules that live on the white plate and inside display
-     windows. These do NOT vary by scheme, because the plate and the windows
-     stay white in both. Every rule painting onto --canvas uses these, never
-     --ink / --stroke — that is what made revision 1's dark hover states vanish.
-     Ratios on white: 17.34 / 7.49 / 5.15 / 17.34 / 9.41. */
-  --window-ink: #171b1d;
-  --window-ink-muted: #4e5750;
-  --window-stroke: #657069;
-  --window-stroke-hover: #171b1d;
-  --window-agree: #24467a;
+  /* ---- Display windows: the hero, the fader's value box, the number field,
+     the select. Their own family of tokens, because a window is a face with
+     its own ink and its own ring and must not be coloured out of --ink /
+     --stroke, which are the tokens for type sitting directly on the page.
+
+     REVISION 5 MAKES THEM SCHEME-VARYING. They were fixed white in both
+     schemes — the same decision as the white plate, and rejected for the same
+     reason: on a dark page the bench was four lit white rectangles (the number
+     windows, the speed picker, the readout panel) around a white bed, which is
+     not a dark scheme, it is a light scheme with a dark margin.
+
+       light   ink 17.34 · muted 7.49 · stroke 5.15 · hover 17.34 · agree 9.41
+               (on #ffffff)
+       dark    ink 15.69 · muted 8.04 · stroke 4.14 · hover 15.69 · agree 8.55
+               (on #11161a; the stroke is also 3.64 on --surface-raised and
+               4.05 on --surface, which is the 3:1 a control boundary owes to
+               everything it is adjacent to)
+
+     --window-face is a CHROME token and may be a light-dark() pair. --canvas is
+     not: it is read by the canvas contract and stays a literal (RULE 0). */
+  --window-face: light-dark(#ffffff, #11161a);
+  --window-ink: light-dark(#171b1d, #e9eff2);
+  --window-ink-muted: light-dark(#4e5750, #a3aeb4);
+  --window-stroke: light-dark(#657069, #6f7a80);
+  --window-stroke-hover: light-dark(#171b1d, #e9eff2);
+  --window-agree: light-dark(#24467a, #8fb4e8);
+
+  /* The two machined knobs — the fader carriage and the switch — stay white in
+     both schemes. They are the only parts of the bench that are a physical
+     index rather than a surface: white on the vermilion fill and white on the
+     sunk channel are 3.38:1 and 19.23:1, and a knob that took the dark face
+     would be 1.06:1 against the channel it rides in and simply disappear. */
+  --knob: #ffffff;
 
   /* ---- The one signal colour.
      RUBRICATION RULE — vermilion is spent only on what is current or moving:
@@ -305,6 +349,10 @@
   --s-16: 4rem;
 
   --gutter: 1.5rem;
+  /* How far the tab strip's edge fade reaches. Wide enough that a label caught
+     under it is visibly cut rather than merely dimmed — 10 px was the strip's
+     own inline padding and faded nothing but the padding. */
+  --tabs-fade: 28px;
   --bench-gap: var(--s-6);   /* was a 1 px seam. This one line is most of the fix. */
   --page-max: 100rem;
   /* 24rem: the transport's six controls — Play at 84 px, four 44 px keys, the
@@ -315,12 +363,6 @@
   --rail-w-wide: 26rem;
   --label-col: 8.5rem;
   --measure: 68ch;           /* blurb, chip caption and facts ONLY, never a wrapper */
-  /* The shortest measure the blurb is worth reading at, and the whole of the
-     decision about whether it sits beside the title or under it — see §6. It is
-     a flex basis rather than a grid track, so a line that will not hold both
-     BREAKS instead of squeezing one of them to nothing. In ch of the blurb's
-     own 16 px type, so it scales with the reader's text like the title does. */
-  --blurb-min: 24ch;
 
   /* ------------------------------------------------------------------------
      Control sizes. Desktop default 36 px; the primary action and the transport
@@ -413,6 +455,19 @@
   /* clamp() appears EXACTLY ONCE in this file, and so does text-wrap: balance;
      the two are deliberately not deployed as a set with a prose measure. */
   --title-size: clamp(1.875rem, 1.2rem + 2.4vw, 2.625rem);
+  /* The wordmark, as a RATIO of the visualization title rather than as a size
+     of its own — which is what makes the two a scale instead of two unrelated
+     numbers, and what keeps the second clamp() out of the file.
+
+     It was --t-18: 18 px of wordmark under a 42 px title at 1,440 px, so the
+     name of the site was 43 % of the name of one of its tabs and read as a
+     breadcrumb. 0.78 puts it at 32.8 / 30 / 23.4 px at 1,440 / 1,024 / 375 px —
+     second only to the title in the Archivo scale, ahead of every other word on
+     the page, and still clearly subordinate to the subject of the screen. The
+     40 px hero numeral is larger than both and is meant to be: it is the one
+     number the whole page exists to show, and it is Martian Mono, so it never
+     competes with either of these for the same reading. */
+  --wordmark-size: calc(var(--title-size) * 0.78);
 
   --wght-body: 420;
   --wght-ui: 460;
@@ -471,12 +526,15 @@
   --focus-ring: 2px solid var(--focus-line);
   --focus-offset: 2px;
   --focus-halo: 0 0 0 5px light-dark(rgb(213 54 25 / 0.30), rgb(239 91 51 / 0.32));
-  /* Controls with a WHITE face carry their ring and halo in the fixed canvas
-     vermilion, 4.80:1 on white in both schemes — the same architecture the
-     --window-* family already establishes, applied to focus. The dark chrome
-     accent is only 3.38:1 on white; this has 1.4 more of margin. */
-  --focus-window: #d53619;
-  --focus-halo-window: 0 0 0 5px color-mix(in oklab, #d53619 30%, transparent);
+  /* A window's focus ring is drawn on the window's own face, so it belongs to
+     the --window-* family and moves with it: the canvas vermilion at 4.80:1 on
+     the white face, the lifted chrome vermilion at 5.39:1 on the dark one. */
+  --focus-window: light-dark(#d53619, #ef5b33);
+  /* Written as a light-dark() pair of two rgb()s rather than as a color-mix()
+     of a light-dark(): light-dark() resolves at used-value time and
+     color-mix() at computed-value time, so nesting one inside the other is the
+     kind of thing that either works or silently produces no halo at all. */
+  --focus-halo-window: 0 0 0 5px light-dark(rgb(213 54 25 / 0.30), rgb(239 91 51 / 0.32));
 
   accent-color: var(--accent);
 }
@@ -679,18 +737,21 @@ canvas {
   justify-content: space-between;
   gap: var(--s-4);
   min-height: var(--header-h);
-  padding: var(--s-2) var(--gutter) 0;
+  padding: var(--s-4) var(--gutter) 0;
 }
 
 /* No `white-space: nowrap`: "Math Playground" is two words and the break
-   between them is the one the reader can afford. */
+   between them is the one the reader can afford. The width axis stays at 125 %
+   — it is the wordmark's identity — and the display tracking comes with the
+   size, because 125 % width at 33 px sets loose without it. */
 .masthead__wordmark {
   min-width: 0;
   font-family: var(--font-display);
-  font-size: var(--t-18);
+  font-size: var(--wordmark-size);
   font-weight: 800;
-  line-height: var(--lh-18);
+  line-height: 1.15;
   font-stretch: var(--wdth-wordmark);
+  letter-spacing: var(--tracking-title);
   color: var(--ink);
   text-decoration: none;
 }
@@ -713,24 +774,72 @@ canvas {
 
 /* --------------------------------------------------------------------------
    5  Tab bar
-   A peg row in a sunken trough. Every tab carries a peg on its bottom edge; the
-   vermilion ball rests on the active one. State is read from ARIA alone —
-   there is no class for the shell to desynchronise.
+   A peg row in a sunken trough, with a scroll arrow at each end. Every tab
+   carries a peg on its bottom edge; the vermilion ball rests on the active one.
+   State is read from ARIA alone — there is no class for the shell to
+   desynchronise.
 
-   The strip is the whole navigation at every width. On a narrow screen it
-   scrolls sideways, with the active tab snapped into view by the shell and an
-   edge fade in place of a scrollbar; the arrow keys and the index select that
-   used to sit beside it were three more controls to explain.
+   The strip is the whole navigation at every width, and nine tabs do not fit a
+   1,440 px window, let alone a phone: measured at 1,440 px the row was 1,397 px
+   of content in a 1,345 px box, so the last tab was unreachable with a mouse
+   and there was nothing on screen to say so. It is therefore a real scroller
+   with three ways in — the arrows, a pointer drag, and native touch panning —
+   and two ways of saying there is more: the arrow that exists only while there
+   is somewhere to go, and a fade on the edge the row actually runs past.
+
+   The run labels that used to sit between the tabs ("Randomness", "Chaos") are
+   gone. They were a word to parse before reaching the only thing the strip is
+   for, they took about a fifth of the row at 375 px, and the grouping they
+   expressed is still carried by the registry order and by each tab's
+   accessible name.
+
+   THE ARROWS TAKE ROOM IN THE ROW rather than floating over the tabs. That is
+   what makes the state machine monotone: revealing an arrow can only ever
+   INCREASE the overflow, so there is no width at which showing one removes the
+   reason for it and the pair flickers. Floating them would also put a 44 px
+   opaque key on top of the first and last tab, which are exactly the two the
+   reader is trying to reach.
    -------------------------------------------------------------------------- */
 
 .tabs {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
   padding: var(--s-3) var(--gutter) var(--s-5);
+}
+
+/* The arrows are ordinary keys and take their geometry from §12. They are
+   `hidden` — not disabled — when there is nothing on their side to reach, so
+   they leave the tab order with the reason for them; shell.ts carries the focus
+   off one that vanishes under the reader's own keypress.
+
+   An arrow that has nothing to reach KEEPS ITS BOX. It must: the arrows sit in
+   the same flex row as the scroller, so letting one collapse to `display: none`
+   changes the scroller's clientWidth, which changes scrollWidth − clientWidth,
+   which makes the browser clamp a smooth scroll that is still in flight. The
+   result was a strip that fought the reader — eight arrow presses produced
+   three moves and never reached the last tab, because every press that revealed
+   the other arrow shrank the port it had just scrolled. Reserving the space
+   unconditionally makes the scrollport a constant, which is the only way the
+   arithmetic above it can be stable. `visibility: hidden` still takes the key
+   out of the tab order and out of the accessibility tree, which is the part
+   `hidden` was wanted for. */
+.tabs__arrow {
+  flex: none;
+  width: var(--key-h);
+  padding: 0;
+}
+
+.tabs__arrow[hidden] {
+  display: inline-flex !important;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .tabs__strip {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
   gap: 2px;
   padding: 5px 10px;
@@ -740,50 +849,57 @@ canvas {
   overflow-x: auto;
   overflow-y: hidden;
   scroll-padding-inline: 10px;
+  /* Native panning on touch and pen, which is what makes a swipe work without a
+     line of script; the mouse drag in shell.ts is the other half. */
+  touch-action: pan-x;
   scroll-behavior: smooth;
-  scroll-snap-type: x proximity;
-  /* The scrollbar is gone and an edge fade replaces it. The fade is 10 px — the
-     width of the strip's own inline padding — so nothing sits in it at rest and
-     it only softens the clip when the row genuinely scrolls. */
+  /* No scroll snapping. It fought every one of the three ways in: an arrow step
+     was dragged back to the nearest tab centre, a drag rubber-banded on release,
+     and `scrollIntoView` for the active tab landed somewhere else. */
   scrollbar-width: none;
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 10px,
-    #000 calc(100% - 10px),
-    transparent
-  );
 }
 
 .tabs__strip::-webkit-scrollbar {
   display: none;
 }
 
-.tabs__group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
+/* The fade is the scrollbar's replacement, and it is drawn ONLY on an edge the
+   row genuinely runs past — a permanent fade on both ends softens the first and
+   last tab at a width where nothing is hidden, which says "there is more" when
+   there is not. shell.ts writes data-fade from the measured scroll offset. */
+.tabs__strip[data-fade="none"] {
+  mask-image: none;
 }
 
-/* Space, not a seam. The group label is the separator cue. */
-.tabs__group + .tabs__group {
-  margin-inline-start: var(--s-3);
+.tabs__strip[data-fade="start"] {
+  mask-image: linear-gradient(to right, transparent, #000 var(--tabs-fade));
 }
 
-/* Decoration only: role="presentation" on the run, aria-hidden on this label.
-   A tablist may own nothing but tabs, so the group is carried into assistive
-   technology through each tab's aria-label instead. */
-.tabs__group-label {
-  align-self: center;
-  padding-inline: var(--s-2) var(--s-1);
-  font-family: var(--font-display);
-  font-size: var(--t-12);
-  font-weight: var(--wght-label);
-  line-height: var(--lh-12);
-  font-stretch: var(--wdth-ui);
-  color: var(--ink-muted);
-  white-space: nowrap;
+.tabs__strip[data-fade="end"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--tabs-fade)), transparent);
+}
+
+.tabs__strip[data-fade="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--tabs-fade),
+    #000 calc(100% - var(--tabs-fade)),
+    transparent
+  );
+}
+
+/* While the strip is being dragged the cursor says so and the labels stop
+   selecting — a pan that highlights three tab names as it goes reads as a
+   failed text selection rather than as a pan. */
+.tabs__strip[data-panning] {
+  cursor: grabbing;
+  scroll-behavior: auto;
+  user-select: none;
+}
+
+.tabs__strip[data-panning] .tab {
+  cursor: grabbing;
 }
 
 .tab {
@@ -804,7 +920,6 @@ canvas {
   font-stretch: var(--wdth-ui);
   white-space: nowrap;
   cursor: pointer;
-  scroll-snap-align: center;
   transition:
     color var(--dur-1) var(--ease-std),
     background-color var(--hover-out) var(--ease-std),
@@ -864,6 +979,11 @@ canvas {
   .tab[aria-selected="true"]:hover {
     background-color: var(--surface-raised);
   }
+
+  /* A strip with somewhere to go says so under the cursor, before any press. */
+  .tabs__strip:not([data-fade="none"]) {
+    cursor: grab;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -909,32 +1029,37 @@ canvas {
   flex: 1 0 auto;
 }
 
-/* The title and the blurb share a baseline line when the FIGURE COLUMN has room
-   for both, and the blurb takes a full-width line of its own when it does not.
-   That is a flex line break, and it replaces the `@media (min-width: 64rem)`
-   two-track grid revision 4 used here, which asked the VIEWPORT a question only
-   the figure column and this tab's title could answer. The title's `auto` track
-   was sized by its own 26ch cap and the blurb's `minmax(0, 1fr)` was allowed to
-   reach zero, so a long title took the whole column: measured on
-   Diffusion-Limited Aggregation, the blurb's track was 0 px at 1024, 51 px at
-   1100 and 135 px at 1200, and one word per line made the head 565 / 539 /
-   227 px tall — the plate below the fold at every one of them.
+/* The title and its blurb are ONE BLOCK, stacked, sharing a left edge.
 
-   A wrapping line cannot starve anything: an item whose basis will not fit
-   moves to the next line and is full width there. The decision is then made per
-   tab, per width and per text size, with no number in it but --blurb-min, which
-   is a measure rather than a breakpoint. */
+   They used to share a flex LINE: the blurb sat beside the title while 24ch of
+   it fitted and dropped below when it did not. That was a correct fix for the
+   grid before it — a long title no longer starved the blurb's track — and it
+   was still the wrong shape. Beside the title the blurb is aligned on a
+   BASELINE, which at 42 px against 16 px is the only alignment the two share:
+   their left edges do not line up with each other or with the plate below,
+   their cap heights are 26 px apart, and the pair reads as a heading with a
+   caption jammed into the space left over. It also changed shape per tab and
+   per width — "Chaos" kept its blurb on the line at 1,024 px and
+   "Diffusion-Limited Aggregation" did not — so no two tabs presented their own
+   name the same way.
+
+   Stacked, there is one edge and it is the figure column's: title, blurb,
+   plate and readouts all start at the same x at every width, on every one of
+   the nine tabs, at every text size. The 8 px between them is a heading-to-body
+   step rather than a section gap, which is what makes them read as one block
+   instead of two. Nothing here can starve anything, because there is no longer
+   a line for two items to compete over. */
 .figure__head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: var(--s-6);
-  row-gap: var(--s-2);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
   padding-block: 0;
 }
 
 .figure__title {
-  flex: 0 1 auto;
+  margin: 0;
+  max-width: 26ch;
   font-family: var(--font-display);
   font-size: var(--title-size);
   font-weight: var(--wght-display);
@@ -942,7 +1067,6 @@ canvas {
   font-stretch: var(--wdth-title);
   letter-spacing: var(--tracking-title);
   color: var(--ink);
-  max-width: 26ch;
   text-wrap: balance;
   /* The one place in the page where a single word can be wider than the column
      it is in: "Aggregation" is 363 px at 200 % text and the figure column on a
@@ -958,16 +1082,17 @@ canvas {
   overflow-wrap: anywhere;
 }
 
-/* The basis is the whole condition: the blurb sits beside the title while
-   --blurb-min of it fits on the line and takes its own line otherwise, growing
-   to the column and stopping at the prose measure. The row-gap above replaces
-   the margin-top this rule used to carry, so the stacked case has one owner. */
+/* One measure, and the same left edge as the title. `pretty` rather than
+   `balance`: the blurb is a sentence of body copy and the last-line orphan is
+   what wants fixing, not the shape of the whole paragraph — `balance` is spent
+   on the title above, which is the one place in the file it appears. */
 .figure__blurb {
-  flex: 1 1 var(--blurb-min);
+  margin: 0;
   max-width: var(--measure);
   font-size: var(--t-16);
   line-height: var(--lh-16);
   color: var(--ink-muted);
+  text-wrap: pretty;
 }
 
 /* The plate: white bed, plotter margin, four L-shaped registration marks
@@ -1015,19 +1140,21 @@ canvas {
   box-shadow: var(--e-plate);
 
   /* ------------------------------------------------------------------------
-     RULE 0 — the canvas contract, pinned UNCONDITIONALLY in both schemes.
+     RULE 0 — the canvas contract, written as LITERAL HEX, once per scheme.
 
      core/canvas.ts reads these thirteen properties off the stage (which
-     inherits from .plate) with getComputedStyle and hands them to
+     inherits from .plate) with getComputedStyle and hands them straight to
      ctx.fillStyle. An unregistered custom property is not resolved at
-     computed-value time, so a light-dark() or a color-mix() here would arrive
-     at the canvas as literal text and paint nothing. They are pinned rather
-     than restated under [data-theme="dark"] so the pens are scheme-independent
-     BY CONSTRUCTION rather than by a restatement someone has to remember.
+     computed-value time, so a light-dark() or a color-mix() HERE would arrive
+     at the canvas as the literal string "light-dark(#ffffff, #0e1214)" and
+     paint nothing at all. That is why the dark values below are a restatement
+     under an attribute selector and not a pair: light-dark() is for chrome.
 
-     These are exactly the values revision 2 certified, so the CVD validation
-     (adjacent-pair separation dE 18.7 protan, dE 24.4 normal vision, every pen
-     >= 3:1 on the white plate) carries over with nothing to re-run.
+     The white bed was the identity of revision 3 and the owner has now rejected
+     it twice — a white plate is what makes the dark scheme read as a light page
+     with a dark frame. Revision 5 gives the dark scheme its own bed and its own
+     pens, and because every visualization paints from ctx.theme and none of
+     them holds a colour of its own, this block recolours all nine canvases.
      ------------------------------------------------------------------------ */
   --canvas: #ffffff;
   --ink: #171b1d;
@@ -1042,6 +1169,69 @@ canvas {
   --canvas-label-font: 500 11px "Martian Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --canvas-line-width: 1;
   --canvas-particle-radius: 2;
+}
+
+/* ----------------------------------------------------------------------------
+   The dark bed. Measured against the #0e1214 ground, WCAG 2.x relative
+   luminance:
+
+     ink        16.68   grid       10.35   data-1  5.57   data-3-fill  1.44
+     ink-muted   8.90   grid-soft   4.22   data-2  8.84   accent       5.57
+                                           data-3  5.23
+
+   Every pen clears the 3:1 a non-text graphical object owes its background and
+   both inks clear 4.5:1 as text. --data-3-fill is deliberately BELOW 3:1 — it
+   is the opaque wash an area is filled with, not a mark, and the conformant
+   object is the --data-3 silhouette over it. What the wash has to carry is the
+   particles drawn ON it: --data-1 measures 3.86 against it, --data-2 6.13 and
+   --data-3 3.63, all of them better than the same three on the light scheme's
+   own wash (3.27 / 6.41 / 2.46).
+
+   Pen separation, CIE76 dE, normal vision then the three dichromacies
+   (Machado 2009 at full severity):
+
+     data-1 / data-2   99.1   74.3   87.7   107.7
+     data-1 / data-3   79.3   40.4   55.6    88.1
+     data-2 / data-3   35.5   35.1   35.7    25.0
+
+   The tightest pair is data-2 against data-3 under tritanopia at 25, against
+   the light scheme's 30 for the same pair — the same order, and it is why
+   --data-3 is a grey-green at L*57 rather than the teal that reads better in
+   isolation: the blue and the tertiary have to differ in LIGHTNESS, because
+   tritanopia takes the axis they otherwise differ on.
+
+   Both selectors, because the scheme can arrive two ways. shell.ts writes
+   data-theme on <html> in both directions at startup, so the first rule is the
+   one that fires in the app; the media query covers a document that renders
+   before that line runs, or without it.
+   ---------------------------------------------------------------------------- */
+
+:root[data-theme="dark"] .plate {
+  --canvas: #0e1214;
+  --ink: #edf2f4;
+  --ink-muted: #a9b4ba;
+  --grid: #b6c2c8;
+  --grid-soft: #6e797f;
+  --data-1: #ef5b33;
+  --data-2: #8fb4e8;
+  --data-3: #7c8a85;
+  --data-3-fill: #2a3236;
+  --accent: #ef5b33;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .plate {
+    --canvas: #0e1214;
+    --ink: #edf2f4;
+    --ink-muted: #a9b4ba;
+    --grid: #b6c2c8;
+    --grid-soft: #6e797f;
+    --data-1: #ef5b33;
+    --data-2: #8fb4e8;
+    --data-3: #7c8a85;
+    --data-3-fill: #2a3236;
+    --accent: #ef5b33;
+  }
 }
 
 /* The canvas host. core/canvas.ts adds .stage and positions the two canvases;
@@ -1067,41 +1257,39 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   7  Share
-   One small key under the plate, right-aligned, that copies the permalink.
-   Its label changes while it confirms, so it has a reserved width and grows
-   leftward from the edge it is pinned to — nothing else on the row moves.
+   7  Permalink
+   There is no Share key any more. It copied to the clipboard what the address
+   bar already held, which is one control to find, explain and keep honest on
+   every one of the nine tabs — its confirmation had to be invalidated on a
+   route change, on a parameter change and on a preset, and the clipboard write
+   it vouched for could still settle behind a permission chip after the link had
+   moved. The link is in the address bar; the reader knows where that is.
+
+   What the key was also doing, quietly, is naming the run on a printed page.
+   That survives as an attribute on an element that paints nothing on screen and
+   is rendered by §16c alone.
    -------------------------------------------------------------------------- */
 
-.share {
-  display: flex;
-  justify-content: flex-end;
-  /* 16 px under the plate — closer than the 24 px section rhythm, because the
-     key belongs to its figure. It stays clear of the plate's 12 px mat, which
-     is a shadow and takes no layout space. */
-  margin-top: calc(-1 * var(--s-2));
-}
-
-.share__key {
-  min-width: 7.5rem;
-}
-
-.share__key[data-state="done"] {
-  color: var(--accent-text);
+.permalink {
+  display: none;
 }
 
 /* --------------------------------------------------------------------------
    8  Readouts
-   One white window holding the headline number, its plain-language label and
-   one sentence — and under it a disclosure with the exact Measured / Analytic
-   / Error table.
+   ONE window: the headline number, its plain-language label and one sentence.
+
+   The "Show the exact numbers" disclosure that used to sit under it is gone,
+   and the Measured / Analytic / Error table it opened went with it. The table
+   itself is still BUILT — it is the accessible representation of a canvas
+   nothing else describes, and the hero shows one of a tab's five or six
+   readings — so it is clipped out of the visual layer here and rendered again
+   by §16c, where the page is a printed handout rather than a bench.
 
    THE REGION IS FROZEN. It is layout-contained with a floor on its height, the
-   window's three lines have FIXED heights and never wrap, the number sits in
-   a box the shell reserves from the digits the reading can need, and the
-   table has fixed columns. A digit changing lays out nothing outside its own
-   glyph box; that is the whole contract with the plate above and the page
-   below.
+   window's three lines have FIXED heights and never wrap, and the number sits
+   in a box the shell reserves from the digits the reading can need. A digit
+   changing lays out nothing outside its own glyph box; that is the whole
+   contract with the plate above and the page below.
    -------------------------------------------------------------------------- */
 
 .readouts {
@@ -1109,10 +1297,26 @@ canvas {
   gap: var(--s-4);
   align-content: start;
   contain: layout;
-  /* The window plus the disclosure line, so the region is the same height
-     empty, settling and finished. Opening the disclosure is the reader's own
-     act and is allowed to grow it. */
-  min-height: calc(var(--hero-h) + var(--s-4) + var(--key-h));
+  /* The window alone now: with the disclosure line gone there is nothing else
+     in the region, and the height is the same empty, settling and finished. */
+  min-height: var(--hero-h);
+}
+
+/* The ledger, clipped rather than removed. `visually-hidden`'s construction —
+   1 px, clipped, not display:none and not visibility:hidden — is the one that
+   keeps a table in the accessibility tree while taking it out of the layout.
+   §16c gives it back its size for print. */
+.readouts__ledger {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .hero {
@@ -1128,7 +1332,7 @@ canvas {
   min-height: var(--hero-h);
   padding: var(--s-4) var(--s-5);
   border-radius: var(--radius-3);
-  background: var(--canvas);
+  background: var(--window-face);
   box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   color: var(--window-ink);
 }
@@ -1225,63 +1429,6 @@ canvas {
 
 .hero[data-state="agree"] .hero__verdict {
   color: var(--window-agree);
-}
-
-/* The disclosure. A solid triangle, not a stroked chevron; the label is
-   constant so the line's width never changes. */
-.exact__summary {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: var(--key-h);
-  padding: 0 var(--s-3);
-  border-radius: var(--radius-3);
-  list-style: none;
-  font-family: var(--font-display);
-  font-size: var(--t-13);
-  font-weight: var(--wght-ui);
-  line-height: var(--lh-13);
-  font-stretch: var(--wdth-ui);
-  color: var(--ink-muted);
-  cursor: pointer;
-  user-select: none;
-  transition:
-    color var(--dur-1) var(--ease-std),
-    background-color var(--hover-out) var(--ease-std);
-}
-
-.exact__summary::-webkit-details-marker {
-  display: none;
-}
-
-.exact__summary::before {
-  content: "";
-  width: 0;
-  height: 0;
-  border-block: 5px solid transparent;
-  border-inline-start: 6px solid currentColor;
-  transition: rotate var(--dur-2) var(--ease-std);
-}
-
-.exact[open] > .exact__summary::before {
-  rotate: 90deg;
-}
-
-.exact__summary:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .exact__summary:hover {
-    color: var(--ink);
-    background-color: var(--wash-1);
-    transition-duration: var(--hover-in);
-  }
-}
-
-.exact > .ledger-wrap {
-  margin-top: var(--s-3);
 }
 
 /* The table, in its own scroller: three fixed columns will not fit a 220 px
@@ -1614,17 +1761,20 @@ canvas {
 }
 
 /* Transport. The cluster is a 5 px-padded group at --radius-4 holding 11 px
-   keys — concentric, and it makes the speed picker's separation read as intent
+   keys — concentric, and it makes the speed control's separation read as intent
    rather than as a gap in a strip. Revision 2's `margin-inline: -1px` shared
    seams were a Motif idiom.
 
-   IN THE RAIL IT WRAPS. Six controls want 342 px and a 24rem rail gives 344 px
-   of panel; that is two pixels of headroom, and a font that measures
-   differently would push the picker out of the panel rather than onto a second
-   row. Wrapping is the only version of this that cannot overflow HERE, because
-   the panel grows with it. In the handheld deck the panel does not grow — the
-   deck is a fixed --deck-h and the page's clearances are calc()s of it — so
-   §15 turns wrapping off and lets the row scroll instead. */
+   EVERY KEY NOW CARRIES ITS NAME IN WORDS. They were 44 px glyph squares whose
+   names lived in `aria-label` and a `title` tooltip, and the owner reported
+   three of the five as broken: nothing on a key said what it would do, and a
+   tooltip only reaches a mouse that has already guessed. Five labelled keys do
+   not fit one 344 px rail, which is exactly what the wrap below is for — the
+   panel grows and the cluster becomes two rows.
+
+   IN THE RAIL IT WRAPS. In the handheld deck the panel does NOT grow — the deck
+   is a fixed --deck-h and the page's clearances are calc()s of it — so §15
+   turns wrapping off and lets the row scroll instead. */
 .transport {
   display: flex;
   flex-wrap: wrap;
@@ -1656,9 +1806,6 @@ canvas {
   border-radius: var(--radius-3);   /* group 16 − 5 padding = 11: concentric */
 }
 
-.transport .key--icon {
-  width: var(--key-h-lg);
-}
 
 /* Fast-forward while held is aria-pressed; a ghost key needs the ring back to
    say so. */
@@ -1668,23 +1815,104 @@ canvas {
 
 /* Reserved for the wider of its two labels, so Play ↔ Pause moves nothing. */
 .transport__play {
-  min-width: 5.25rem;
+  min-width: 5.5rem;
 }
 
-/* The speed picker sits apart from the key cluster — it sets a rate, it does
-   not transport anything. Two classes, because `.select` in §13 is a full-width
-   form control at the same specificity and later in the file; a single class
-   here loses and the picker grows to 300 px, which crushes the icon keys to
-   their glyphs. */
-.select.transport__speed {
-  flex: none;
-  width: auto;
-  min-width: 3.25rem;
+/* The name beside the glyph. It is the key's own type and takes the UI width
+   axis like every other label on the bench. */
+.key__name {
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  font-weight: var(--wght-ui);
+  line-height: var(--lh-13);
+  font-stretch: var(--wdth-ui);
+}
+
+/* ---- The speed control -----------------------------------------------------
+   Five fixed rates, all five visible, with the selected one carried by a single
+   tile that TRAVELS between them.
+
+   It was a bare <select>: four of the five choices hidden behind a press, the
+   operating system's own menu painted over the bench, and nothing to discover
+   inside it — the whole set is five characters wide. A segmented control shows
+   the range, shows where in it the run is, and is a radio group, so the arrow
+   keys move the selection the way they do in every other segmented control.
+
+   The tile is ONE slot wide and moves by a translate of a percentage of its own
+   width, which is exact because the columns are `repeat(n, 1fr)` and therefore
+   equal at any width and any text size. Nothing lays out when the selection
+   moves, and the labels sit above the tile so their ink never animates.
+
+   Its basis is 11rem and it grows: in the 344 px rail the four transport keys
+   fill the first line and this shares the second with Shuffle, and where even
+   that will not fit it takes a line of its own. The old picker had `width:
+   auto` against a `.select` that wanted 100 %, and lost the specificity fight
+   often enough to need two class names — a control with a real basis cannot
+   have that argument. */
+.segmented {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--seg-n, 5), minmax(0, 1fr));
+  align-items: stretch;
+  flex: 1 1 11rem;
+  min-width: 0;
   height: var(--key-h-lg);
-  margin-inline-start: auto;
-  padding-inline: var(--s-2) 24px;
-  background-position: right 7px center;
+  padding: 3px;
   border-radius: var(--radius-3);
+  background: var(--surface);
+  box-shadow: inset var(--ring-strong);
+}
+
+/* The travelling tile. `translate` and nothing else — a `left` here would lay
+   out five columns on every press. */
+.segmented__tile {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--seg-n, 5));
+  border-radius: calc(var(--radius-3) - 3px);
+  background: var(--surface-raised);
+  box-shadow: var(--ring-strong), var(--e-1);
+  translate: calc(var(--seg-i, 1) * 100%) 0;
+  transition: translate var(--dur-3) var(--ease-std);
+}
+
+.segmented__option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius-3) - 3px);
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-13);
+  font-weight: 500;
+  font-stretch: var(--wdth-mono-dense);
+  letter-spacing: var(--tracking-mono);
+  font-variant-numeric: var(--num);
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-std);
+}
+
+.segmented__option[aria-checked="true"] {
+  color: var(--ink);
+}
+
+.segmented__option:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+  box-shadow: var(--focus-halo);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .segmented__option:hover:not([aria-checked="true"]) {
+    color: var(--ink);
+  }
 }
 
 /* Generated controls: one row per ParamSpec, separated by space.
@@ -1861,7 +2089,7 @@ canvas {
   font-variant-numeric: var(--num);
   text-align: right;
   color: var(--window-ink);
-  background: var(--canvas);
+  background: var(--window-face);
   box-shadow: 0 0 0 1px var(--window-stroke), var(--e-1);
   white-space: nowrap;
   transition: box-shadow var(--dur-2) var(--ease-tactile);
@@ -1999,12 +2227,12 @@ input.window:disabled {
 }
 
 /* 32 px of ink, 44 px of target — by the DEFICIT in the block axis, and in the
-   inline axis not by an overhang at all. These keys carry a word ("Copy link",
-   a preset name) and every one of them is already wider than 44 px, so `inset-
-   inline: 0` costs nothing and keeps the invisible box off the axis the page
-   edge is on; the min-width is the floor for a key that one day is not, and it
-   is on the ::after rather than on the key so it cannot silently overrule the
-   width .share__key reserves for its two labels. */
+   inline axis not by an overhang at all. These keys carry a word (a preset
+   name) and every one of them is already wider than 44 px, so `inset-inline: 0`
+   costs nothing and keeps the invisible box off the axis the page edge is on;
+   the min-width is the floor for a key that one day is not, and it is on the
+   ::after rather than on the key so it cannot silently overrule a width the key
+   itself reserves. */
 .key--small::after {
   content: "";
   position: absolute;
@@ -2186,7 +2414,7 @@ input.window:disabled {
   border-radius: var(--carriage-r);
   background:
     linear-gradient(var(--accent), var(--accent)) 50% 50% / var(--index-w) var(--index-h) no-repeat,
-    var(--canvas);
+    var(--knob);
   box-shadow:
     calc(-1 * var(--range-w)) 0 0 calc(var(--range-w) - var(--thumb) / 2) var(--accent),
     0 1px 2px var(--shade-4),
@@ -2203,7 +2431,7 @@ input.window:disabled {
   border-radius: var(--carriage-r);
   background:
     linear-gradient(var(--accent), var(--accent)) 50% 50% / var(--index-w) var(--index-h) no-repeat,
-    var(--canvas);
+    var(--knob);
   box-shadow: 0 1px 2px var(--shade-4), var(--bevel);
   cursor: grab;
   transition: scale var(--dur-2) var(--ease-tactile);
@@ -2325,9 +2553,14 @@ input.window:disabled {
 
 /* 13.3  Select — a display window with a solid index mark. The mark is a filled
    10 x 6 triangle: the deliberate opposite of the 12 px, 1.5 px, round-cap,
-   round-join chevron that is the Radix / Lucide / Feather house mark. It is a
-   data URI rather than currentColor because a select's face is white in BOTH
-   schemes, so the mark's colour is a constant by construction. */
+   round-join chevron that is the Radix / Lucide / Feather house mark.
+
+   A data URI cannot be given a custom property and `light-dark()` has no image
+   form, so the mark is the one thing in the file that has to be restated per
+   scheme rather than tokenised — two rules below, whose only difference is the
+   fill. Left alone it was #171B1D on the dark scheme's #11161a face: a
+   near-black triangle on a near-black window, which is how a select ends up
+   with no indicator at all. */
 .select {
   appearance: none;
   -webkit-appearance: none;
@@ -2343,7 +2576,7 @@ input.window:disabled {
   line-height: var(--lh-13);
   font-stretch: var(--wdth-ui);
   color: var(--window-ink);
-  background-color: var(--canvas);
+  background-color: var(--window-face);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23171B1D' d='M0 0h10L5 6z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 11px center;
@@ -2371,7 +2604,7 @@ input.window:disabled {
 .select optgroup {
   font-family: var(--font-display);
   color: var(--window-ink);
-  background: var(--canvas);
+  background: var(--window-face);
 }
 
 .select optgroup {
@@ -2382,6 +2615,19 @@ input.window:disabled {
 @media (hover: hover) and (pointer: fine) {
   .select:hover:not(:disabled) {
     box-shadow: 0 0 0 1px var(--window-stroke-hover), var(--e-1);
+  }
+}
+
+/* The index mark, in the dark scheme's window ink. Both selectors, for the same
+   reason the plate has both: the attribute is what shell.ts writes, the media
+   query is what a document renders under before it runs. */
+:root[data-theme="dark"] .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23E9EFF2' d='M0 0h10L5 6z'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath fill='%23E9EFF2' d='M0 0h10L5 6z'/%3E%3C/svg%3E");
   }
 }
 
@@ -2403,7 +2649,7 @@ input.window:disabled {
     padding: 4px;
     border: 0;
     border-radius: var(--radius-3);
-    background: var(--canvas);
+    background: var(--window-face);
     box-shadow: 0 0 0 1px var(--window-stroke), var(--e-3);
     opacity: 0;
     transition:
@@ -2430,7 +2676,7 @@ input.window:disabled {
     font-weight: var(--wght-label);
     font-stretch: var(--wdth-ui);
     color: var(--window-ink-muted);
-    background: var(--canvas);
+    background: var(--window-face);
   }
 
   .select option {
@@ -2442,12 +2688,12 @@ input.window:disabled {
     line-height: var(--lh-13);
     font-stretch: var(--wdth-display);
     color: var(--window-ink);
-    background: var(--canvas);
+    background: var(--window-face);
   }
 
   .select option:checked {
     background: var(--window-ink);
-    color: var(--canvas);
+    color: var(--window-face);
   }
 
   .select option::checkmark {
@@ -2502,7 +2748,7 @@ input.window:disabled {
   width: var(--switch-knob);
   height: var(--switch-knob);
   border-radius: var(--radius-thumb);
-  background: var(--canvas);
+  background: var(--knob);
   box-shadow: 0 0 0 1px var(--ring-c-2), 0 1px 2px var(--shade-3);
   /* TRANSLATE, never `left`. */
   transition:
@@ -2621,11 +2867,6 @@ input.window:disabled {
     order: 2;
   }
 
-  .share {
-    order: 3;
-    margin-top: 0;
-  }
-
   .transport {
     order: 4;
   }
@@ -2729,8 +2970,13 @@ input.window:disabled {
     min-width: 4.5rem;
   }
 
-  .select.transport__speed {
-    min-width: 3.25rem;
+  /* In the deck the cluster cannot wrap, so the speed control loses its
+     full-width basis and becomes one more item on the scrolling row. Thirteen
+     rem is five 2.6rem slots, which holds "0.5×" at the default text size and
+     scrolls rather than shrinking past it. */
+  .segmented.transport__speed {
+    flex: none;
+    width: 13rem;
     margin-inline-start: var(--s-1);
   }
 
@@ -2919,6 +3165,8 @@ input.window:disabled {
     --accent-text: LinkText;
     --agree: LinkText;
     --focus-line: Highlight;
+    --window-face: Canvas;
+    --knob: Canvas;
     --window-ink: CanvasText;
     --window-ink-muted: CanvasText;
     --window-stroke: CanvasText;
@@ -2942,9 +3190,21 @@ input.window:disabled {
   .fact,
   .rail__panel,
   .transport,
+  .segmented,
   .stepper,
   .tabs__strip {
     border: 1px solid CanvasText;
+  }
+
+  /* The travelling tile is the ONLY thing that says which rate is selected, and
+     a box-shadow ring is not rendered here. It becomes a filled Highlight block
+     with its labels flipped, which is the system's own "chosen" pairing. */
+  .segmented__tile {
+    background: Highlight;
+  }
+
+  .segmented__option[aria-checked="true"] {
+    color: HighlightText;
   }
 
   /* Its OWN rule, never comma-joined with the list above: one unrecognised
@@ -2960,6 +3220,13 @@ input.window:disabled {
 
   .tab[aria-selected="true"] {
     border: 1px solid Highlight;
+  }
+
+  /* The fade is a mask, and a mask on a scroller in forced colors hides the
+     first and last label behind a gradient the reader did not ask for. The
+     arrows are what says there is more here. */
+  .tabs__strip {
+    mask-image: none;
   }
 
   /* `background` is a SHORTHAND: it resets background-image to none, and on
@@ -3020,7 +3287,7 @@ input.window:disabled {
     --ink: ButtonText;
     --surface-sunk: ButtonFace;
     --accent: Highlight;
-    --canvas: ButtonFace;
+    --knob: ButtonFace;
     --window-stroke: ButtonText;
   }
 
@@ -3084,8 +3351,14 @@ input.window:disabled {
    16c  Print
    The page is a titled figure, its headline reading, the table of measurements
    against analytic targets, and two sourced facts. That is a handout.
-   Everything a reader cannot operate on paper comes off, the exact table is
-   opened, and the permalink is printed where the Share key was.
+   Everything a reader cannot operate on paper comes off, the ledger is given
+   back its size, and the permalink is printed under the plate so the sheet
+   names the run it shows.
+
+   The plate is forced back to its light bed whatever scheme the screen was in:
+   #0e1214 is 96 % ink coverage on paper and the pens on it are invisible in
+   greyscale. The canvas tokens are restated as literals for the same reason
+   they are literals everywhere — ctx.fillStyle is handed the computed string.
    -------------------------------------------------------------------------- */
 
 @media print {
@@ -3094,23 +3367,46 @@ input.window:disabled {
     --surface: #ffffff;
     --surface-raised: #ffffff;
     --surface-sunk: #ffffff;
+    --window-face: #ffffff;
+    --window-ink: #000000;
+    --window-ink-muted: #000000;
     --mat: transparent;
     --line: #000000;
     --viz-max-h: 4in;
+  }
+
+  .plate {
+    --canvas: #ffffff;
+    --ink: #171b1d;
+    --ink-muted: #4e5750;
+    --grid: #23292b;
+    --grid-soft: #8a938f;
+    --data-1: #d53619;
+    --data-2: #24467a;
+    --data-3: #7f8985;
+    --data-3-fill: #d2d6d4;
+    --accent: #d53619;
   }
 
   .tabs,
   .transport,
   .controls,
   .story__row,
-  .share__key,
-  .exact__summary,
   .theme-toggle {
     display: none !important;
   }
 
-  .exact > .ledger-wrap {
-    display: block;
+  /* Out of the clip and back into the flow: on paper the table of measurements
+     against their analytic targets is the point of the handout. */
+  .readouts__ledger {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: var(--s-3) 0 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
   }
 
   .page,
@@ -3138,10 +3434,17 @@ input.window:disabled {
     break-inside: avoid;
   }
 
-  .share::after {
-    content: attr(data-permalink);
+  .permalink {
+    display: block;
+    margin-top: var(--s-2);
     font-family: var(--font-mono);
     font-size: var(--t-11);
+    color: #000000;
+    overflow-wrap: anywhere;
+  }
+
+  .permalink::after {
+    content: attr(data-permalink);
   }
 
   .ledger-wrap {

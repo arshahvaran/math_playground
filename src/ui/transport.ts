@@ -1,6 +1,6 @@
 /**
  * The transport cluster: Play/Pause, Step, Fast-forward, Reset, Shuffle, and
- * the speed picker.
+ * the speed control.
  *
  * Play/Pause is one key that swaps its label and its glyph, and it carries **no**
  * `aria-pressed`: it is not a toggle whose "off" state is a different mode, it is
@@ -9,6 +9,14 @@
  * the CSS reads to turn the cluster's ring vermilion — the one place on the page
  * where colour reports a state, backed by the Pause label saying the same thing
  * in words.
+ *
+ * **Every key carries its name in words.** They were glyph-only, with the name
+ * in `aria-label` and a `title` tooltip, and the owner's report of the bench is
+ * the whole argument against that: three of the five keys were read as broken
+ * because nothing on them said what they would do and the tooltip only appears
+ * to a mouse that already guessed. A five-key transport is not a media player
+ * everyone has used since 1985 — Step and Fast-forward mean something specific
+ * here — so the glyph is the mark and the word is the name.
  *
  * Shuffle is where the seed went. The rail no longer carries a seed field —
  * a thirty-two-bit integer is not a control a newcomer can do anything with —
@@ -50,6 +58,21 @@ export const SPEEDS: readonly number[] = [0.5, 1, 2, 4, 8];
 
 /** Holding Fast-forward keeps skipping — one burst per press would be a stutter. */
 const HOLD_REPEAT_MS = 100;
+
+/**
+ * Engine ticks one press of Step advances.
+ *
+ * The engine's own `stepOnce()` is exactly one fixed timestep, 1/120 s of
+ * simulated time, and that is the right unit for the *engine*. It is the wrong
+ * unit for a key: measured on the shipped defaults, one tick lands 0.2 of a
+ * Galton ball and moves the coupled oscillators' order parameter by less than
+ * the fourth significant figure the readouts print, so pressing Step changed
+ * nothing on screen on two of the nine tabs and the key read as dead. Twelve
+ * ticks is a tenth of a second of simulated time — still a discrete, repeatable
+ * quantum a reader can count, and the smallest one that moves a reading on
+ * every tab in the registry.
+ */
+export const STEP_TICKS = 12;
 
 /**
  * A held key is re-armed from the end of the burst it just ran, never from a
@@ -132,6 +155,24 @@ export function createPressGuard(
   };
 }
 
+/**
+ * Only the gesture that activates a button starts a hold. A secondary or middle
+ * press is not an activation in any platform's button semantics, and binding it
+ * fired a burst, armed the repeat and announced `aria-pressed` for a right-click
+ * that was on its way to the context menu — which no listener would have ended.
+ * A pointer whose `button` or `isPrimary` the environment does not report is
+ * treated as primary: the property being absent is not evidence of a secondary
+ * press.
+ *
+ * Exported because the tab strip holds its arrows the same way, and one
+ * definition of "was that an activation?" is what keeps the two answering alike.
+ */
+export function isPrimaryPress(event: PointerEvent): boolean {
+  const button = (event as Partial<PointerEvent>).button;
+  const primary = (event as Partial<PointerEvent>).isPrimary;
+  return (button === undefined || button === 0) && primary !== false;
+}
+
 export function createTransport(
   host: HTMLElement,
   cb: TransportCallbacks,
@@ -163,25 +204,43 @@ export function createTransport(
     },
   });
 
-  const step = iconKey('transport__step', 'Step', () => cb.onStep(), 'M2 2 L9.5 8 L2 14 Z', 'M11.5 2h2.5v12h-2.5z');
+  // Skip-to-next: a triangle against a bar. One press advances the simulation by
+  // STEP_TICKS and paints, which is what makes it visible at all.
+  const step = namedKey(
+    'transport__step',
+    'Step',
+    () => {
+      for (let i = 0; i < STEP_TICKS; i++) cb.onStep();
+    },
+    'M2 2 L10 8 L2 14 Z',
+    'M11.5 2h2.5v12h-2.5z',
+  );
 
   const ff = h(
     'button',
     {
-      class: 'key key--icon transport__ff',
+      class: 'key transport__ff',
       type: 'button',
+      // The visible word is the accessible name; the attribute restates it so
+      // the two can never drift, which is SC 2.5.3 read forwards.
       'aria-label': 'Fast-forward',
       title: 'Fast-forward',
       'aria-pressed': 'false',
     },
     glyph('M1 2 L7.5 8 L1 14 Z', 'M8.5 2 L15 8 L8.5 14 Z'),
+    h('span', { class: 'key__name' }, 'Fast-forward'),
   );
 
-  const reset = iconKey('transport__reset', 'Reset', () => cb.onReset(), 'M2 2h2.5v12H2z', 'M14 2 L6.5 8 L14 14 Z');
+  // A circular arrow. `RESET_GLYPH` documents the arithmetic behind the path,
+  // which is a 300° annular sector with a solid head on its leading edge — the
+  // one mark everybody reads as "start again". The skip-to-start bar-and-
+  // triangle it replaces is a *transport* symbol, and this key does not rewind
+  // a recording, it throws the run away and begins another.
+  const reset = namedKey('transport__reset', 'Reset', () => cb.onReset(), ...RESET_GLYPH);
 
   // A die: a hollow square with three pips on the diagonal. Even-odd fill, so
   // the pips and the hollow are holes in one solid shape rather than strokes.
-  const shuffle = iconKey('transport__shuffle', 'Shuffle', () => cb.onShuffle(), {
+  const shuffle = namedKey('transport__shuffle', 'Shuffle', () => cb.onShuffle(), {
     d:
       'M2 2h12v12H2zm1.5 1.5v9h9v-9z' +
       'M5.5 4.2a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6z' +
@@ -190,19 +249,13 @@ export function createTransport(
     'fill-rule': 'evenodd',
   });
 
-  const speedId = `transport-speed-${++uid}`;
-  const speed = h('select', { class: 'select transport__speed', id: speedId, title: 'Speed' });
-  for (const multiplier of SPEEDS) {
-    speed.append(h('option', { value: String(multiplier) }, `${multiplier}×`));
-  }
-  speed.value = '1';
-  speed.addEventListener('change', () => cb.onSpeed(Number(speed.value)));
+  const speed = createSegmented((multiplier) => cb.onSpeed(multiplier));
 
   host.append(play, step, ff, reset);
   // A visualization with no seed has nothing to shuffle, and a key that cannot
   // change anything is worse than no key.
   if (opts.seeded) host.append(shuffle);
-  host.append(h('label', { class: 'visually-hidden', for: speedId }, 'Speed'), speed);
+  host.append(speed.root);
 
   // --- Fast-forward, held ---------------------------------------------------
 
@@ -244,21 +297,6 @@ export function createTransport(
     heldPress.end(
       event.type !== 'pointercancel' && target instanceof Node && ff.contains(target),
     );
-  }
-
-  /**
-   * Only the gesture that activates a button starts a hold. A secondary or
-   * middle press is not an activation in any platform's button semantics, and
-   * binding it fired a burst, armed the repeat and announced `aria-pressed` for
-   * a right-click that was on its way to the context menu — which no listener
-   * would have ended. A pointer whose `button` or `isPrimary` the environment
-   * does not report is treated as primary: the property being absent is not
-   * evidence of a secondary press.
-   */
-  function isPrimaryPress(event: PointerEvent): boolean {
-    const button = (event as Partial<PointerEvent>).button;
-    const primary = (event as Partial<PointerEvent>).isPrimary;
-    return (button === undefined || button === 0) && primary !== false;
   }
 
   ff.addEventListener('pointerdown', (event) => {
@@ -305,7 +343,7 @@ export function createTransport(
     clear(play);
     play.append(
       playing ? glyph('M3 2h3.5v12H3z', 'M9.5 2H13v12H9.5z') : glyph('M3 2 L13 8 L3 14 Z'),
-      playing ? 'Pause' : 'Play',
+      h('span', { class: 'key__name' }, playing ? 'Pause' : 'Play'),
     );
     play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     host.dataset['running'] = playing ? 'true' : 'false';
@@ -316,24 +354,175 @@ export function createTransport(
   return {
     setPlaying,
     setSpeed(mult) {
-      const nearest = SPEEDS.reduce(
-        (best, candidate) => (Math.abs(candidate - mult) < Math.abs(best - mult) ? candidate : best),
-        SPEEDS[0] ?? 1,
-      );
-      speed.value = String(nearest);
+      speed.set(mult);
     },
     destroy() {
       endHold();
       heldPress.end(false);
       document.removeEventListener('pointerup', onPointerRelease);
       document.removeEventListener('pointercancel', onPointerRelease);
+      speed.destroy();
       clear(host);
     },
   };
 }
 
-/** A ghost key carrying only a glyph. The name is the label, and the tooltip repeats it for a mouse. */
-function iconKey(
+// ---------------------------------------------------------------------------
+// The speed control
+// ---------------------------------------------------------------------------
+
+interface Segmented {
+  root: HTMLElement;
+  set(multiplier: number): void;
+  destroy(): void;
+}
+
+/**
+ * Five fixed rates as a segmented control.
+ *
+ * A `<select>` was the wrong instrument for this: it hides four of the five
+ * choices behind a press, it renders as the operating system's own menu rather
+ * than as part of the bench, and there is nothing to discover in it — the whole
+ * set is five characters wide and fits on the row. A radio group shows all five,
+ * says which one is in force without being opened, and gets its keyboard model
+ * from the platform pattern rather than from a listbox nobody can see.
+ *
+ * The selection is a single travelling tile behind the labels — `--seg-i` is the
+ * index and the tile is one slot wide, so the move is a `translate` of a
+ * percentage of its own width and nothing lays out. The columns are equal by
+ * construction (`repeat(n, 1fr)` in §11), which is what makes that arithmetic
+ * exact at any width and any text size.
+ */
+function createSegmented(onChange: (multiplier: number) => void): Segmented {
+  const options: HTMLButtonElement[] = [];
+  let index = SPEEDS.indexOf(1);
+  if (index < 0) index = 0;
+
+  const tile = h('span', { class: 'segmented__tile', 'aria-hidden': 'true' });
+
+  const root = h('div', {
+    class: 'segmented transport__speed',
+    role: 'radiogroup',
+    'aria-label': 'Speed',
+  });
+  root.append(tile);
+  root.style.setProperty('--seg-n', String(SPEEDS.length));
+
+  for (const [i, multiplier] of SPEEDS.entries()) {
+    const option = h(
+      'button',
+      {
+        class: 'segmented__option',
+        type: 'button',
+        role: 'radio',
+        'aria-checked': 'false',
+        tabindex: '-1',
+        'aria-label': `${multiplier} times speed`,
+      },
+      `${multiplier}×`,
+    );
+    option.addEventListener('click', () => commit(i, false));
+    options.push(option);
+    root.append(option);
+  }
+
+  /**
+   * Arrows move the selection, not just the focus: that is the radio-group
+   * model, and it is the one a reader gets from every other segmented control.
+   * Home and End are the ends of the range rather than of the widget, which here
+   * are the same thing.
+   */
+  function onKeyDown(event: KeyboardEvent): void {
+    let next: number | null = null;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        next = index + 1;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        next = index - 1;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = SPEEDS.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const count = SPEEDS.length;
+    commit(((next % count) + count) % count, true);
+  }
+
+  root.addEventListener('keydown', onKeyDown);
+
+  /** Write the selection. `focus` moves the focus with it, for the keyboard path. */
+  function show(next: number, focus: boolean): void {
+    index = next;
+    root.style.setProperty('--seg-i', String(next));
+    for (const [i, option] of options.entries()) {
+      const on = i === next;
+      option.setAttribute('aria-checked', String(on));
+      // Roving tabindex: the checked radio is the group's one stop in the tab
+      // order, so tabbing in lands on the rate that is actually running.
+      option.tabIndex = on ? 0 : -1;
+    }
+    if (focus) options[next]?.focus();
+  }
+
+  function commit(next: number, focus: boolean): void {
+    const multiplier = SPEEDS[next];
+    if (multiplier === undefined) return;
+    const moved = next !== index;
+    show(next, focus);
+    if (moved) onChange(multiplier);
+  }
+
+  show(index, false);
+
+  return {
+    root,
+    set(multiplier) {
+      // The engine is the source of truth for the rate and it is not restricted
+      // to the five offered here — a permalink can carry any number — so the
+      // control shows the nearest one it can represent rather than nothing.
+      let best = 0;
+      for (const [i, candidate] of SPEEDS.entries()) {
+        const incumbent = SPEEDS[best] ?? 1;
+        if (Math.abs(candidate - multiplier) < Math.abs(incumbent - multiplier)) best = i;
+      }
+      show(best, false);
+    },
+    destroy() {
+      root.removeEventListener('keydown', onKeyDown);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Glyphs
+// ---------------------------------------------------------------------------
+
+/**
+ * The Reset mark: a 300° annulus with a solid arrowhead on its leading edge.
+ *
+ * Built from a circle of radius 6 and a hole of radius 3.5 about (8, 8), swept
+ * clockwise from −60° to 240°, which leaves the gap at the top where the head
+ * goes. The head's base is the radial chord at 240°, widened to r ± 1.2 so it
+ * overhangs the ring, and its apex is 3 px along the tangent there. Every
+ * number in the path is that construction evaluated — it is not eyeballed, and
+ * it is written out rather than computed so the file ships literal path data.
+ */
+const RESET_GLYPH: readonly Attrs[] = [
+  { d: 'M11 2.804 A6 6 0 1 1 5 2.804 L6.25 4.969 A3.5 3.5 0 1 0 9.75 4.969 Z' },
+  { d: 'M4.4 1.765 L8.223 2.386 L6.85 6.008 Z' },
+];
+
+/** A key carrying a glyph and its name in words. The tooltip repeats it for a mouse. */
+function namedKey(
   className: string,
   name: string,
   onClick: () => void,
@@ -342,13 +531,14 @@ function iconKey(
   return h(
     'button',
     {
-      class: `key key--icon ${className}`,
+      class: `key ${className}`,
       type: 'button',
       'aria-label': name,
       title: name,
       onclick: onClick,
     },
     glyph(...paths),
+    h('span', { class: 'key__name' }, name),
   );
 }
 
@@ -364,5 +554,3 @@ function glyph(...paths: readonly (string | Attrs)[]): SVGElement {
     ...paths.map((path) => svg('path', typeof path === 'string' ? { d: path } : path)),
   );
 }
-
-let uid = 0;

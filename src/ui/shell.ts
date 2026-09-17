@@ -1,20 +1,21 @@
 import { onMediaChange } from '../core/canvas';
 import type { Viz, VizGroup } from '../core/types';
 import { h, svg, type Attrs } from './dom';
+import { createPressGuard, isPrimaryPress } from './transport';
 
 /**
  * The bench.
  *
  * Everything on the page that is not a visualization: the masthead with its
  * scheme toggle, the tab strip, the figure/rail lattice the components mount
- * into, the Share key under the plate, and a one-line footer.
+ * into, and a one-line footer.
  *
  * It is deliberately sparse. A visitor with no statistics should be able to
  * read every word on the page, so the chrome is the wordmark, the tabs, the
  * title and its one-sentence blurb, the plate, the readouts, the controls and a
- * footer line. The author, the affiliation, the figure number, the parameter
- * caption and the navigation arrows all went; the tab strip is the navigation,
- * and on a narrow screen it scrolls.
+ * footer line. The author, the affiliation, the figure number and the parameter
+ * caption all went; the tab strip is the navigation, and it is genuinely
+ * navigable at every width — see `syncStrip()`.
  *
  * The shell is built once and reused for every route. It knows the registry —
  * titles, groups — and nothing else about any visualization: no branch here
@@ -38,17 +39,53 @@ const AUTHOR = 'Ali Reza Shahvaran';
 /** Namespaced so a sibling project on the same Pages origin cannot collide. */
 const SCHEME_KEY = 'mp:scheme';
 
-/** How long the Share key shows its confirmation before returning to its label. */
-const COPY_FEEDBACK_MS = 2000;
-
 /**
  * The two-column breakpoint, mirroring theme.css §15. Below it the bench is a
- * single stack and the rail's keys are painted between the Share row and the
+ * single stack and the rail's keys are painted between the plate and the
  * readouts, so the DOM has to be restacked to match — see `restack()`. The
  * number lives in both files because a media query cannot be read back out of a
  * stylesheet; theme.css is the one that decides.
  */
 const BENCH_STACK_QUERY = '(max-width: 63.9375rem)';
+
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+
+// ---------------------------------------------------------------------------
+// Tab strip motion
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of the visible strip one press of an arrow travels.
+ *
+ * Less than a whole page on purpose: a tab that was at the leading edge is
+ * still on screen after the press, so the reader can see where the strip moved
+ * to rather than being handed an entirely new set of labels.
+ */
+const ARROW_PAGE = 0.7;
+
+/** How long an arrow must be held before the single page turns into a pan. */
+const ARROW_HOLD_DELAY_MS = 280;
+
+/** Pixels per repeat while an arrow is held, and the period between repeats. */
+const ARROW_HOLD_STEP = 14;
+const ARROW_HOLD_MS = 50;
+
+/**
+ * Pointer travel, in CSS px, past which a press on the strip is a pan rather
+ * than a tab activation.
+ *
+ * A grab has to be allowed a little slop — a mouse moves one or two pixels
+ * between press and release on almost every click — and a tab that changed the
+ * route because the hand twitched is the worst possible answer here: the route
+ * change coerces every parameter back to its default and throws the run away.
+ */
+const DRAG_SLOP = 6;
+
+/** Clearance between a tab and the edge of the scrollport when it is revealed. */
+const REVEAL_PAD = 12;
+
+/** Sub-pixel scroll offsets are what a browser hands back; nothing is exact. */
+const SCROLL_EPSILON = 1;
 
 // ---------------------------------------------------------------------------
 // Public shape
@@ -77,7 +114,7 @@ export interface ShellHandle {
    * element the reader was in — otherwise the focus falls to `<body>`.
    */
   focusActiveTab(): void;
-  /** Publish the current permalink: what Share copies, and `data-permalink` for print. */
+  /** Publish the current permalink: `data-permalink`, which print renders. */
   setPermalink(hash: string): void;
   destroy(): void;
 }
@@ -117,9 +154,11 @@ function writeStore(key: string, value: string): void {
 }
 
 /**
- * "randomness" → "Randomness". Deriving the run label from the group name is
- * what keeps a new group to a single entry in the union: a lookup table here
- * would make it a shell change as well.
+ * "randomness" → "Randomness". The group no longer appears anywhere on screen —
+ * the run labels that used to sit between the tabs are gone — but it is still
+ * how the registry's pedagogical order is expressed, so each tab carries it in
+ * its accessible name. Deriving the label from the group name is what keeps a
+ * new group to a single entry in the union.
  */
 function groupLabel(group: VizGroup): string {
   const words = group.replace(/[-_]/g, ' ');
@@ -132,6 +171,11 @@ function absolutize(hash: string): string {
   if (typeof location === 'undefined') return fragment;
   const base = location.href.split('#')[0] ?? '';
   return `${base}${fragment}`;
+}
+
+/** A finite number, or `null`. Geometry a host does not implement reads as neither. */
+function finite(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +197,13 @@ export function createShell(
   ): void {
     el.addEventListener(type, handler as EventListener);
     cleanups.push(() => el.removeEventListener(type, handler as EventListener));
+  }
+
+  /** The same, for a listener that has to outlive the element it started on. */
+  function onGlobal(target: EventTarget | undefined, type: string, handler: EventListener): void {
+    if (!target || typeof target.addEventListener !== 'function') return;
+    target.addEventListener(type, handler);
+    cleanups.push(() => target.removeEventListener(type, handler));
   }
 
   // -- masthead -------------------------------------------------------------
@@ -186,6 +237,9 @@ export function createShell(
 
   /** The visualization on screen, as `setActiveTab()` last reported it. */
   let activeViz: Viz | null = null;
+
+  /** Its index in the registry, and the fallback the roving tabindex walks from. */
+  let activeIndex = -1;
 
   /**
    * Ask for a visualization. Every path into the app — a tab, the wordmark —
@@ -222,28 +276,17 @@ export function createShell(
     class: 'tabs__strip',
     role: 'tablist',
     'aria-label': 'Visualization tabs',
+    'data-fade': 'none',
   });
 
   const tabs: HTMLButtonElement[] = [];
 
-  // Runs are maximal spans of consecutive registry entries sharing a group.
-  // Consecutive, never sorted: the registry order is pedagogical, and a run
-  // built by bucketing would silently reorder it.
-  let run: HTMLElement | null = null;
-  let runGroup: VizGroup | null = null;
+  // Flat, in registry order. The run labels that used to be interleaved here
+  // ("Randomness", "Chaos") are gone: a chip that names a group is a word the
+  // reader has to parse before reaching the only thing the strip is for, and it
+  // was taking a quarter of the row on a phone. The grouping survives where it
+  // is load-bearing — the order, and each tab's accessible name.
   for (const [index, viz] of vizList.entries()) {
-    if (run === null || viz.group !== runGroup) {
-      runGroup = viz.group;
-      run = h(
-        'div',
-        { class: 'tabs__group', role: 'presentation' },
-        // The label is decoration in ARIA terms: a tablist may own nothing but
-        // tabs. The group reaches assistive technology through each tab's own
-        // aria-label instead.
-        h('span', { class: 'tabs__group-label', 'aria-hidden': 'true' }, groupLabel(viz.group)),
-      );
-      strip.append(run);
-    }
     const tab = h(
       'button',
       {
@@ -260,12 +303,41 @@ export function createShell(
       },
       h('span', { class: 'tab__label' }, viz.title),
     );
-    on(tab, 'click', () => select(viz.id));
+    on(tab, 'click', () => {
+      // The press that panned the strip must not also change the route.
+      if (panned) return;
+      select(viz.id);
+    });
     tabs.push(tab);
-    run.append(tab);
+    strip.append(tab);
   }
 
-  const tabsNav = h('nav', { class: 'tabs', 'aria-label': 'Visualizations' }, strip);
+  const prevKey = arrowKey('prev', 'Scroll tabs left', 'M10.5 1.5 4 8l6.5 6.5z');
+  const nextKey = arrowKey('next', 'Scroll tabs right', 'M5.5 1.5 12 8l-6.5 6.5z');
+
+  function arrowKey(side: 'prev' | 'next', name: string, path: string): HTMLButtonElement {
+    const key = h(
+      'button',
+      {
+        class: `key key--icon tabs__arrow tabs__arrow--${side}`,
+        type: 'button',
+        'aria-label': name,
+        title: name,
+      },
+      glyph({ d: path }),
+    );
+    // Nothing to scroll until the strip has been measured.
+    key.hidden = true;
+    return key;
+  }
+
+  const tabsNav = h(
+    'nav',
+    { class: 'tabs', 'aria-label': 'Visualizations' },
+    prevKey,
+    strip,
+    nextKey,
+  );
 
   // -- figure column --------------------------------------------------------
 
@@ -275,17 +347,11 @@ export function createShell(
   const stageHost = h('div', { class: 'stage' });
   const plate = h('div', { class: 'plate' }, stageHost);
 
-  // Share: one small key that puts the permalink on the clipboard. The row
-  // carries `data-permalink` so a printed page still names the run it shows.
-  const shareText = document.createTextNode('Share');
-  const shareKey = h(
-    'button',
-    { class: 'key key--small share__key', type: 'button' },
-    // A tray with an arrow rising out of it.
-    glyph({ d: 'M2 8h2.5v4h7V8H14v6H2z' }, { d: 'M8 1l4 4H9.5v5h-3V5H4z' }),
-    h('span', { class: 'share__text' }, shareText),
-  );
-  const share = h('div', { class: 'share' }, shareKey);
+  // The Share key is gone — the address bar already holds the permalink, and a
+  // button that copies it was one more control to explain on every tab. The
+  // link survives as an attribute so a printed page still names the run it
+  // shows (theme.css §16c renders it; nothing paints it on screen).
+  const permalink = h('div', { class: 'permalink', 'aria-hidden': 'true' });
 
   const readouts = h('section', { class: 'readouts', 'aria-label': 'Readouts' });
   const story = h('section', { class: 'story' });
@@ -296,7 +362,7 @@ export function createShell(
     { class: 'figure' },
     h('header', { class: 'figure__head' }, title, blurb),
     plate,
-    share,
+    permalink,
     readouts,
     story,
     fact,
@@ -348,10 +414,9 @@ export function createShell(
   // -- scheme ---------------------------------------------------------------
 
   /**
-   * The light faceplate is the identity, so the dark scheme is never selected
-   * from `prefers-color-scheme` — this toggle is the only path into it, which
-   * is why it is not optional. Both values are written explicitly so the
-   * toggle wins in either direction.
+   * The scheme the page opens in follows the reader's OS, and the masthead
+   * toggle wins over it in both directions. Both values are written explicitly
+   * so there is one source of truth for the attribute.
    */
   function applyScheme(dark: boolean): void {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
@@ -392,9 +457,289 @@ export function createShell(
     writeStore(SCHEME_KEY, dark ? 'dark' : 'light');
   });
 
-  // -- tab keyboard model ---------------------------------------------------
+  const motionQuery =
+    typeof window.matchMedia === 'function' ? window.matchMedia(REDUCED_MOTION_QUERY) : null;
 
-  let activeIndex = -1;
+  // -- the strip as a scrollport --------------------------------------------
+
+  /**
+   * The strip's scroll geometry, or `null` where the host does not implement
+   * one. Everything below is written against that `null`: a document with no
+   * layout — the test harness, a server render — simply has no arrows and no
+   * fade rather than a thrown `undefined - undefined`.
+   */
+  function scrollport(): { left: number; max: number; width: number } | null {
+    const width = finite(strip.clientWidth);
+    const full = finite(strip.scrollWidth);
+    const left = finite(strip.scrollLeft);
+    if (width === null || full === null || left === null) return null;
+    return { left, max: Math.max(0, full - width), width };
+  }
+
+  /**
+   * Show each arrow only while there is something to scroll on its side, and
+   * fade only the edge the strip actually runs past.
+   *
+   * The arrows take room in the row rather than floating over the tabs, which
+   * makes this monotone and therefore stable: revealing one can only ever
+   * *increase* the overflow, so there is no width at which showing an arrow
+   * removes the reason for it and the pair flickers.
+   *
+   * It runs to a fixed point rather than once, because an arrow appearing or
+   * leaving is itself a change of the width the next answer depends on. The
+   * case that needs it is the webfont landing: the strip is measured in the
+   * fallback face, overflows by a few pixels and takes an arrow, the real face
+   * arrives narrower, and the strip then fitted exactly — with an arrow beside
+   * it pointing at nothing and the last label under a fade. Two passes are
+   * enough by the monotonicity above, and the second costs one layout read.
+   */
+  /**
+   * Recompute the arrows and the edge fades.
+   *
+   * `assumeLeft` is the position the strip is *going* to be at. A smooth scroll
+   * reports its old `scrollLeft` until the animation ends, so syncing from the
+   * live value right after asking for one shows the arrow state of the place
+   * the reader just left.
+   */
+  function syncStrip(assumeLeft?: number): void {
+    for (let pass = 0; pass < 2; pass++) if (!syncStripOnce(assumeLeft)) return;
+  }
+
+  /** One pass. `true` when it moved an arrow, i.e. when the width just changed. */
+  function syncStripOnce(assumeLeft?: number): boolean {
+    const port = scrollport();
+    const left = port === null ? 0 : (assumeLeft ?? port.left);
+    const fits = port === null || port.max <= SCROLL_EPSILON;
+    const atStart = fits || left <= SCROLL_EPSILON;
+    const atEnd = fits || left >= port.max - SCROLL_EPSILON;
+    const moved = setHidden(prevKey, atStart) || setHidden(nextKey, atEnd);
+    strip.dataset['fade'] = fits ? 'none' : atStart ? 'end' : atEnd ? 'start' : 'both';
+    return moved;
+  }
+
+  /**
+   * Hide or show an arrow, carrying the focus if it is on the one leaving.
+   *
+   * A control that vanishes under the reader's own keypress takes the focus to
+   * `<body>` with it, and the next Tab restarts from the masthead — the same
+   * failure the transport and the story row refuse `disabled` to avoid. The
+   * gesture was "move along the strip", so the focus goes to the key that can
+   * still do that, and to the selected tab when neither can.
+   */
+  function setHidden(key: HTMLButtonElement, hidden: boolean): boolean {
+    if (key.hidden === hidden) return false;
+    const held = typeof document !== 'undefined' && document.activeElement === key;
+    key.hidden = hidden;
+    if (hidden && held) {
+      const other = key === prevKey ? nextKey : prevKey;
+      if (!other.hidden && typeof other.focus === 'function') other.focus();
+      else tabs[activeIndex]?.focus();
+    }
+    return true;
+  }
+
+  function reduced(): boolean {
+    return motionQuery?.matches ?? false;
+  }
+
+  /** Move the strip to `left`, eased unless the reader has asked for less motion. */
+  function scrollTo(left: number, smooth: boolean): void {
+    const port = scrollport();
+    if (port === null) return;
+    const target = Math.max(0, Math.min(port.max, left));
+    if (typeof strip.scrollTo === 'function') {
+      // `instant`, never `auto`: `auto` means "consult scroll-behavior", and the
+      // strip's own scroll-behavior is `smooth`. So the value that reads like
+      // "no animation" is the one that asks for the animation, and every scroll
+      // this function was asked to make immediate — the held pan, a drag, a
+      // reduced-motion press — was eased instead. Measured: a 14 px pan step at
+      // 50 ms against a ~300 ms ease never resolves, so the strip did not move
+      // at all.
+      strip.scrollTo({ left: target, behavior: smooth && !reduced() ? 'smooth' : 'instant' });
+    } else {
+      strip.scrollLeft = target;
+    }
+    // `scroll` is delivered asynchronously, and not at all for a move that
+    // changes nothing, so the arrows are recomputed here as well as from the
+    // listener below. A smooth scroll reaches its own end through that listener.
+    // The sync reasons from `target` rather than the live `scrollLeft`, which
+    // an in-flight smooth scroll still reports as the old position.
+    syncStrip(target);
+  }
+
+  function scrollByPx(delta: number, smooth: boolean): void {
+    const port = scrollport();
+    if (port === null) return;
+    scrollTo(port.left + delta, smooth);
+  }
+
+  /** One press of an arrow: most of a screenful, eased. */
+  function pageBy(direction: 1 | -1): void {
+    const port = scrollport();
+    if (port === null) return;
+    scrollByPx(direction * Math.max(REVEAL_PAD * 4, port.width * ARROW_PAGE), true);
+  }
+
+  /**
+   * An arrow: one page per press, and a continuous pan while it is held.
+   *
+   * The hold answers on `pointerdown` and the browser then synthesises a
+   * `click` at the end of that press, which must not turn a page a second time
+   * — the same bit the transport's Fast-forward key keeps, and the same guard,
+   * because the trap is the same: a press that ends somewhere the click cannot
+   * follow leaves the bit armed and swallows the next *bare* click, which is how
+   * assistive technology presses a button.
+   */
+  function bindArrow(key: HTMLButtonElement, direction: 1 | -1): void {
+    const guard = createPressGuard();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const stop = (clickFollows: boolean): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      guard.end(clickFollows);
+    };
+
+    const pan = (): void => {
+      // Direct, not eased: a held key is a continuous movement, and stacking a
+      // 200 ms ease on a 50 ms repeat is a scroll that never catches up.
+      scrollByPx(direction * ARROW_HOLD_STEP, false);
+      timer = setTimeout(pan, ARROW_HOLD_MS);
+    };
+
+    const begin = (): void => {
+      if (timer !== null) return;
+      guard.arm();
+      pageBy(direction);
+      timer = setTimeout(pan, ARROW_HOLD_DELAY_MS);
+    };
+
+    on(key, 'pointerdown', (event) => {
+      if (!isPrimaryPress(event)) return;
+      begin();
+    });
+    on(key, 'pointerleave', () => stop(false));
+    on(key, 'contextmenu', () => stop(false));
+    on(key, 'blur', () => stop(false));
+    on(key, 'keydown', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      // Swallowing the default swallows the synthesised click with it, so a held
+      // key cannot turn two pages at once.
+      event.preventDefault();
+      begin();
+    });
+    on(key, 'keyup', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      stop(false);
+    });
+    on(key, 'click', () => {
+      // Only a click with no press behind it — assistive technology activating
+      // the key directly — still needs its page.
+      if (guard.swallows()) return;
+      pageBy(direction);
+    });
+    // A press does not have to end on the key it started on.
+    onGlobal(typeof document === 'undefined' ? undefined : document, 'pointerup', (event) => {
+      const target = event.target;
+      stop(event.type !== 'pointercancel' && target instanceof Node && key.contains(target));
+    });
+    onGlobal(typeof document === 'undefined' ? undefined : document, 'pointercancel', () => stop(false));
+  }
+
+  bindArrow(prevKey, -1);
+  bindArrow(nextKey, 1);
+
+  // -- dragging the strip ---------------------------------------------------
+
+  /** Where the press began, and where the strip was when it did. */
+  let dragFrom = 0;
+  let dragScroll = 0;
+  let dragging = false;
+  /** Has this press moved far enough to be a pan rather than a click? */
+  let panned = false;
+
+  on(strip, 'pointerdown', (event) => {
+    if (!isPrimaryPress(event)) return;
+    // Touch and pen already pan this strip natively through `overflow-x`, with
+    // momentum and rubber-banding a scripted pan cannot reproduce, so the two
+    // gestures are left to the platform and only the mouse is driven here.
+    if (event.pointerType === 'touch' || event.pointerType === 'pen') return;
+    const port = scrollport();
+    if (port === null || port.max <= SCROLL_EPSILON) return;
+    dragging = true;
+    panned = false;
+    dragFrom = event.clientX;
+    dragScroll = port.left;
+  });
+
+  on(strip, 'pointermove', (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - dragFrom;
+    if (!panned) {
+      if (Math.abs(dx) < DRAG_SLOP) return;
+      panned = true;
+      strip.dataset['panning'] = 'true';
+      // The pointer will leave the strip long before the drag does; capture is
+      // what keeps the moves arriving.
+      if (typeof strip.setPointerCapture === 'function') {
+        try {
+          strip.setPointerCapture(event.pointerId);
+        } catch {
+          /* A host that refuses capture still pans while the pointer is over the strip. */
+        }
+      }
+    }
+    // Direct manipulation: the strip is under the reader's finger and must not
+    // ease away from it. Selection is suppressed so the labels do not highlight.
+    event.preventDefault();
+    strip.scrollLeft = dragScroll - dx;
+    syncStrip();
+  });
+
+  function endDrag(): void {
+    if (!dragging) return;
+    dragging = false;
+    delete strip.dataset['panning'];
+    if (!panned) return;
+    // The `click` a mouse press synthesises arrives in this same task, and the
+    // tab's handler reads this flag to refuse it. Clearing it a task later is
+    // what lets the very next press activate a tab normally.
+    setTimeout(() => {
+      panned = false;
+    }, 0);
+  }
+
+  on(strip, 'pointerup', endDrag);
+  on(strip, 'pointercancel', endDrag);
+  on(strip, 'lostpointercapture', endDrag);
+  onGlobal(typeof document === 'undefined' ? undefined : document, 'pointerup', endDrag);
+
+  on(strip, 'scroll', () => syncStrip());
+  onGlobal(typeof window === 'undefined' ? undefined : window, 'resize', () => syncStrip());
+
+  // The strip's width also moves when nothing resizes: the webfont lands and
+  // every label re-measures. A ResizeObserver catches that; where there is none
+  // the resize listener and the route change still cover the common cases.
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => syncStrip());
+    observer.observe(strip);
+    cleanups.push(() => observer.disconnect());
+  }
+
+  // Belt and braces for the same reflow. A ResizeObserver is delivered as part
+  // of the rendering steps, so a document that is handed no frames — a
+  // background tab, an embedded view that throttles them — never hears about
+  // the font swap at all; this promise is not on that path. It may also never
+  // settle, which costs nothing: the continuation holds the shell, and the
+  // shell outlives the page.
+  const fontsReady = document.fonts?.ready;
+  if (fontsReady) void fontsReady.then(() => syncStrip(), () => undefined);
+
+  syncStrip();
+
+  // -- tab keyboard model ---------------------------------------------------
 
   /**
    * Where the arrow keys are walking from: the platform's own focus, and only
@@ -420,6 +765,7 @@ export function createShell(
     const next = ((index % count) + count) % count;
     for (const [i, tab] of tabs.entries()) tab.tabIndex = i === next ? 0 : -1;
     tabs[next]?.focus();
+    revealTab(next);
   }
 
   on(strip, 'keydown', (event) => {
@@ -447,57 +793,41 @@ export function createShell(
     focusTab(target);
   });
 
-  // -- share ----------------------------------------------------------------
-
-  let permalink = '';
-  let copyTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Back to the key's own label, with any pending restore cancelled. */
-  function restoreShare(): void {
-    if (copyTimer !== null) clearTimeout(copyTimer);
-    copyTimer = null;
-    shareText.data = 'Share';
-    delete shareKey.dataset['state'];
-  }
-
-  function flashShare(message: string, done: boolean): void {
-    if (copyTimer !== null) clearTimeout(copyTimer);
-    shareText.data = message;
-    if (done) shareKey.dataset['state'] = 'done';
-    else delete shareKey.dataset['state'];
-    copyTimer = setTimeout(restoreShare, COPY_FEEDBACK_MS);
-  }
-
-  on(shareKey, 'click', () => {
-    const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
-    if (!clipboard?.writeText) {
-      flashShare('Copy unavailable', false);
+  /**
+   * Bring a tab inside the scrollport, with a little clearance, and move it no
+   * further than it has to go.
+   *
+   * `smooth` is false for the FIRST reveal of a page's life, which is the one
+   * that is not a movement: a permalink to the ninth tab opens with the strip
+   * already where it belongs rather than sliding there from a position the
+   * reader never saw. Every later reveal is a move between two states they did
+   * see, and eases.
+   *
+   * `scrollIntoView` is the fallback rather than the mechanism: it is the only
+   * thing a host with no measurable geometry can do, and it cannot be given the
+   * clearance that keeps a tab from sitting flush against the fade.
+   */
+  function revealTab(index: number, smooth = true): void {
+    const tab = tabs[index];
+    if (!tab) return;
+    const port = scrollport();
+    const left = finite(tab.offsetLeft);
+    const width = finite(tab.offsetWidth);
+    if (port !== null && left !== null && width !== null && port.max > SCROLL_EPSILON) {
+      // The window of scroll offsets that leave the tab fully on screen. When
+      // the tab is wider than the port the two cross and the leading edge wins,
+      // which is the edge the label starts at.
+      const atLeast = left + width + REVEAL_PAD - port.width;
+      const atMost = left - REVEAL_PAD;
+      const wanted = port.left < atLeast ? atLeast : port.left > atMost ? atMost : port.left;
+      scrollTo(wanted, smooth);
       return;
     }
-    /**
-     * The link is the token. A clipboard write settles a few milliseconds
-     * later — longer behind a permission chip, a DLP extension, or a busy main
-     * thread — and by then the reader may have clicked a tab or moved a control,
-     * both of which rewrite the permalink. Without this guard the continuation
-     * printed "Link copied" beside a link that is not the one on the clipboard:
-     * `restoreShare()` cancels the 2 s timer on a route change but cannot cancel
-     * a promise. Comparing the string the write was issued for against the one
-     * the page now advertises needs no extra state and covers every way the
-     * permalink can move, including ones added later.
-     */
-    const issued = permalink;
-    // Insecure origins and denied permissions both reject rather than throw.
-    void clipboard.writeText(issued).then(
-      () => {
-        if (issued !== permalink) return;
-        flashShare('Link copied', true);
-      },
-      () => {
-        if (issued !== permalink) return;
-        flashShare('Copy failed', false);
-      },
-    );
-  });
+    if (typeof tab.scrollIntoView === 'function') {
+      tab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    }
+    syncStrip();
+  }
 
   // -- aspect ---------------------------------------------------------------
 
@@ -530,12 +860,12 @@ export function createShell(
    * Put the rail's keys where the layout paints them.
    *
    * Below the breakpoint the figure and the rail are `display: contents` and the
-   * bench is one column, with the transport between the Share row and the
-   * readouts and the controls between the readouts and the "Try:" row. CSS
-   * `order` moves the paint and *not* the tab sequence, and a mismatch between
-   * the two is WCAG 2.4.3: with the rail last in the DOM, Tab off Share skips
-   * the transport and every control, lands on the chips a page further down,
-   * and comes back up to Play stops later. So the stack is restacked in the DOM
+   * bench is one column, with the transport between the plate and the readouts
+   * and the controls between the readouts and the "Try:" row. CSS `order` moves
+   * the paint and *not* the tab sequence, and a mismatch between the two is
+   * WCAG 2.4.3: with the rail last in the DOM, Tab off the plate skips the
+   * transport and every control, lands on the chips a page further down, and
+   * comes back up to Play stops later. So the stack is restacked in the DOM
    * as well.
    *
    * Re-parenting an element blurs it, so the focus is carried across the move —
@@ -564,6 +894,8 @@ export function createShell(
     cleanups.push(onMediaChange(stackQuery, () => restack(stackQuery.matches)));
   }
 
+  let permalinkHref = '';
+
   return {
     regions: {
       stage: stageHost,
@@ -582,12 +914,7 @@ export function createShell(
       const viz = vizList[index];
       if (!viz) return;
 
-      // The confirmation is a 2 s timer on a shell that is never destroyed, and
-      // the permalink under it is about to be rewritten. Left running it would
-      // read "Link copied" beside the new route while the old one is on the
-      // clipboard — vouching for a link that sends the reader somewhere else.
-      restoreShare();
-
+      const opening = activeIndex < 0;
       activeIndex = index;
       activeViz = viz;
 
@@ -599,13 +926,7 @@ export function createShell(
 
       bench.setAttribute('aria-labelledby', `tab-${id}`);
       applyAspect(viz);
-
-      // The strip is a horizontal scroller on a narrow screen; `block: 'nearest'`
-      // keeps the page itself from jumping while the strip catches up.
-      const tab = tabs[index];
-      if (tab && typeof tab.scrollIntoView === 'function') {
-        tab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-      }
+      revealTab(index, !opening);
     },
 
     focusActiveTab() {
@@ -615,19 +936,12 @@ export function createShell(
 
     setPermalink(hash) {
       const next = absolutize(hash);
-      if (next === permalink) return;
-      // A confirmation is about a link, so it cannot outlive that link. A route
-      // change is only one of the three ways the permalink moves — a parameter
-      // change and a preset move it too, through `syncUrl()` — and folding the
-      // invalidation into the write means no future call site can forget it.
-      permalink = next;
-      restoreShare();
-      share.setAttribute('data-permalink', permalink);
+      if (next === permalinkHref) return;
+      permalinkHref = next;
+      permalink.setAttribute('data-permalink', permalinkHref);
     },
 
     destroy() {
-      if (copyTimer !== null) clearTimeout(copyTimer);
-      copyTimer = null;
       for (const off of cleanups) off();
       cleanups.length = 0;
       page.remove();

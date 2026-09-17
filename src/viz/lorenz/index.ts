@@ -865,7 +865,10 @@ export const lorenz: Viz = {
   id: 'lorenz',
   title: 'Lorenz Attractor',
   group: 'chaos',
-  blurb: 'Two paths start a billionth apart and, with no randomness anywhere in the equations, end up on opposite wings.',
+  blurb:
+    'Three equations for a fluid heated from below, with no randomness in them at all, yet two paths a ' +
+    'billionth apart trace each other exactly and then peel apart, which is why weather forecasts fail after ' +
+    'about ten days.',
   // The x–z box is 44 wide by 53 tall at Lorenz's parameters; a little wider
   // than that leaves room for the clock window without shrinking the butterfly.
   aspect: 0.95,

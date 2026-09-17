@@ -1107,6 +1107,19 @@ function oneSentence(text: Prose): boolean {
   return !/[.!?]\s/.test(words(text));
 }
 
+/**
+ * Words a visitor would have to look up, banned from every surface a visitor
+ * reads without asking for it. The readouts and the rail's help are held to
+ * the same list where each is checked, above.
+ *
+ * `Readout.label` is deliberately outside this. types.ts reserves it for the
+ * precise name the exact table shows — "Order parameter r" is exactly the term
+ * a reader who opened that table came for — which is why the ban stops at the
+ * simple view.
+ */
+const JARGON =
+  /\b(mean|variance|analytic|converged|estimator|standard error|residual|tolerance|asymptotic|stationary|ergodic|order parameter|critical exponent|markov)\b/i;
+
 describe('kuramoto metadata', () => {
   it('is registered under a permanent id, in the waves group', () => {
     expect(kuramoto.id).toBe('kuramoto');
@@ -1118,6 +1131,23 @@ describe('kuramoto metadata', () => {
   it('says what it does in one plain sentence', () => {
     expect(oneSentence(kuramoto.blurb)).toBe(true);
     expect(words(kuramoto.blurb)).toMatch(/fireflies/);
+  });
+
+  it('spends that sentence on the picture and the surprise, not on what the code does', () => {
+    const blurb = words(kuramoto.blurb);
+    // The fireflies alone are decoration. What makes the tab worth opening is
+    // that the crowd does not drift into step gradually — it snaps, at one
+    // precise strength of nudge — and that the same thing runs a heart and
+    // shook a footbridge.
+    expect(blurb).toMatch(/precise/i);
+    expect(blurb).toMatch(/unison|together|step/i);
+    expect(blurb).toMatch(/pacemaker/i);
+    expect(blurb).not.toMatch(JARGON);
+  });
+
+  it('never prints a word a newcomer would have to ask about in the story or the facts', () => {
+    for (const preset of kuramoto.presets ?? []) expect(words(preset.caption), preset.id).not.toMatch(JARGON);
+    for (const fact of kuramoto.facts) expect(words(fact.text)).not.toMatch(JARGON);
   });
 
   it('offers three presets that walk below, onto and past the threshold', () => {

@@ -95,7 +95,7 @@ describe('bench order', () => {
     expect(benchOrder()).toEqual([
       'figure__head',
       'plate',
-      'share',
+      'permalink',
       'readouts',
       'story',
       'fact',
@@ -106,15 +106,15 @@ describe('bench order', () => {
 
   it('follows the single stack below it', () => {
     // CSS `order` moves the paint and not the tab sequence: with the rail last
-    // in the DOM, Tab off Share skipped the transport and every control, landed
-    // on the chips, and came back up to Play stops later — WCAG 2.4.3 at every
-    // width below 1024 px.
+    // in the DOM, Tab off the plate skipped the transport and every control,
+    // landed on the chips, and came back up to Play stops later — WCAG 2.4.3 at
+    // every width below 1024 px.
     dom.setMedia(STACKED, true);
     mount();
     expect(benchOrder()).toEqual([
       'figure__head',
       'plate',
-      'share',
+      'permalink',
       'transport',
       'readouts',
       'controls',
@@ -160,6 +160,30 @@ describe('the chrome', () => {
     expect(dom.findAll((el) => el.getAttribute('role') === 'tab')).toHaveLength(registry.length);
   });
 
+  it('renders no group label anywhere in the strip', () => {
+    mount();
+    // The runs used to be chips reading "Randomness", "Chaos" — a word to parse
+    // before reaching the only thing the strip is for. The grouping survives
+    // where it is load-bearing: the registry order, and each tab's own name.
+    expect(byClass(dom, 'tabs__group')).toEqual([]);
+    expect(byClass(dom, 'tabs__group-label')).toEqual([]);
+    const strip = byClass(dom, 'tabs__strip')[0];
+    const titles = registry.map((viz) => viz.title).join('');
+    expect(strip?.textContent).toBe(titles);
+    // Still announced per tab, which is the only place a tablist may carry it.
+    expect(tabs()[0]?.getAttribute('aria-label')).toBe(`${registry[0]?.title}, Randomness`);
+  });
+
+  it('offers no Share key, and carries the permalink for print alone', () => {
+    const handle = mount();
+    handle.setPermalink('#/galton?rows=20&seed=7');
+    expect(byClass(dom, 'share')).toEqual([]);
+    expect(byClass(dom, 'share__key')).toEqual([]);
+    const carrier = byClass(dom, 'permalink')[0];
+    expect(carrier?.textContent).toBe('');
+    expect(carrier?.getAttribute('data-permalink')).toContain('#/galton?rows=20&seed=7');
+  });
+
   it('puts the source, the licence and the author on one footer line', () => {
     mount();
     const footer = byClass(dom, 'footer')[0];
@@ -172,12 +196,8 @@ describe('the chrome', () => {
   });
 
   it('carries no parameter caption and no figure number under the plate', () => {
-    const handle = mount();
-    handle.setPermalink('#/galton?rows=20&seed=7');
+    mount();
     expect(byClass(dom, 'caption')).toEqual([]);
-    const share = byClass(dom, 'share')[0];
-    expect(share?.textContent).toBe('Share');
-    expect(share?.getAttribute('data-permalink')).toContain('#/galton?rows=20&seed=7');
   });
 });
 
@@ -194,108 +214,6 @@ describe('selecting a visualization', () => {
 
     fire(second as MElement, 'click');
     expect(selected).toEqual([registry[1]?.id]);
-  });
-});
-
-describe('the share confirmation', () => {
-  it('does not survive the route it was given for', () => {
-    const handle = mount();
-    handle.setPermalink('#/galton?seed=99');
-    const share = byClass(dom, 'share__key')[0];
-    expect(share?.textContent).toBe('Share');
-
-    // No clipboard in this document, so the key reports that instead — the
-    // timer and the transient label are the same either way.
-    fire(share as MElement, 'click');
-    expect(share?.textContent).not.toBe('Share');
-
-    const other = registry[1];
-    if (other) handle.setActiveTab(other.id);
-
-    // The key must not still be vouching for the previous route's link.
-    expect(share?.textContent).toBe('Share');
-    expect(share?.dataset['state']).toBeUndefined();
-  });
-
-  /**
-   * A clipboard write settles a few milliseconds later — longer behind a
-   * permission chip, a DLP extension or a busy main thread — and by then a tab,
-   * a control or a preset may have rewritten the permalink. `restoreShare()`
-   * can cancel the two-second timer on a route change; it cannot cancel a
-   * promise, so the continuation itself has to know which link it wrote.
-   */
-  function stubClipboard(): { writes: string[]; settle: () => void; fail: () => void } {
-    const writes: string[] = [];
-    let settle = (): void => undefined;
-    let fail = (): void => undefined;
-    vi.stubGlobal('navigator', {
-      clipboard: {
-        writeText: (text: string): Promise<void> => {
-          writes.push(text);
-          return new Promise<void>((resolve, reject) => {
-            settle = () => resolve();
-            fail = () => reject(new Error('denied'));
-          });
-        },
-      },
-    });
-    return { writes, settle: () => settle(), fail: () => fail() };
-  }
-
-  function shareKey(): MElement {
-    const key = byClass(dom, 'share__key')[0];
-    if (!key) throw new Error('no share key');
-    return key;
-  }
-
-  it('confirms the link it wrote when nothing moved under it', async () => {
-    const clipboard = stubClipboard();
-    const handle = mount();
-    handle.setPermalink('#/galton?seed=1');
-
-    fire(shareKey(), 'click');
-    expect(clipboard.writes).toEqual(['http://localhost/math_playground/#/galton?seed=1']);
-
-    clipboard.settle();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(shareKey().textContent).toBe('Link copied');
-    expect(shareKey().dataset['state']).toBe('done');
-
-    // And the confirmation does not outlive the link either: a control moved.
-    handle.setPermalink('#/galton?seed=1&rows=20');
-    expect(shareKey().textContent).toBe('Share');
-    expect(shareKey().dataset['state']).toBeUndefined();
-  });
-
-  it('says nothing when the write lands after the permalink has moved', async () => {
-    const clipboard = stubClipboard();
-    const handle = mount();
-    handle.setPermalink('#/galton?seed=1');
-
-    fire(shareKey(), 'click');
-    // The reader drags a fader while the write is in flight. What is on the
-    // clipboard is seed=1; what the page now advertises is seed=2.
-    handle.setPermalink('#/galton?seed=2');
-    clipboard.settle();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(shareKey().textContent).toBe('Share');
-    expect(shareKey().dataset['state']).toBeUndefined();
-  });
-
-  it('reports a failure only for the link that failed', async () => {
-    const clipboard = stubClipboard();
-    const handle = mount();
-    handle.setPermalink('#/galton?seed=1');
-
-    fire(shareKey(), 'click');
-    const other = registry[1];
-    if (other) handle.setActiveTab(other.id);
-    handle.setPermalink(`#/${other?.id ?? 'galton'}`);
-    clipboard.fail();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(shareKey().textContent).toBe('Share');
   });
 });
 
@@ -467,6 +385,194 @@ describe('a hostile matchMedia', () => {
     } finally {
       win.matchMedia = real;
     }
+  });
+});
+
+/**
+ * The tab strip as a scroller.
+ *
+ * Nine tabs did not fit a 1,440 px window — measured, 1,397 px of content in a
+ * 1,345 px box — and there was no way to reach the ones past the edge: no
+ * arrows, no drag, and a permanent 10 px fade that said nothing about whether
+ * anything was behind it. The owner could not open six of the nine tabs.
+ *
+ * The harness has no layout, so the scrollport is supplied here. That is the
+ * point rather than a compromise: every branch in shell.ts is written against a
+ * geometry that may not exist, and the tests below fix both answers — a host
+ * with no scrollport shows no arrows at all, and a host with one shows exactly
+ * the arrow that has somewhere to go.
+ */
+describe('the tab strip scroller', () => {
+  interface Port {
+    scrollWidth: number;
+    clientWidth: number;
+    scrollLeft: number;
+    scrollTo(options: { left: number }): void;
+  }
+
+  /** Give an element the scrollport a browser with layout would. */
+  function scrollport(el: MElement, content: number, view: number): Port {
+    const port = el as unknown as Port;
+    port.scrollWidth = content;
+    port.clientWidth = view;
+    port.scrollLeft = 0;
+    port.scrollTo = ({ left }) => {
+      port.scrollLeft = Math.max(0, Math.min(content - view, left));
+      fire(el, 'scroll');
+    };
+    return port;
+  }
+
+  function strip(): MElement {
+    const el = byClass(dom, 'tabs__strip')[0];
+    if (!el) throw new Error('no strip');
+    return el;
+  }
+
+  function arrow(name: 'Scroll tabs left' | 'Scroll tabs right'): MElement {
+    const el = byLabel(dom, name);
+    if (!el) throw new Error(`no ${name}`);
+    return el;
+  }
+
+  it('shows no arrow and no fade where nothing overflows', () => {
+    mount();
+    // No scrollport at all: a host with no layout, which is where a fixed
+    // `hidden = false` would have put two dead keys beside the strip forever.
+    expect(arrow('Scroll tabs left').hidden).toBe(true);
+    expect(arrow('Scroll tabs right').hidden).toBe(true);
+    expect(strip().dataset['fade']).toBe('none');
+
+    // And with a scrollport whose content fits.
+    scrollport(strip(), 600, 600);
+    fire(strip(), 'scroll');
+    expect(arrow('Scroll tabs right').hidden).toBe(true);
+    expect(strip().dataset['fade']).toBe('none');
+  });
+
+  it('reaches the last tab from the first, one arrow press at a time', () => {
+    mount();
+    const port = scrollport(strip(), 1400, 400);
+    fire(strip(), 'scroll');
+
+    // At the start there is one way to go, and the fade says which.
+    expect(arrow('Scroll tabs left').hidden).toBe(true);
+    expect(arrow('Scroll tabs right').hidden).toBe(false);
+    expect(strip().dataset['fade']).toBe('end');
+
+    fire(arrow('Scroll tabs right'), 'click');
+    expect(port.scrollLeft).toBeGreaterThan(0);
+    // Less than a whole screenful, so a tab that was at the leading edge is
+    // still on screen and the reader can see where the strip moved to.
+    expect(port.scrollLeft).toBeLessThan(400);
+    expect(arrow('Scroll tabs left').hidden).toBe(false);
+    expect(strip().dataset['fade']).toBe('both');
+
+    for (let i = 0; i < 10 && !arrow('Scroll tabs right').hidden; i++) {
+      fire(arrow('Scroll tabs right'), 'click');
+    }
+    expect(port.scrollLeft).toBe(1000);
+    expect(arrow('Scroll tabs right').hidden).toBe(true);
+    expect(arrow('Scroll tabs left').hidden).toBe(false);
+    expect(strip().dataset['fade']).toBe('start');
+
+    fire(arrow('Scroll tabs left'), 'click');
+    expect(port.scrollLeft).toBeLessThan(1000);
+  });
+
+  it('keeps panning while an arrow is held, and stops on release', () => {
+    mount();
+    const port = scrollport(strip(), 1400, 400);
+    fire(strip(), 'scroll');
+
+    const next = arrow('Scroll tabs right');
+    fire(next, 'pointerdown', { button: 0, isPrimary: true });
+    const afterPress = port.scrollLeft;
+    expect(afterPress).toBeGreaterThan(0);
+
+    // A press is one page; the pan only starts once the key has been held.
+    vi.advanceTimersByTime(200);
+    expect(port.scrollLeft).toBe(afterPress);
+    vi.advanceTimersByTime(400);
+    const panned = port.scrollLeft;
+    expect(panned).toBeGreaterThan(afterPress);
+
+    dom.document.dispatchEvent(makeEvent('pointerup', { target: next }));
+    // The click the press ends with arrives in the release's own task, and it
+    // is the press's own echo: it must not turn a second page.
+    fire(next, 'click');
+    expect(port.scrollLeft).toBe(panned);
+
+    // And the pan that was scheduled goes with the release.
+    vi.advanceTimersByTime(2000);
+    expect(port.scrollLeft).toBe(panned);
+  });
+
+  it('pans on a pointer drag, and that drag does not open a tab', () => {
+    mount();
+    const port = scrollport(strip(), 1400, 400);
+    fire(strip(), 'scroll');
+    const target = tabs()[4];
+    if (!target) throw new Error('no fifth tab');
+
+    fire(target, 'pointerdown', { button: 0, isPrimary: true, pointerType: 'mouse', clientX: 300 });
+    // Under the slop nothing has happened: a mouse moves a pixel or two between
+    // press and release on almost every ordinary click, and a tab that changed
+    // the route because the hand twitched throws the reader's run away.
+    fire(strip(), 'pointermove', { clientX: 297, pointerId: 1 });
+    expect(port.scrollLeft).toBe(0);
+
+    fire(strip(), 'pointermove', { clientX: 220, pointerId: 1 });
+    expect(port.scrollLeft).toBe(80);
+    expect(strip().dataset['panning']).toBe('true');
+
+    fire(strip(), 'pointerup', { clientX: 220, pointerId: 1 });
+    expect(strip().dataset['panning']).toBeUndefined();
+
+    fire(target, 'click');
+    expect(selected).toEqual([]);
+
+    // The press after the drag is an ordinary click again.
+    vi.advanceTimersByTime(0);
+    fire(target, 'click');
+    expect(selected).toEqual([registry[4]?.id]);
+  });
+
+  it('scrolls the selected tab into view when the route changes', () => {
+    const handle = mount();
+    const port = scrollport(strip(), 1400, 400);
+    fire(strip(), 'scroll');
+    // The offsets a laid-out strip would have: 150 px apart, 140 px wide.
+    for (const [i, tab] of tabs().entries()) {
+      const box = tab as unknown as { offsetLeft: number; offsetWidth: number };
+      box.offsetLeft = i * 150;
+      box.offsetWidth = 140;
+    }
+
+    const last = registry[registry.length - 1];
+    if (last) handle.setActiveTab(last.id);
+    // The ninth tab spans 1200–1340 in a 400 px port, so it is only fully on
+    // screen from 952 with the 12 px of clearance — and the shell moves no
+    // further than it has to.
+    expect(port.scrollLeft).toBe(952);
+
+    const first = registry[0];
+    if (first) handle.setActiveTab(first.id);
+    expect(port.scrollLeft).toBe(0);
+  });
+
+  it('carries the focus off an arrow that vanishes under the press', () => {
+    mount();
+    scrollport(strip(), 1400, 400);
+    fire(strip(), 'scroll');
+
+    const next = arrow('Scroll tabs right');
+    next.focus();
+    for (let i = 0; i < 10 && !next.hidden; i++) fire(next, 'click');
+    expect(next.hidden).toBe(true);
+    // Not <body>: a control that disappears under the reader's own keypress
+    // takes the focus with it and the next Tab restarts from the masthead.
+    expect(focused()).toBe(arrow('Scroll tabs left'));
   });
 });
 
