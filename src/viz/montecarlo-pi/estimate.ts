@@ -39,7 +39,13 @@ export const PI_SE_COEFFICIENT = 4 * Math.sqrt(P_INSIDE * (1 - P_INSIDE));
  * Infinite for n ≤ 0: no trials, no information.
  */
 export function piStandardError(n: number): number {
-  return n > 0 ? PI_SE_COEFFICIENT / Math.sqrt(n) : Infinity;
+  // NaN, not Infinity: a standard error over zero samples is a reading that
+  // does not exist, and NaN is what the ledger and the hero already render as
+  // an em dash and "not measured yet". Infinity only *looked* contained,
+  // because `writeRow()` happens to test `Number.isFinite` on the value — the
+  // same arithmetic reaching a `tolerance` would have made the row claim
+  // agreement with every possible measurement.
+  return n > 0 ? PI_SE_COEFFICIENT / Math.sqrt(n) : NaN;
 }
 
 /** One dart, in the units the circle is defined in rather than in pixels. */

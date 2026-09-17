@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { byClass, installDom, type Harness } from './dom-harness';
-import type { ParamSpec } from '../src/core/types';
+import { byClass, byLabel, fire, installDom, type Harness, type MElement } from './dom-harness';
+import type { ParamSpec, ParamValue, ParamValues } from '../src/core/types';
 import { registry } from '../src/viz/registry';
 import {
   createControls,
@@ -330,6 +330,22 @@ describe('snapToStep', () => {
   it('passes a non-finite reading through as the minimum', () => {
     expect(snapToStep(Number.NaN, 3, 20, 1)).toBe(3);
   });
+
+  it('is idempotent, so a permalink reproduces the run it advertises', () => {
+    // The rail and the router read values onto this one grid. Snapping a value
+    // that has already been snapped has to be the identity, or a value makes a
+    // little more of the journey on every hop between the two.
+    for (const [value, min, max, step] of [
+      [2.27, 1, 4, 0.05],
+      [0.1 + 0.2, 0, 1, 0.01],
+      [1234.7, 1, 20_000, 1],
+      [20_050, 100, 200_000, 100],
+      [1e-4 + 3e-12, 1e-12, 1e-3, 1e-12],
+    ] as const) {
+      const once = snapToStep(value, min, max, step);
+      expect(snapToStep(once, min, max, step)).toBe(once);
+    }
+  });
 });
 
 /**
@@ -410,5 +426,238 @@ describe('the rail', () => {
     // Setting the seed is not an error either; there is simply nothing to show.
     expect(() => handle.setValue('seed', 9)).not.toThrow();
     handle.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The rail, driven
+// ---------------------------------------------------------------------------
+
+/**
+ * The rows as a reader works them, rather than as arithmetic. Every defect
+ * below costs a finished run: a change reported by a control that moved
+ * nothing tears a structural parameter's simulation down, and a change *not*
+ * reported leaves the window showing a number the experiment is not running.
+ */
+describe('the rail, driven', () => {
+  let dom: Harness | null = null;
+
+  afterEach(() => {
+    dom?.teardown();
+    dom = null;
+  });
+
+  function here(): Harness {
+    if (!dom) throw new Error('no document');
+    return dom;
+  }
+
+  function mountRail(
+    specs: readonly ParamSpec[],
+    values: ParamValues,
+  ): { changes: Array<[string, ParamValue]> } {
+    dom = installDom();
+    const host = dom.document.createElement('form');
+    dom.app.appendChild(host);
+    const changes: Array<[string, ParamValue]> = [];
+    createControls(host as unknown as HTMLElement, specs, values, (key, value) =>
+      changes.push([key, value]),
+    );
+    return { changes };
+  }
+
+  /** A drag: the browser writes both, and the rail reads `valueAsNumber`. */
+  function slideTo(input: MElement, position: number): void {
+    input.value = String(position);
+    (input as unknown as Record<string, number>)['valueAsNumber'] = position;
+    fire(input, 'input');
+  }
+
+  function fader(): MElement {
+    const found = byClass(here(), 'range')[0];
+    if (!found) throw new Error('no fader');
+    return found;
+  }
+
+  function window(): MElement {
+    const found = byClass(here(), 'control__value')[0];
+    if (!found) throw new Error('no window');
+    return found;
+  }
+
+  // -- the log fader the position grid cannot resolve -----------------------
+
+  /**
+   * The Lorenz starting gap is the one fader in the registry whose value grid
+   * is finer than any slider can be: 10⁻¹² across nine decades is a billion
+   * values, and `logPositions()` caps at a million.
+   */
+  const twinGap = ((): Extract<ParamSpec, { kind: 'range' }> => {
+    const spec = registry
+      .find((viz) => viz.id === 'lorenz')
+      ?.params.find(
+        (s): s is Extract<ParamSpec, { kind: 'range' }> => s.kind === 'range' && s.key === 'twinGap',
+      );
+    if (!spec) throw new Error('lorenz.twinGap is gone from the registry');
+    return spec;
+  })();
+
+  /** A value the fader can display but whose own position decodes elsewhere. */
+  function unreachable(): number {
+    const { min, max, step } = twinGap;
+    for (let k = 1; k <= 4000; k++) {
+      const value = snapToStep(max / 10 + k * step, min, max, step);
+      const position = logPositionFor(value, min, max, step);
+      if (
+        logValueFor(position, min, max, step) !== value &&
+        logValueFor(position + 1, min, max, step) !== value
+      ) {
+        return value;
+      }
+    }
+    throw new Error('the position grid now resolves every value; this suite is stale');
+  }
+
+  it('cannot hold most of the values its own URL is allowed to name', () => {
+    // Stated so the guard below is not mistaken for belt and braces: the fader
+    // *is* coarser than the parameter, on purpose, and the only honest reading
+    // of "the thumb did not move" is the position, never the decoded value.
+    const { min, max, step } = twinGap;
+    let holdable = 0;
+    for (let k = 0; k < 2001; k++) {
+      const value = snapToStep(max / 10 + k * step, min, max, step);
+      if (logValueFor(logPositionFor(value, min, max, step), min, max, step) === value) holdable += 1;
+    }
+    expect(holdable).toBeLessThan(10);
+  });
+
+  it('reports nothing for a drag that ends on the position it began on', () => {
+    const value = unreachable();
+    const { changes } = mountRail([twinGap], { [twinGap.key]: value });
+    const mounted = Number(fader().value);
+    // The premise: this thumb is not sitting on its own value.
+    expect(logValueFor(mounted, twinGap.min, twinGap.max, twinGap.step)).not.toBe(value);
+
+    slideTo(fader(), mounted);
+
+    expect(changes).toEqual([]);
+    expect(window().textContent).toBe(value.toFixed(12));
+  });
+
+  it('reports the value one position along', () => {
+    const value = unreachable();
+    const { changes } = mountRail([twinGap], { [twinGap.key]: value });
+    const mounted = Number(fader().value);
+
+    slideTo(fader(), mounted + 1);
+
+    expect(changes).toEqual([
+      [twinGap.key, logValueFor(mounted + 1, twinGap.min, twinGap.max, twinGap.step)],
+    ]);
+  });
+
+  it('mounts every Lorenz preset on the position it decodes back to', () => {
+    // These are the gaps the "Try:" chips write. A preset that mounts half a
+    // position off is a preset the first touch of the fader silently rewrites.
+    const gaps = (registry.find((viz) => viz.id === 'lorenz')?.presets ?? [])
+      .map((preset) => preset.values[twinGap.key])
+      .filter((value): value is number => typeof value === 'number');
+    expect(gaps.length).toBeGreaterThan(0);
+    for (const gap of gaps) {
+      const position = logPositionFor(gap, twinGap.min, twinGap.max, twinGap.step);
+      expect({ gap, at: logValueFor(position, twinGap.min, twinGap.max, twinGap.step) }).toEqual({
+        gap,
+        at: gap,
+      });
+    }
+  });
+
+  // -- an off-grid value from the address bar -------------------------------
+
+  const TEMP: Extract<ParamSpec, { kind: 'range' }> = {
+    kind: 'range',
+    key: 'temp',
+    label: 'Temperature',
+    min: 1,
+    max: 4,
+    step: 0.05,
+    default: 2.25,
+  };
+
+  it('puts an off-grid URL value on the grid it draws, and still moves off it', () => {
+    // `#/ising?temp=2.27` on a 0.05 grid. The rail and the router share one
+    // quantiser now, so the number on screen is a number the thumb can hold.
+    const { changes } = mountRail([TEMP], { temp: 2.27 });
+    expect(fader().value).toBe('2.25');
+    expect(window().textContent).toBe('2.25');
+    expect(changes).toEqual([]);
+
+    slideTo(fader(), 2.25);
+    expect(changes).toEqual([]);
+
+    slideTo(fader(), 2.3);
+    expect(changes).toEqual([['temp', 2.3]]);
+    expect(window().textContent).toBe('2.30');
+  });
+
+  // -- the int row's stepper ------------------------------------------------
+
+  const SPACING: Extract<ParamSpec, { kind: 'int' }> = {
+    kind: 'int',
+    key: 'spacing',
+    label: 'Line spacing',
+    min: 24,
+    max: 160,
+    default: 64,
+    unit: 'px',
+  };
+
+  function field(): MElement {
+    const found = byClass(here(), 'stepper__input')[0];
+    if (!found) throw new Error('no stepper field');
+    return found;
+  }
+
+  it('applies a number confirmed with Enter', () => {
+    const { changes } = mountRail([SPACING], { spacing: 64 });
+    field().value = '999';
+
+    const event = fire(field(), 'keydown', { key: 'Enter' });
+
+    // A generated panel has no submit control, so Enter performs no implicit
+    // submission and the browser fires no `change`: the entry ended and nothing
+    // was listening. "999" then sat in the window over a board ruled at 64.
+    expect(event.defaultPrevented).toBe(true);
+    expect(changes).toEqual([['spacing', 160]]);
+    expect(field().value).toBe('160');
+
+    // And the next stepper press works from 160, never from the stale text.
+    fire(byLabel(here(), 'Increase Line spacing') as MElement, 'click');
+    expect(changes).toEqual([['spacing', 160]]);
+  });
+
+  it('puts the value in force back when the entry resolves to nothing', () => {
+    const { changes } = mountRail([SPACING], { spacing: 64 });
+
+    field().value = 'sixty';
+    fire(field(), 'keydown', { key: 'Enter' });
+    expect(changes).toEqual([]);
+    expect(field().value).toBe('64');
+
+    // Text the browser refuses to sanitize leaves the value unmoved, so no
+    // `change` fires on the way out either — the other ending of an entry.
+    field().value = '';
+    fire(field(), 'blur');
+    expect(changes).toEqual([]);
+    expect(field().value).toBe('64');
+  });
+
+  it('leaves every other key to the typist', () => {
+    // "1" on the way to "12" is a legal number; clamping it would fight them.
+    const { changes } = mountRail([SPACING], { spacing: 64 });
+    field().value = '9';
+    fire(field(), 'keydown', { key: '9' });
+    expect(changes).toEqual([]);
+    expect(field().value).toBe('9');
   });
 });

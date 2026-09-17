@@ -4,6 +4,7 @@ import type { Readout, VizContext, VizInstance } from '../src/core/types';
 import { dropRateFor, galton, pileMetrics } from '../src/viz/galton/index';
 import { binomialPmf, normalPdf } from '../src/core/stats';
 import { proseText } from '../src/ui/dom';
+import { testable, verdictOf } from '../src/ui/readouts';
 import {
   DEFAULT_BOARD,
   GRAVITY_PX,
@@ -827,12 +828,12 @@ describe('galton viz instance', () => {
     expect(ticks / 120).toBeLessThan(15);
   });
 
-  it('judges Variance against the sampling error of a variance, so a finished run agrees at any seed', () => {
+  it('judges Variance against the sampling error of a variance, so a finished run sits inside its band', () => {
     // Two thousand balls, a run the slider allows. A variance estimated from n
-    // samples has standard error √((μ₄ − σ⁴)/n) ≈ σ²·√(2/n), i.e. a relative
-    // error of √(2/n) — 3.2% here, three times the ledger's 1% default, which
-    // is why a completed and statistically perfect run used to read "not yet
-    // converged".
+    // samples has standard error SQRT((mu4 - sigma^4)/n), which for a pile this
+    // close to normal is sigma^2*SQRT(2/n) - a relative error of SQRT(2/n),
+    // 3.2% here, three times the ledger's old 1% default, which is why a
+    // completed and statistically perfect run used to read "not yet converged".
     const balls = 2_000;
     const expected = 3 * Math.sqrt(2 / balls);
     let worst = 0;
@@ -840,9 +841,16 @@ describe('galton viz instance', () => {
       const { instance, emitted } = stubViz({ ...defaults, balls, seed });
       const variance = runViz(instance, emitted, balls)['variance']!;
       expect(variance.target).toBe(3);
-      expect(variance.tolerance).toBeCloseTo(expected, 12);
+      // One ball carries sigma^2*SQRT(2) of it, and the ledger divides by the
+      // balls that have landed - not by the count the run was going to finish
+      // on, which is what made this band a constant 424% of its own prediction
+      // at the one-ball preset and 19% at the default 500. A band wider than
+      // the quantity it judges cannot be missed by any pile the board could
+      // produce, and this row was certifying agreement at 100% error.
+      expect(variance.band).toEqual({ kind: 'sampled', sigma: 3 * Math.SQRT2, samples: balls });
+      expect(variance.tolerance).toBeUndefined();
       const relative = Math.abs(variance.value - variance.target!) / variance.target!;
-      expect(relative, `seed ${seed}`).toBeLessThanOrEqual(variance.tolerance!);
+      expect(relative, `seed ${seed}`).toBeLessThanOrEqual(expected);
       worst = Math.max(worst, relative);
     }
     // Not a threshold wide enough to pass anything: it is under a tenth, and
@@ -851,16 +859,77 @@ describe('galton viz instance', () => {
     expect(worst).toBeGreaterThan(0.01);
   });
 
-  it('scales the variance threshold with the run, not with a constant', () => {
-    // Three standard errors of the finished run, so ten times the balls is a
-    // threshold √10 tighter — and the row is judged against the count the run
-    // will reach, so it still starts out disagreeing and arrives.
-    const read = (balls: number): Readout => {
-      const { instance, emitted } = stubViz({ ...defaults, balls });
-      instance.draw();
-      return emitted.at(-1)!.find((r) => r.key === 'variance')!;
+  it('narrows both bands as the balls land, from the balls in hand', () => {
+    const { instance, emitted } = stubViz({ ...defaults, balls: 2_000 });
+    const half = (key: string, at: number): number => {
+      const band = emitted[at]?.find((r) => r.key === key)?.band;
+      return band?.kind === 'sampled' ? (3 * band.sigma) / Math.sqrt(band.samples) : NaN;
     };
-    expect(read(5_000).tolerance!).toBeCloseTo(read(500).tolerance! / Math.sqrt(10), 12);
+    // Part way through, deliberately: the two counts are only distinguishable
+    // while the run is still going, and 900 ticks of a 167-a-second stream is
+    // about 1,250 of the 2,000 balls asked for.
+    for (let i = 0; i < 900; i++) {
+      instance.step(TICK);
+      if (i % 150 === 149) instance.draw();
+    }
+    const frames = emitted.length;
+    expect(frames).toBeGreaterThan(3);
+    const landed = emitted[frames - 1]?.find((r) => r.key === 'landed')?.value ?? 0;
+    expect(landed).toBeGreaterThan(0);
+    expect(landed).toBeLessThan(2_000);
+    for (const key of ['mean', 'variance']) {
+      expect(half(key, 1), key).toBeGreaterThan(half(key, frames - 1));
+      // 1/SQRT(n) of the balls in the slots, not of the balls the fader asked
+      // for: the run is only part way through and the band says so.
+      const sigma = key === 'mean' ? Math.sqrt(3) : 3 * Math.SQRT2;
+      expect(half(key, frames - 1), key).toBeCloseTo((3 * sigma) / Math.sqrt(landed), 12);
+    }
+  });
+
+  it('gives the headline a band the board can satisfy, and the span a landing can occupy', () => {
+    // The ledger's 1% default sat at 0.77 standard errors of the default run,
+    // failed by 42% of statistically perfect finished piles, and no setting of
+    // the two faders brings the headline's own noise inside it: the best the
+    // board can do is 3/SQRT(16*5000) = 1.06%. Three standard errors of a
+    // Binomial(rows, 1/2) landing over the balls in hand is 3.87% at the
+    // defaults, which is the honest resolution of the measurement and the
+    // number the ledger's ceiling was chosen to admit.
+    const balls = 500;
+    const { instance, emitted } = stubViz({ ...defaults, balls });
+    const mean = runViz(instance, emitted, balls)['mean']!;
+    expect(mean.band).toEqual({ kind: 'sampled', sigma: Math.sqrt(3), samples: balls });
+    expect(mean.tolerance).toBeUndefined();
+    expect(mean.range).toEqual([0, 12]);
+    const half = (3 * Math.sqrt(3)) / Math.sqrt(balls);
+    expect(half / mean.target!).toBeCloseTo(0.0387, 4);
+    expect(Math.abs(mean.value - mean.target!)).toBeLessThanOrEqual(half);
+    // And the verdict the reader actually sees, from the one rule that writes it.
+    expect(testable(mean)).toBe(true);
+    expect(verdictOf(mean).state).toBe('agree');
+  });
+
+  it('says what one ball can show instead of settling for ever', () => {
+    // One ball lands in one slot and the run is over: there is no pile to have
+    // a shape, and no number of extra frames will produce one. The band is
+    // honestly enormous - three standard deviations of a single landing - so
+    // the ledger refuses the verdict, and the hero carries a sentence saying
+    // why rather than a spinner implying that more waiting would help.
+    const { instance, emitted } = stubViz({ ...defaults, balls: 1 });
+    const mean = runViz(instance, emitted, 1)['mean']!;
+    expect(mean.hint).toBeDefined();
+    expect(mean.hint).toContain('one ball');
+    // Never the prediction itself: the verdict line above is where a number
+    // belongs, and a hint repeating it says the same thing twice.
+    expect(mean.hint).not.toContain(String(mean.target));
+    expect(testable(mean)).toBe(false);
+    expect(verdictOf(mean).state).not.toBe('agree');
+
+    // The sentence belongs to the one-ball run, not to the board: a run with a
+    // pile to measure carries no hint, so nothing on the hero moves as the
+    // balls come down.
+    const many = stubViz({ ...defaults, balls: 500 });
+    many.instance.draw();
+    expect(many.emitted.at(-1)!.find((r) => r.key === 'mean')!.hint).toBeUndefined();
   });
 });
 

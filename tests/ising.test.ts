@@ -29,6 +29,17 @@ import {
 /** The engine's tick: 120 Hz, and the tab runs one sweep per tick. */
 const TICK = 1000 / 120;
 
+/**
+ * A canvas label that opens with a bare symbol — `T = 2.00`, `Tc 2.269`,
+ * `m 0.911` — rather than with the words this tab prints instead.
+ *
+ * `\b` is a word boundary here, and it has to be written as a word boundary: in
+ * a string it is U+0008, and a literal backspace byte is what shipped. Nothing
+ * on the plate contains one, so the assertion that read it matched nothing,
+ * passed unconditionally, and could not have failed whatever the tab drew.
+ */
+const SYMBOL_LABEL = /^(Tc|T|m)\b/;
+
 /** One complete measurement: the burn-in the readout excludes, then a full window. */
 const SETTLE = BURN_IN_SWEEPS + WINDOW_SWEEPS;
 
@@ -630,12 +641,21 @@ describe('ising instance: readouts', () => {
     expect(a.fg.texts).toContain('heat 2.00');
     expect(a.bg.texts).toContain(`tips at ${CRITICAL_TEMPERATURE.toFixed(3)}`);
     expect(a.bg.texts).toContain('how much agrees vs heat');
+    // The matcher is checked against the labels it exists to catch before it is
+    // pointed at the plate: written with a literal U+0008 where `\b` was meant,
+    // it matched nothing at all and the loop below could not fail.
+    for (const label of ['T = 2.00', 'Tc 2.269', 'm 0.911', 'T', 'm']) {
+      expect(label, label).toMatch(SYMBOL_LABEL);
+    }
+    for (const kept of ['heat 2.00', 'tips at 2.269', 'how much agrees vs heat', 'measured']) {
+      expect(kept, kept).not.toMatch(SYMBOL_LABEL);
+    }
     for (const text of [...a.bg.texts, ...a.fg.texts]) {
-      expect(text, text).not.toMatch(/^(Tc|T|m)/);
+      expect(text, text).not.toMatch(SYMBOL_LABEL);
     }
   });
 
-  it('marks one headline, and carries the analytic target and a derived tolerance', () => {
+  it('marks one headline, and carries the analytic target and a derived band', () => {
     const v = stubViz();
     tick(v, SETTLE);
     paint(v);
@@ -645,12 +665,20 @@ describe('ising instance: readouts', () => {
     const magnet = rowsOf(v)['magnet'];
     expect(magnet?.target).toBeCloseTo(0.911_319, 6);
     expect(magnet?.plain).toBe('how much of the sheet points one way');
-    // The tolerance is the rounding the lattice is entitled to plus three
-    // standard errors of the average, as a fraction of the target.
-    const tol = magnet?.tolerance ?? 0;
-    expect(tol).toBeGreaterThan(0);
-    expect(tol).toBeLessThan(0.05);
-    expect(Math.abs((magnet?.value ?? 0) - 0.911_319) / 0.911_319).toBeLessThan(tol);
+    // A magnetisation per spin is bounded by its own definition, and the band
+    // is judged against the smaller of that span and the prediction.
+    expect(magnet?.range).toEqual([0, 1]);
+    // The band is the rounding the lattice is entitled to plus three standard
+    // errors of the average, in |M|'s own units — declared beside the target so
+    // a temperature with no prediction leaves no stray zero behind, which the
+    // ledger would now read as a claim of exactness.
+    expect(magnet?.tolerance).toBeUndefined();
+    const band = magnet?.band;
+    expect(band?.kind).toBe('absolute');
+    const half = band?.kind === 'absolute' ? band.half : 0;
+    expect(half).toBeGreaterThan(0);
+    expect(half).toBeLessThan(0.05 * Math.min(1, magnet?.target ?? 0));
+    expect(Math.abs((magnet?.value ?? 0) - 0.911_319)).toBeLessThan(half);
   });
 
   it('withholds the target where a grid this size cannot carry one, and says why', () => {

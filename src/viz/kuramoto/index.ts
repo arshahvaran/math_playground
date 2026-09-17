@@ -32,11 +32,19 @@ import {
  * The mean-field form is O(N) per step, so this is a frame-budget number rather
  * than an algorithmic one. Measured on a 1,280 × 720 plate, two ticks plus a
  * full paint per frame: 1.38 ms at two thousand oscillators and 0.31 ms at the
- * default four hundred, against the 16 ms the budget allows. It is also where
- * the finite-crowd floor (0.886/√N = 0.020) has dropped far enough below the
- * step of the coupling control to stop being visible on the plot.
+ * default four hundred, against the 16 ms the budget allows. What is painted
+ * does not grow with it — the dots are laid down under their own ink budget, at
+ * a stride — so the extra cost is the O(N) step alone.
+ *
+ * Three thousand rather than two because of what the reading is worth there.
+ * The quenched sampling error of a crowd's own draw of speeds falls as 1/√N and
+ * nothing but a bigger crowd reduces it, so the crowd fader *is* the resolution
+ * of this tab: three of those bars at K = 4 come inside a twentieth of the
+ * answer — the ledger's ceiling for the word "matches" — only from about 2,540
+ * oscillators. Stopping at two thousand meant the tab could never agree with
+ * its own prediction at any position of either control.
  */
-const MAX_OSCILLATORS = 2_000;
+export const MAX_OSCILLATORS = 3_000;
 
 const MIN_OSCILLATORS = 50;
 const DEFAULT_OSCILLATORS = 400;
@@ -342,7 +350,11 @@ const presets: readonly Preset[] = [
     id: 'in-step',
     label: 'In step',
     caption: 'Twice the tipping point and the crowd collapses into one clump, with the arrow settling on 0.707.',
-    values: { coupling: 4 },
+    // The crowd as well as the coupling: a chip that names the number the arrow
+    // settles on has to bring enough fireflies to tell that number from the
+    // wobble of its own draw of speeds, which at this coupling takes about
+    // 2,540 of them.
+    values: { coupling: 4, count: MAX_OSCILLATORS },
   },
 ];
 
@@ -473,19 +485,28 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         headline: true,
         plain: 'how together they are',
-        // Three bars, where a bar is the quenched sampling error of this
-        // crowd's own draw of speeds (above the tipping point) or the floor a
-        // crowd of this size reads (below it). The ledger's 1% default is the
-        // wrong bet by an order of magnitude either way: at four hundred
-        // oscillators the honest bar at K = 4 is 0.030, four times the 1% of
-        // 0.707 it would otherwise be held to, and a perfectly correct run
-        // would read "still settling" for ever. The same three bars decide
-        // whether there is a prediction to quote at all, so the two can never
-        // disagree about what this reading is being held to.
+        // Three bars, where a bar is the quenched sampling error of this crowd's
+        // own draw of speeds (above the tipping point) or the floor a crowd of
+        // this size reads (below it). Declared in r's own units, and against the
+        // interval r is *defined* on: the reading is a length of an average of
+        // unit vectors, so it can only be somewhere in [0, 1], and the ledger
+        // judges the band against that span as well as against the answer. That
+        // is the whole of the defect this replaces — at the default coupling
+        // with the fireflies fader at its stop, three bars either side of 0.577
+        // accepted a window 0.74 wide, three quarters of everything the number
+        // was ever allowed to be, and a window that wide is not a measurement of
+        // anything, whatever it was derived from.
+        //
+        // Neither the band nor the size of the crowd decides whether a verdict
+        // is printed: the ledger's one ceiling does. What `hasPrediction` still
+        // decides is whether the exact answer is worth *quoting* — in the band
+        // around Kc a finite crowd has no settled value at all — and the tab
+        // says so in a sentence instead.
         ...(predicted
           ? {
               target,
-              tolerance: target > 0 ? (BAND_SIGMAS * bar) / target : BAND_SIGMAS * bar,
+              band: { kind: 'absolute' as const, half: BAND_SIGMAS * bar },
+              range: [0, 1] as const,
               formula: ['√(1 − 2', { v: 'γ' }, '/', { v: 'K' }, ')'] as const,
             }
           : {

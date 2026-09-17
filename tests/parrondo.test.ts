@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
+import { bandOf, testable, verdictOf } from '../src/ui/readouts';
 import {
   axisRange,
   layoutPlot,
@@ -647,6 +648,45 @@ describe('parrondo instance: readouts', () => {
     }
     for (const preset of parrondo.presets ?? []) expect(text(preset.caption), preset.id).not.toMatch(banned);
     expect(text(parrondo.blurb)).not.toMatch(banned);
+  });
+
+  it('declares a band from the rounds played, and one that cannot reach a winning game', () => {
+    // The bar was three standard errors at the round count the run was going to
+    // *reach* — 1.22 coins against a −1.000 prediction at the fewest players —
+    // so the acceptance window ran from −2.22 to +0.22 and the tab printed
+    // "agrees with the prediction" on a finished run 52.7% away from it, and on
+    // a Game A reading of −1.527. A window containing a winning game inverts the
+    // whole result, so the band is judged against the span a purse can move in
+    // and is at most a twentieth of the prediction: it cannot reach zero from a
+    // losing one, and nothing widens it back.
+    const v = stubViz({ players: 20 });
+    tick(v, ROUNDS);
+    paint(v);
+    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    for (const key of ['gainA', 'gainB', 'gainTurns'] as const) {
+      const row = by[key] as Readout;
+      expect(row.tolerance, key).toBeUndefined();
+      expect(row.band, key).toEqual({ kind: 'sampled', sigma: 100, samples: 20 * ROUNDS, sigmas: 3 });
+      expect(row.range, key).toEqual([-100, 100]);
+      // Twenty players over three thousand rounds cannot resolve a coin a
+      // hundred rounds, and the ledger says so instead of certifying it.
+      expect(testable(row), key).toBe(false);
+      expect(verdictOf(row).state, key).not.toBe('agree');
+    }
+
+    // At a table that could produce a verdict, the window still excludes zero:
+    // the losing games can only ever be certified as losing.
+    const solved = stubViz({ players: 2_000 });
+    tick(solved, ROUNDS);
+    paint(solved);
+    for (const row of solved.emitted.at(-1) ?? []) {
+      const target = row.target;
+      if (target === undefined || target === 0) continue;
+      const half = bandOf(row);
+      if (half === null) continue;
+      expect(half, row.key).toBeLessThan(Math.abs(target));
+      if (verdictOf(row).state === 'agree') expect(Math.sign(row.value), row.key).toBe(Math.sign(target));
+    }
   });
 
   it('is unmeasured before the first round, and reads the moment after the run', () => {

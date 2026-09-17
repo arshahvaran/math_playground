@@ -9,7 +9,13 @@ import type {
   VizContext,
   VizInstance,
 } from '../../core/types';
-import { createCluster, type Cluster, type Lattice } from './cluster';
+import {
+  FIT_MIN_PARTICLES,
+  createCluster,
+  type Cluster,
+  type DimensionFit,
+  type Lattice,
+} from './cluster';
 
 /** Hard ceiling on particles; the `particles` slider tops out here too. */
 const MAX_PARTICLES = 50_000;
@@ -19,12 +25,30 @@ const DEFAULT_STICKINESS = 1;
 const DEFAULT_SEED = 42;
 
 /**
- * Walk steps per engine tick. This was the "Walk speed" slider, fixed at its
- * old default: a particle takes about a thousand steps to arrive, so the number
- * is a clock and not physics — the cluster is the same at any value — and the
- * clock is the transport's job, not the tab's.
+ * Walk steps per engine tick, paced so a run takes about the same wall clock
+ * whatever the particle count.
+ *
+ * A particle takes roughly a thousand steps to arrive, so the step rate is a
+ * clock and not physics: the cluster for a seed is identical at any value,
+ * because the walk draws from the stream only inside a step. Held at a constant
+ * 300 the clock was calibrated for the default and nothing else, and at the top
+ * of the fader it made the control's own maximum unreachable — 50,000 particles
+ * at 27 a second is 1,830 simulated seconds, which is 908 presses of the only
+ * skip-ahead key the app has, each one advancing the run by a tenth of a per
+ * cent of itself. Every other counted tab finishes its maximum in 9 to 85
+ * presses, and the two that pace themselves — coprime's `checkRateFor()` and
+ * Buffon's drop rate — do it exactly like this. The total work is unchanged;
+ * only how much of the clock it is spread over.
  */
-const WALK_SPEED = 300;
+const RUN_SECONDS = 60;
+const STEPS_PER_PARTICLE = 1_300;
+const MIN_WALK_SPEED = 120;
+const MAX_WALK_SPEED = 12_000;
+
+export function walkSpeedFor(target: number): number {
+  const needed = (Math.max(1, target) * STEPS_PER_PARTICLE) / (RUN_SECONDS * 120);
+  return Math.max(MIN_WALK_SPEED, Math.min(MAX_WALK_SPEED, needed));
+}
 
 /**
  * Off-lattice, always. This was a three-way "Lattice" choice; the square and
@@ -41,7 +65,7 @@ const LATTICE: Lattice = 'off';
  */
 const COLOUR_BY_ARRIVAL: boolean = true;
 
-/** The engine's tick. `WALK_SPEED` is quoted per tick, so the accumulator needs it. */
+/** The engine's tick. The walk speed is quoted per tick, so the accumulator needs it. */
 const TICK_MS = 1000 / 120;
 
 /**
@@ -52,27 +76,7 @@ const TICK_MS = 1000 / 120;
 const ANALYTIC_D = 1.71;
 
 /**
- * Relative tolerance on the dimension readout.
- *
- * A single finite cluster measures D to about ±0.03: that is the spread of the
- * fit across seven seeds at twenty thousand particles (1.698, 1.707, 1.717,
- * 1.747, 1.754, 1.758, 1.766 — mean 1.735, sd 0.027), and the fit's own
- * standard error corrected for the correlation between checkpoints agrees to
- * within a factor of two. Three of those is 0.09, which is 5% of 1.71. Anything
- * tighter would report a perfectly good cluster as a disagreement; anything
- * looser would stop being a claim.
- */
-const D_TOLERANCE = 0.05;
-
-/**
  * Half-width of the world the plate shows, as a multiple of N^(1/1.71).
- *
- * The scale is fixed for the run from the *target* count, not from the cluster
- * currently on screen, and that is a deliberate choice: it costs a repaint on
- * every rescale, it lets the cluster visibly grow into its frame, and above all
- * it is what makes the stickiness slider legible. A view that tracked the
- * cluster would rescale the barely-sticky run to the same apparent size as the
- * sticky one and hide the only thing the slider does.
  *
  * The outermost particle of a finished cluster sits at about 1.85·N^(1/1.71) —
  * measured 122, 267, 560 and 1,021 particle radii at N = 10³, 5·10³, 2·10⁴ and
@@ -83,6 +87,31 @@ const VIEW_REACH_FACTOR = 2.4;
 
 /** Floor on that half-width, so a ten-particle cluster is not drawn at 200× zoom. */
 const VIEW_REACH_FLOOR = 12;
+
+/**
+ * The count the frame is sized for: the cluster on screen, rounded up to an
+ * octave, and never below `FRAME_MIN_COUNT`.
+ *
+ * The frame used to be fixed for the run from the *target*, and that is what
+ * made the top of the fader open on one lit pixel. Fifty thousand particles
+ * frame a world 1,355 particle radii across; on a 560 px plate a particle is
+ * then a fifth of a pixel, so the seed is invisible and stays invisible for the
+ * first several minutes of the run — a plate that is blank while the transport
+ * says the experiment is running.
+ *
+ * Framing the cluster that exists instead costs a repaint per octave, ten over
+ * a full run, and keeps the cluster between two thirds and all of the frame at
+ * every moment of it. It is framed from the *count* through the same
+ * N^(1/1.71) law and never from the cluster's measured radius, which is what
+ * preserves the one thing the stickiness fader teaches: five thousand barely
+ * sticky particles really do pack into a smaller cluster, and a view that
+ * tracked the real radius would rescale that away.
+ */
+const FRAME_MIN_COUNT = 64;
+
+export function frameCount(count: number): number {
+  return 2 ** Math.ceil(Math.log2(Math.max(FRAME_MIN_COUNT, count)));
+}
 
 /**
  * Arrival-order colour steps.
@@ -104,7 +133,11 @@ const params: readonly ParamSpec[] = [
     kind: 'range',
     key: 'particles',
     label: 'Particles',
-    min: 100,
+    // The floor is where the dimension fit starts having power, not where a
+    // cluster starts being drawable. Below it the tab's one headline number is
+    // an em dash under a *finished* run, which is a dead band in the lower fifth
+    // of the fader — and the first story chip used to sit inside it.
+    min: FIT_MIN_PARTICLES,
     max: MAX_PARTICLES,
     step: 100,
     default: DEFAULT_PARTICLES,
@@ -128,9 +161,9 @@ const params: readonly ParamSpec[] = [
 const presets: readonly Preset[] = [
   {
     id: 'a-hundred',
-    label: 'A hundred',
+    label: 'A few hundred',
     caption: 'Watch one particle at a time wander in from the dashed circle and freeze the moment it touches.',
-    values: { particles: 100, stickiness: 1 },
+    values: { particles: FIT_MIN_PARTICLES, stickiness: 1 },
   },
   {
     id: 'sticky',
@@ -218,12 +251,14 @@ function create(ctx: VizContext): VizInstance {
     lattice: LATTICE,
   });
 
-  // World → plate. Fixed for the run by the target count; see `viewReach`.
+  // World → plate. Framed for the cluster on screen; see `frameCount`.
   let scale = 1;
   let originX = 0;
   let originY = 0;
   /** Drawn radius of one particle, CSS px. */
   let grainRadius = 1;
+  /** The count the current frame was sized for, so a rescale is a comparison. */
+  let framedFor = 0;
 
   // Painting state. `painted` is a cursor into the cluster, not simulation
   // state: particles never move once frozen, so the background layer keeps
@@ -234,8 +269,12 @@ function create(ctx: VizContext): VizInstance {
   // Fractional walk steps owed by the speed accumulator between ticks.
   let pending = 0;
 
+  /** Derived from the target, so every run takes about the same clock. */
+  let walkSpeed = walkSpeedFor(cluster.target);
+
   function syncView(): void {
-    const reach = viewReach(cluster.target);
+    framedFor = frameCount(cluster.count);
+    const reach = viewReach(framedFor);
     scale = Math.min(ctx.width, ctx.height) / (2 * reach);
     originX = ctx.width / 2;
     originY = ctx.height / 2;
@@ -335,7 +374,24 @@ function create(ctx: VizContext): VizInstance {
    * else; the radius of gyration and the relaunch count are the model's
    * bookkeeping, kept for the exact table and the tests that read it.
    */
-  function readouts(dimension: number): Readout[] {
+  function readouts(fit: DimensionFit): Readout[] {
+    const dimension = fit.dimension;
+    // Three standard errors of *this* fit, in the dimension's own units, and
+    // nothing else.
+    //
+    // `Math.max(0.05, stderr)` was a *floor* on the band: it could only ever
+    // widen it, never narrow it, and that 0.05 was a constant — three times the
+    // spread of the fit across seven seeds at twenty thousand particles (1.698,
+    // 1.707, 1.717, 1.747, 1.754, 1.758, 1.766; sd 0.027). It is the precision a
+    // cluster with seven octaves of growth behind it has earned, and a fit
+    // spanning a third of one borrowed it: 1.747 at 400 particles read "matches
+    // the prediction of 1.710", and asking for more particles turned that into a
+    // permanent 14 % disagreement. A short fit has a wide standard error, and a
+    // wide standard error now costs the verdict — the ledger's ceiling refuses
+    // it and the run reads as still settling, which is what it is.
+    const band: Readout['band'] = Number.isFinite(fit.stderr)
+      ? { kind: 'absolute', half: 3 * fit.stderr }
+      : undefined;
     return [
       { key: 'particles', label: 'Particles', value: cluster.count, digits: 6, plain: 'particles stuck' },
       // In particle radii, so the scaling law reads directly off the row: a
@@ -348,7 +404,11 @@ function create(ctx: VizContext): VizInstance {
         value: dimension,
         digits: 4,
         target: ANALYTIC_D,
-        tolerance: D_TOLERANCE,
+        ...(band ? { band } : {}),
+        // A fractal dimension of a set in the plane is somewhere in [0, 2] by
+        // definition, and the ledger judges the band against the smaller of that
+        // span and the prediction.
+        range: [0, 2],
         headline: true,
         plain: 'how feathery the cluster is',
         hint: 'a solid blob would score 2, a line 1',
@@ -366,7 +426,7 @@ function create(ctx: VizContext): VizInstance {
       // Steps per tick depend only on dt, and the cluster draws from the rng
       // only inside a step, so the cluster for a seed is the same however the
       // transport paces the ticks — only the clock differs.
-      pending += (WALK_SPEED * dt) / TICK_MS;
+      pending += (walkSpeed * dt) / TICK_MS;
       const steps = Math.floor(pending);
       if (steps <= 0) return;
       pending -= steps;
@@ -382,6 +442,15 @@ function create(ctx: VizContext): VizInstance {
     draw() {
       const fg = ctx.layers.foreground;
       const { width, height, theme } = ctx;
+
+      // The frame follows the cluster in octaves, so the plate is legible from
+      // the first particle instead of after the first several minutes. A
+      // rescale moves every grain, which makes it a repaint — ten of them over
+      // a full run, against one per frame if the frame tracked every arrival.
+      if (framedFor !== frameCount(cluster.count)) {
+        syncView();
+        repaintAll = true;
+      }
 
       // The cluster lives on the background layer and is only ever added to:
       // a particle never moves after it freezes, so repainting fifty thousand
@@ -424,7 +493,7 @@ function create(ctx: VizContext): VizInstance {
       // The plate carries no text: the dimension is read below it, in plain
       // words, from the readouts. One fit per frame, over the whole growth
       // history.
-      ctx.emit(readouts(cluster.dimension().dimension));
+      ctx.emit(readouts(cluster.dimension()));
     },
 
     onParamChange(key, value) {
@@ -441,6 +510,7 @@ function create(ctx: VizContext): VizInstance {
           const next = particleTarget({ ...ctx.params, particles: value });
           if (next < cluster.count) return false;
           cluster.retarget(next);
+          walkSpeed = walkSpeedFor(next);
           // Both the plate scale and the arrival bands are derived from the
           // target, so every grain on the layer is now in the wrong place and
           // the wrong colour.
@@ -463,6 +533,7 @@ function create(ctx: VizContext): VizInstance {
         lattice: LATTICE,
       });
       syncView();
+      walkSpeed = walkSpeedFor(cluster.target);
       pending = 0;
       painted = 0;
       // The background accumulates, so the previous cluster would still be

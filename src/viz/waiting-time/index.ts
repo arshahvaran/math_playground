@@ -371,6 +371,45 @@ function fontPx(font: string): number {
 }
 
 /**
+ * Standard error of the average *gap landed in* after `passengers` arrivals
+ * onto a timetable of `gaps` gaps. Two sources, exactly as `waitStandardError`
+ * has, and neither term is the wait's.
+ *
+ * **Passenger sampling.** The gap caught is the length-biased X*, and with the
+ * gamma moments E[Xʲ] = μʲ·∏(1 + (i−1)cv²) from `buses.ts`, writing A = 1 + cv²
+ * and B = 1 + 2cv²:
+ *
+ *   E[X*] = E[X²]/E[X] = μA     E[X*²] = E[X³]/E[X] = μ²AB
+ *   Var(X*) = μ²A(B − A) = μ²A·cv²
+ *
+ * which is 0 at cv = 0 and 2μ² at cv = 1. The wait is a uniform point *inside*
+ * that gap, so its variance is μ²(AB/3 − A²/4) — μ² at cv = 1 — and four of
+ * those is 4μ², twice this. Taking the wait's band for this row therefore
+ * overstated it by √2 on this term, in the direction that buys verdicts.
+ *
+ * **Timetable sampling.** For a fixed timetable the measurement converges on
+ * M₂/M₁, which is exactly twice what the wait converges to, so this term is
+ * four times the wait's: μ²A(BE + A − 2AB + A·cv²) with E = 1 + 3cv².
+ *
+ * `cv` is the dial, already clamped to [0, 1] by `irregularity()`. NaN with no
+ * passengers or no timetable: no draws, no information, and a band that is not
+ * a number is one the ledger refuses rather than one it widens to infinity.
+ */
+export function caughtGapStandardError(cv: number, passengers: number, gaps: number): number {
+  const n = Math.floor(passengers);
+  const g = Math.floor(gaps);
+  if (!(n > 0) || !(g > 0)) return Number.NaN;
+  const c2 = Math.min(1, Math.max(0, cv)) ** 2;
+  const a = 1 + c2;
+  const b = 1 + 2 * c2;
+  const e = 1 + 3 * c2;
+  const mu2 = MEAN_GAP * MEAN_GAP;
+  const perPassenger = mu2 * a * c2;
+  const perTimetable = mu2 * a * (b * e + a - 2 * a * b + a * c2);
+  return Math.sqrt(perPassenger / n + perTimetable / g);
+}
+
+/**
  * A display window: an opaque plate of the canvas colour with a 1 px frame.
  *
  * Opaque because the marks behind it read straight through a translucent one,
@@ -440,23 +479,31 @@ function create(ctx: VizContext): VizInstance {
    * plain sentence beside it; everything the timetable knows about itself is
    * for the exact table only.
    *
-   * Every tolerance here is three standard errors at the count the run is going
-   * to reach, so a row starts off and arrives at agreement as the passengers
-   * come in rather than being true from the first arrival. The ledger's 1%
-   * default is the wrong bet for a wait: at cv = 1 the measurement's own
-   * standard error is 1.6% of the answer at twenty thousand passengers, so the
-   * row would read "still settling" for a perfectly healthy run.
+   * Every band here is three standard errors **at the count in hand** — the
+   * passengers who have actually turned up, and the gaps actually drawn — so a
+   * row starts with a band too wide to test anything and arrives at a verdict
+   * as the evidence comes in. Taken at the count the run was going to finish
+   * on, the headline's band was 30 % of the answer at the left stop of the
+   * Passengers fader, which is how "11.76 min" came to be printed under
+   * "matches the prediction of 10 min". At cv = 1 a run needs about 18,000
+   * passengers before three standard errors are a twentieth of a ten-minute
+   * wait, so the left half of the fader honestly reads "still settling".
+   *
+   * The timetable is drawn in full at `reset()`, before any passenger, so the
+   * three rows that measure the timetable itself have all their evidence on the
+   * first frame. That is not a band that failed to shrink; it is a measurement
+   * that was finished before the clock started.
    */
   function readouts(): Readout[] {
     const gaps = table.gaps;
+    const passengers = crowd.passengers;
     const target = expectedWait(cv);
-    const se = waitStandardError(cv, maxPassengers, gaps);
-    const waitTolerance = (3 * se) / target;
+    const c2 = cv * cv;
     return [
       {
         key: 'passengers',
         label: 'Passengers',
-        value: crowd.passengers,
+        value: passengers,
         digits: 6,
         plain: 'people who came to the stop',
       },
@@ -469,7 +516,10 @@ function create(ctx: VizContext): VizInstance {
         target,
         // §5: the hero prints "analytic" and the closed form behind the target.
         formula: [{ v: 'μ' }, '/2 + ', { v: 'σ' }, '²/(2', { v: 'μ' }, ')'],
-        tolerance: waitTolerance,
+        // Absolute rather than σ/√n, because the two terms of
+        // `waitStandardError` divide by different counts: the passengers
+        // sharpen one and only a fresh timetable sharpens the other.
+        band: { kind: 'absolute', half: 3 * waitStandardError(cv, passengers, gaps) },
         plain: 'average wait',
         headline: true,
       },
@@ -483,16 +533,19 @@ function create(ctx: VizContext): VizInstance {
       },
       {
         // The gap a passenger lands in, which is the wait doubled and the thing
-        // the geometry on the plate actually shows. Its own standard error is
-        // never worse than twice the wait's, so it takes the same relative
-        // bar rather than a second derivation.
+        // the geometry on the plate actually shows. Its own band, not the
+        // wait's: the two differ in the passenger term, because a wait is a
+        // *uniform point inside* the gap it caught and the gap is the whole of
+        // it. At cv = 1 the wait's relative band overstates this one by √2 on
+        // that term, and an overstated band is the direction that certifies
+        // things.
         key: 'experienced',
         label: 'Gap a passenger lands in',
         value: crowd.meanGap,
         digits: 4,
         unit: 'min',
         target: experiencedGap(cv),
-        tolerance: waitTolerance,
+        band: { kind: 'absolute', half: 3 * caughtGapStandardError(cv, passengers, gaps) },
         expertOnly: true,
       },
       {
@@ -502,9 +555,13 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         unit: 'min',
         target: MEAN_GAP,
-        // The sample mean of G gaps has SE = σ/√G = μ·cv/√G; three of those.
-        // Exactly zero at cv = 0, where every gap really is μ.
-        tolerance: (3 * cv) / Math.sqrt(Math.max(1, gaps)),
+        // One gap carries σ = μ·cv of standard deviation and the ledger divides
+        // by the gaps drawn. Exactly zero at cv = 0, where every gap really is
+        // μ and the reading really is exact — which a bare `tolerance` of 0
+        // could not say, because the arithmetic that read it could not tell
+        // "declared as zero" from "not declared" and handed this row a 1 % bar
+        // it never asked for.
+        band: { kind: 'sampled', sigma: gapStddev(cv), samples: gaps },
         expertOnly: true,
       },
       {
@@ -515,10 +572,14 @@ function create(ctx: VizContext): VizInstance {
         unit: 'min',
         target: gapStddev(cv),
         // A sample standard deviation's relative SE is √((κ−1)/4G) with κ the
-        // kurtosis, and a gamma of shape 1/cv² has κ = 3 + 6cv². Read as an
-        // absolute bar at cv = 0, where the target is zero and so is the
-        // measurement.
-        tolerance: 3 * Math.sqrt((2 + 6 * cv * cv) / (4 * Math.max(1, gaps))),
+        // kurtosis, and a gamma of shape 1/cv² has κ = 3 + 6cv². As a half
+        // width in minutes rather than as a fraction, so that cv = 0 — where
+        // the target is zero, every gap is exactly μ and the spread really is
+        // exactly zero — states ± 0 rather than a percentage of nothing.
+        band: {
+          kind: 'absolute',
+          half: 3 * gapStddev(cv) * Math.sqrt((2 + 6 * c2) / (4 * Math.max(1, gaps))),
+        },
         expertOnly: true,
       },
       {
@@ -532,7 +593,10 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         unit: 'min',
         target,
-        tolerance: (3 * waitStandardError(cv, Infinity, gaps)) / target,
+        // The passenger term sent to zero: no number of arrivals sharpens what
+        // *this* timetable predicts, so the only evidence is the gaps drawn —
+        // all of which are drawn at reset.
+        band: { kind: 'absolute', half: 3 * waitStandardError(cv, Infinity, gaps) },
         expertOnly: true,
       },
       {

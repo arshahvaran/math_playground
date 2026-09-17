@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Readout, VizContext } from '../src/core/types';
-import { arrivalBand, dla, viewReach } from '../src/viz/dla/index';
+import { arrivalBand, dla, frameCount, viewReach, walkSpeedFor } from '../src/viz/dla/index';
 import {
   CONTACT,
   createCluster,
@@ -46,6 +46,31 @@ function grow(seed: number, particles: number, opts: Partial<{ stickiness: numbe
 /** The scale reference: a finished cluster measures R_g ≈ N^(1/1.71) particle radii. */
 function scaleReference(n: number): number {
   return n ** (1 / ANALYTIC_D);
+}
+
+/**
+ * The headless model the tab is driving: the same seed, and the same step
+ * budget spent the same way.
+ *
+ * The rate is a fraction of a step per tick, so the model has to carry the same
+ * accumulator — 361.11 steps a tick at the default target drifts by a hundred
+ * steps over a thousand ticks if the fraction is dropped.
+ */
+function twin(ticks: number, particles: number, stickiness = 1): Cluster {
+  const c = createCluster(createRng(SEED), {
+    particles,
+    capacity: 50_000,
+    stickiness,
+    lattice: 'off',
+  });
+  let pending = 0;
+  for (let i = 0; i < ticks; i++) {
+    pending += walkSpeedFor(particles);
+    const steps = Math.floor(pending);
+    pending -= steps;
+    c.advance(steps);
+  }
+  return c;
 }
 
 /**
@@ -502,7 +527,7 @@ describe('dla instance: readouts', () => {
     const a = stubViz();
     const b = stubViz();
     for (const v of [a, b]) {
-      tick(v, 400);
+      tick(v, 3_000);
       paint(v);
     }
     const last = a.emitted.at(-1);
@@ -512,10 +537,31 @@ describe('dla instance: readouts', () => {
     // no closed form to print beside it, which is why it carries no formula.
     expect(by['dimension']?.target).toBe(ANALYTIC_D);
     expect(by['dimension']?.formula).toBeUndefined();
-    expect(by['dimension']?.tolerance).toBeCloseTo(3 * D_SIGMA / ANALYTIC_D, 2);
+    // The band is three standard errors of *this* fit, taken from the fit and
+    // nowhere else. The old `Math.max(0.05, …)` was a floor, so a fit spanning a
+    // third of an octave was judged by the precision of one spanning seven.
+    const fit = twin(3_000, 2_000).dimension();
+    expect(by['dimension']?.value).toBe(fit.dimension);
+    expect(by['dimension']?.band).toEqual({ kind: 'absolute', half: 3 * fit.stderr });
+    expect(by['dimension']?.tolerance).toBeUndefined();
+    expect(3 * fit.stderr).toBeGreaterThan(0);
     expect(by['gyration']?.target).toBeUndefined();
     expect(by['particles']?.value).toBeGreaterThan(0);
     expect(b.emitted.at(-1)).toEqual(last);
+  });
+
+  it('publishes no band at all while the fit has no octave to work with', () => {
+    // Four checkpoints spanning N = 305 to 400 is 0.27 of a natural log unit,
+    // and a slope through them is noise. The fit refuses, the reading does not
+    // exist, and the ledger prints an em dash rather than 1.747 under a check
+    // mark that says 1.710.
+    const v = stubViz();
+    tick(v, 400);
+    paint(v);
+    const row = (v.emitted.at(-1) ?? []).find((r) => r.key === 'dimension');
+    expect(row?.value).toBeNaN();
+    expect(row?.band).toBeUndefined();
+    expect(row?.tolerance).toBeUndefined();
   });
 
   it('marks one plain-language headline and demotes the bookkeeping to the exact table', () => {
@@ -552,20 +598,15 @@ describe('dla instance: readouts', () => {
   });
 
   it('grows the headless model’s cluster step for step — the clock is fixed and is not the physics', () => {
-    // The tab walks 300 steps a tick, so a thousand ticks is exactly the
-    // 300,000 steps the model takes here: the same particles in the same
-    // places, because the RNG is consulted only inside the walk. That is what
-    // lets the transport own the speed without a slider on the tab.
+    // The tab's step rate is derived from the particle target so that a run of
+    // any length takes about the same clock, and a thousand ticks is exactly
+    // that many steps in the model: the same particles in the same places,
+    // because the RNG is consulted only inside the walk. That is what lets the
+    // transport own the speed without a slider on the tab.
     const v = stubViz();
     tick(v, 1_000);
     paint(v);
-    const model = createCluster(createRng(SEED), {
-      particles: 2_000,
-      capacity: 50_000,
-      stickiness: 1,
-      lattice: 'off',
-    });
-    model.advance(300 * 1_000);
+    const model = twin(1_000, 2_000);
     expect(model.count).toBeGreaterThan(20);
     expect(ledger(v)['particles']).toBe(model.count);
     expect(ledger(v)['gyration']).toBe(model.gyration);
@@ -585,15 +626,17 @@ describe('dla instance: readouts', () => {
 });
 
 describe('dla instance: painting', () => {
-  it('paints the cluster once onto the background and only adds to it', () => {
-    // The seed particle went down in the first drawBackground(), before the
-    // recorder was cleared; every later frame adds only what has arrived.
+  it('paints the cluster once onto the background and only adds to it between rescales', () => {
+    // The seed went down in the first drawBackground(), framed for itself. The
+    // cluster has since outgrown that frame, so this frame is a rescale and
+    // repaints every grain at the new scale — which is the whole of what a
+    // rescale costs, and there are ten of them in a fifty-thousand run.
     const v = stubViz();
-    let total = 1;
     tick(v, 400);
     paint(v);
-    total += grainCount(v.bg.fills);
-    expect(total).toBe(ledger(v)['particles']);
+    const first = ledger(v)['particles'] ?? 0;
+    expect(first).toBeGreaterThan(frameCount(1));
+    expect(grainCount(v.bg.fills)).toBe(first);
 
     // A frame with no arrivals repaints nothing at all: a frozen particle never
     // moves, so fifty thousand of them are painted once and then left alone.
@@ -602,16 +645,39 @@ describe('dla instance: painting', () => {
 
     tick(v, 200);
     paint(v);
+    const after = ledger(v)['particles'] ?? 0;
     const added = grainCount(v.bg.fills);
     expect(added).toBeGreaterThan(0);
-    total += added;
-    expect(total).toBe(ledger(v)['particles']);
+    // Inside one octave only the arrivals are painted; across one, every grain
+    // is, and nothing else ever repaints the layer.
+    expect(added).toBe(frameCount(first) === frameCount(after) ? after - first : after);
     // The foreground carries the live wanderer and the launch circle only.
     expect(v.fg.clears).toBeGreaterThan(0);
     expect(grains(v.fg.fills).length).toBeLessThanOrEqual(1);
     expect(v.fg.strokes).toHaveLength(1);
     expect(v.fg.strokes[0]?.pen).toBe(THEME.gridSoft);
     expect(v.fg.strokes[0]?.alpha).toBe(1);
+  });
+
+  it('frames the cluster it has, so the top of the fader does not open on one lit pixel', () => {
+    // The frame used to be pre-scaled to the *finished* cluster: fifty thousand
+    // particles frame a world 1,355 particle radii across, so on a 440 px plate
+    // the whole of a young cluster was ten pixels wide and the plate read as
+    // blank for the first several minutes of the run.
+    const v = stubViz({ particles: 50_000 });
+    tick(v, 20);
+    paint(v);
+    const n = ledger(v)['particles'] ?? 0;
+    expect(n).toBeGreaterThan(100);
+    const marks = grains(v.bg.fills.filter((p) => p.pen === THEME.data3));
+    expect(marks).toHaveLength(n);
+    // Every grain is at least a whole CSS pixel…
+    for (const m of marks) expect(m.size).toBeGreaterThanOrEqual(1);
+    // …and the cluster occupies a useful part of the plate rather than a speck
+    // at the middle of it. Framed for the target this extent was 10 px.
+    const spread = (values: number[]): number => Math.max(...values) - Math.min(...values);
+    const extent = Math.max(spread(marks.map((m) => m.x)), spread(marks.map((m) => m.y)));
+    expect(extent).toBeGreaterThan(440 / 5);
   });
 
   it('repaints every grain on a resize, at the new scale', () => {

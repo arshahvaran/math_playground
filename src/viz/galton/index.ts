@@ -341,10 +341,20 @@ function create(ctx: VizContext): VizInstance {
   }
 
   function readouts(tallest: number, mode: number): Readout[] {
-    const { mean, variance } = sim.stats();
+    // `n` is the count behind both readings — the balls in the bins, not the
+    // balls the fader asked for — and it is what the bands below are divided
+    // by, so they shrink as the pile grows instead of being honest only on the
+    // last frame of the run.
+    const { mean, variance, n } = sim.stats();
     const rows = sim.rows;
     const meanTarget = rows * BIAS;
     const varianceTarget = rows * BIAS * (1 - BIAS);
+    // One ball is one route: it lands in one slot and the run is over. There is
+    // no pile to have a shape, so the hero says so rather than leaving the
+    // reader watching a sentence that is waiting for evidence that is never
+    // coming. Taken from the run's target rather than from the count so far, so
+    // it is fixed for the whole run and the hero's lines never move under it.
+    const oneBall = ballTarget(ctx.params) === 1;
     return [
       { key: 'landed', label: 'Balls landed', value: sim.landed, digits: 6, plain: 'balls landed' },
       // §5: the hero prints "analytic" and the closed form the target came
@@ -357,22 +367,44 @@ function create(ctx: VizContext): VizInstance {
         formula: [{ v: 'n' }, '·', { v: 'p' }],
         plain: 'average landing spot',
         headline: true,
+        // A landing slot is Binomial(rows, p), so one ball carries
+        // √(rows·p(1−p)) of standard deviation and the ledger divides it by the
+        // balls that have actually landed. The headline used to take the
+        // ledger's 1 % default, which no setting of the two faders can satisfy
+        // — the best the board can do is 3/√(16·5000) = 1.06 % — so a correct
+        // run could not reliably agree with it; three standard errors at the
+        // *final* ball count has the opposite fault, being true from the first
+        // landing. This is the same 3.87 % at the end of the default run and
+        // honest before it.
+        band: { kind: 'sampled', sigma: Math.sqrt(rows * BIAS * (1 - BIAS)), samples: n },
+        // A ball lands somewhere between the two edge slots, so the band is
+        // judged against the smaller of the prediction and this.
+        range: [0, rows],
+        ...(oneBall
+          ? { hint: 'one ball lands in one slot, so there is no pile to have a shape — raise Balls to build one' }
+          : {}),
       },
       {
         key: 'variance',
         label: 'Variance',
         value: variance,
         target: varianceTarget,
-        // A variance is a noisier estimator than a mean, and the ledger's 1%
-        // default is the wrong bet for it: the sample variance of n bin indices
-        // has standard error √((μ₄ − σ⁴)/n), which for a distribution close to
-        // normal is σ²·√(2/n) — a relative error of √(2/n), 6.3% at the
-        // 500-ball default, so a finished and statistically perfect run read
-        // "not yet converged" for most seeds. Three of those standard errors,
-        // measured at the ball count the run is going to reach rather than at
-        // the count so far, so the row still starts off and arrives at agreement
-        // as the balls come down instead of being true from the first landing.
-        tolerance: 3 * Math.sqrt(2 / ballTarget(ctx.params)),
+        // The sample variance of n slot indices has standard error
+        // √((μ₄ − σ⁴)/n), which for a distribution this close to normal is
+        // σ²·√(2/n): one observation carries σ²·√2, and the ledger divides by
+        // the balls that have landed.
+        //
+        // Read at the ball count the run would *finish* on, that expression was
+        // 424 % of the answer at the one-ball preset and 19 % at the default
+        // 500 — a band wider than the quantity it judges certifies anything,
+        // which is how this row agreed with its prediction at 100 % error. Read
+        // at the count in hand it is 6.0 % even at the top of the fader, still
+        // over the ledger's twentieth, so the row is a reading rather than a
+        // test: a variance needs about 7,200 balls to be settled that closely
+        // and MAX_BALLS is 5,000. The table still prints the measurement, the
+        // prediction and the error between them; what it no longer prints is a
+        // verdict the run cannot support.
+        band: { kind: 'sampled', sigma: varianceTarget * Math.SQRT2, samples: n },
         plain: 'spread of the pile',
       },
       { key: 'tallest', label: 'Tallest bin', value: tallest, digits: 6, expertOnly: true },

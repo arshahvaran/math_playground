@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { CanvasTheme } from '../src/core/types';
 import {
   CANVAS_THEME_VARS,
   DEFAULT_CANVAS_THEME,
   computeBackingSize,
+  createStage,
 } from '../src/core/canvas';
 import { ensureCanvasFont, strokeWithHalo } from '../src/core/paint';
+import { installDom, type Harness, type MElement } from './dom-harness';
 
 /** WCAG 2.x relative luminance of a `#rrggbb` colour, in [0, 1]. */
 function luminance(hex: string): number {
@@ -305,5 +307,95 @@ describe('ensureCanvasFont', () => {
     } finally {
       delete g.document;
     }
+  });
+});
+
+/**
+ * A browser that will not give out a 2D context.
+ *
+ * Not hypothetical: a canvas-blocking privacy extension, iOS Safari past its
+ * total-canvas-memory ceiling, and a crashed GPU process all answer
+ * `getContext('2d')` with null. It used to throw from here, out through
+ * `activate()` and past a `teardown()` that had already emptied the bench, and
+ * the reader was left with a blank white plate and no message — on this tab and
+ * on every tab they clicked afterwards, for the life of the page.
+ *
+ * So the refusal is in the return type. `Stage | null` is a value the compiler
+ * makes the caller handle, where a throw was something it could not see.
+ */
+describe('createStage', () => {
+  let dom: Harness | null = null;
+  let restoreCreateElement: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreCreateElement?.();
+    restoreCreateElement = null;
+    dom?.teardown();
+    dom = null;
+  });
+
+  /** Let `allowed` canvases have a context; every one after that answers null. */
+  function denyContextAfter(harness: Harness, allowed: number): void {
+    const document = harness.document;
+    const real = document.createElement.bind(document);
+    let made = 0;
+    restoreCreateElement = () => {
+      document.createElement = real;
+    };
+    document.createElement = (tag: string): MElement => {
+      const el = real(tag);
+      if (tag === 'canvas' && ++made > allowed) el.getContext = () => null;
+      return el;
+    };
+  }
+
+  function host(harness: Harness): HTMLElement {
+    return harness.app as unknown as HTMLElement;
+  }
+
+  it('stacks two layers on the host and sizes them to it', () => {
+    dom = installDom();
+    const stage = createStage(host(dom));
+
+    expect(stage).not.toBeNull();
+    expect(dom.app.children).toHaveLength(2);
+    expect(stage?.width).toBe(900);
+    expect(stage?.height).toBe(600);
+
+    stage?.destroy();
+    expect(dom.app.children).toHaveLength(0);
+    expect(dom.app.classList.contains('stage')).toBe(false);
+  });
+
+  it('answers null instead of throwing when no context is given out', () => {
+    dom = installDom();
+    denyContextAfter(dom, 0);
+
+    expect(createStage(host(dom))).toBeNull();
+  });
+
+  it('leaves the host exactly as it found it, so the caller can say so in it', () => {
+    dom = installDom();
+    const before = dom.app.className;
+    denyContextAfter(dom, 0);
+
+    createStage(host(dom));
+
+    // A half-built stage is worse than none: the canvases would cover whatever
+    // message the caller puts here, and the `position: relative` would outlive
+    // the refusal.
+    expect(dom.app.children).toHaveLength(0);
+    expect(dom.app.className).toBe(before);
+    expect(dom.app.style['position']).toBeUndefined();
+  });
+
+  it('refuses whole when only the second layer is refused', () => {
+    dom = installDom();
+    denyContextAfter(dom, 1);
+
+    // Both layers are built before the host is touched, so the second refusal
+    // is not a case that has to be unwound — there is nothing to unwind.
+    expect(createStage(host(dom))).toBeNull();
+    expect(dom.app.children).toHaveLength(0);
   });
 });

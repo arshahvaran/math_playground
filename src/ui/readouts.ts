@@ -12,8 +12,14 @@
  *
  * One rule decides agreement. The verdict sentence, the table row's state and
  * the live-region sentence the shell speaks on pause all go through
- * `agrees()`, with the tolerance each readout declares, so the simple view can
+ * `verdictOf()`, with the band each readout declares, so the simple view can
  * never disagree with the exact one.
+ *
+ * The band is the whole of the honesty of this page. It has to shrink as the
+ * run gathers evidence, it has to be narrow enough to rule something out, and
+ * where a visualization declares none the ledger invents nothing — it reports
+ * the reading and makes no claim. `MAX_BAND_FRACTION` states the ceiling and
+ * why it is where it is.
  *
  * Nothing here may move when a digit changes. Every number sits in a box whose
  * width is reserved up front from the digits the reading can need, the hero's
@@ -39,8 +45,43 @@ export interface ReadoutsHandle {
 /** ~10 Hz. Faster is illegible; the trailing flush is what matters. */
 const WRITE_INTERVAL_MS = 100;
 
-/** Relative error inside which a reading counts as agreeing, when none is declared. */
-const DEFAULT_TOLERANCE = 0.01;
+/** Standard errors a `sampled` band spans when the readout does not say. */
+const DEFAULT_SIGMAS = 3;
+
+/**
+ * The widest band, as a fraction of the scale the reading is judged against,
+ * that may still print the word "matches".
+ *
+ * The ceiling is the worst disagreement a check mark can ever sit beside, so it
+ * is not a matter of taste; it is read off the two measurements that bound it.
+ *
+ * Above: the smallest band this app was caught certifying nonsense through was
+ * Monte Carlo π's 16 % at the left stop of its fader, which printed 3.36000
+ * under "matches the prediction of 3.14159" — a 6.9 % disagreement. A ceiling
+ * that allows 6.9 % allows that sentence, so it has to be below it.
+ *
+ * Below: the Galton board's Mean bin is three standard errors wide at 3.87 % on
+ * its default 12 rows and 500 balls, and no amount of running fixes that — it
+ * is the honest resolution of the measurement. A ceiling under 3.87 % would
+ * make a correct board read "still settling" for ever.
+ *
+ * A twentieth of the prediction is the round number between them, and it has a
+ * plain meaning: the ledger says "matches" only where the reading and the
+ * prediction are within five per cent of each other, which is what a reader
+ * with no statistics takes the word to mean. Bands wider than this are not
+ * wrong — three standard errors of a variance over 500 balls really is 19 % —
+ * they are simply not tests, and the verdict says so instead.
+ *
+ * The ceiling lives here, with the one rule of agreement, rather than in each
+ * visualization: a tab cannot ship a band nobody looked at.
+ */
+export const MAX_BAND_FRACTION = 0.05;
+
+/** What the verdict says when there is no band to judge with at all. */
+const UNRESOLVED_TEXT = 'not enough data to judge';
+
+/** What it says when the run has not resolved the reading against its prediction yet. */
+const SETTLING_TEXT = 'still settling';
 
 /** Beyond this relative error the sentence stops quoting a percentage and says "still settling". */
 const SETTLING_FROM = 0.1;
@@ -86,15 +127,130 @@ export function plainLabel(readout: Readout): string {
 }
 
 /**
- * Does a reading agree with its prediction, to the tolerance the readout
- * declares? A target of exactly zero has no relative error, so the tolerance
- * is read as an absolute one there — the only reading that means anything.
+ * A declared `Band`, resolved against the ceiling.
+ *
+ * Three outcomes, and the two that are not a band are not the same thing. A
+ * band the run has not sharpened enough to test anything is a statement about
+ * *this moment* — keep going and it becomes one. No band at all is a statement
+ * about the tab: nothing was declared, or what was declared is not a number, so
+ * there is nothing to judge with and no amount of running changes that.
  */
-export function agrees(readout: Readout, target: number): boolean {
-  const tolerance = toleranceOf(readout);
-  const scale = Math.abs(target);
-  const error = Math.abs(readout.value - target);
-  return scale === 0 ? error <= tolerance : error / scale <= tolerance;
+type Resolved =
+  | { kind: 'usable'; half: number }
+  | { kind: 'too-wide' }
+  | { kind: 'undeclared' };
+
+/**
+ * The half-width the readout declares, in the reading's own units, before the
+ * ceiling is applied. `null` where nothing was declared.
+ */
+function declaredHalfWidth(readout: Readout, target: number): number | null {
+  const size = Math.abs(target);
+  const band = readout.band;
+  const tolerance = readout.tolerance;
+  // Declaring both is a contradiction, not a fallback. Choosing one of them
+  // here would be the ledger deciding which of two numbers a tab meant, which
+  // is the whole family of defect this rule exists to remove.
+  if (band !== undefined && tolerance !== undefined) return Number.NaN;
+  // The bare number is relative, except against a zero target where a relative
+  // band states nothing at all and an absolute one is the only reading that
+  // means anything. `relative` keeps the first half of that and refuses the
+  // second, so a tab that means ± 0.02 has to say so.
+  if (tolerance !== undefined) return size > 0 ? tolerance * size : tolerance;
+  if (band === undefined) return null;
+  switch (band.kind) {
+    case 'exact':
+      return 0;
+    case 'absolute':
+      return band.half;
+    case 'relative':
+      return size > 0 ? band.fraction * size : Number.NaN;
+    case 'sampled': {
+      // Standard errors of the mean of `samples` observations. The division is
+      // done here rather than in the visualization so the band cannot fail to
+      // shrink: it falls as 1/√n for every tab, on every frame, with no way to
+      // declare a constant by accident.
+      const sigmas = band.sigmas ?? DEFAULT_SIGMAS;
+      const n = Math.floor(band.samples);
+      return n >= 1 ? (sigmas * Math.abs(band.sigma)) / Math.sqrt(n) : Number.NaN;
+    }
+  }
+}
+
+/**
+ * The scale the band is judged against: the prediction's own size, never larger
+ * than the span the quantity is allowed to occupy.
+ *
+ * The smaller of the two, always. Taking the prediction alone lets a reading
+ * bounded in [0, 1] carry a band of 0.74; taking the range alone would let a
+ * tab buy itself any ceiling it liked by declaring a wide enough one.
+ *
+ * Where the prediction is exactly zero it is no scale at all — every band is
+ * infinitely many times it — so the range is the only thing left, and a tab
+ * predicting zero without declaring one gets no verdict. That is the honest
+ * answer: "0 ± 0.02" says nothing until something on the page says what 0.02 is
+ * a fraction of.
+ */
+function scaleOf(readout: Readout, target: number): number {
+  const span = spanOf(readout);
+  const size = Math.abs(target);
+  if (size > 0) return Math.min(size, span);
+  return Number.isFinite(span) ? span : 0;
+}
+
+/** The width of the declared range, or Infinity where there is none to speak of. */
+function spanOf(readout: Readout): number {
+  const range = readout.range;
+  if (range === undefined) return Infinity;
+  const width = range[1] - range[0];
+  // A reversed or empty range is a mistake in the declaration, not a claim that
+  // the quantity is pinned: it is ignored rather than certifying everything.
+  return Number.isFinite(width) && width > 0 ? width : Infinity;
+}
+
+function bandFor(readout: Readout): Resolved {
+  const target = readout.target;
+  if (target === undefined || !Number.isFinite(target)) return { kind: 'undeclared' };
+  const declared = declaredHalfWidth(readout, target);
+  // A band that is not a number — a standard error over zero samples, a fit
+  // with no residual degrees of freedom, a negative width — cannot judge
+  // anything, and quietly substituting a percentage here is the whole defect.
+  if (declared === null || !Number.isFinite(declared) || declared < 0) return { kind: 'undeclared' };
+  if (declared > MAX_BAND_FRACTION * scaleOf(readout, target)) return { kind: 'too-wide' };
+  return { kind: 'usable', half: declared };
+}
+
+/**
+ * The half-width of the band `agrees()` applies, or `null` where the reading
+ * has none that could test anything.
+ *
+ * Two properties fall out of the ceiling and are worth naming, because the tabs
+ * were breaking both. The band is at most a twentieth of the span the quantity
+ * can occupy, so it can never be most of the answer. And it is at most a
+ * twentieth of the prediction, so it cannot reach zero from a non-zero
+ * prediction: Parrondo's whole result is that each game on its own *loses*, and
+ * no interval that also contains a winning game can be used to certify it.
+ */
+export function bandOf(readout: Readout): number | null {
+  const band = bandFor(readout);
+  return band.kind === 'usable' ? band.half : null;
+}
+
+/** Does a reading agree with its prediction, inside the band the readout declares? */
+export function agrees(readout: Readout): boolean {
+  const target = readout.target;
+  if (target === undefined || !Number.isFinite(readout.value)) return false;
+  const half = bandOf(readout);
+  return half !== null && Math.abs(readout.value - target) <= half;
+}
+
+/**
+ * Can this reading test its prediction at all? A band inside the ceiling is a
+ * test; a wider one cannot produce the word "matches", whatever it measures,
+ * and a reading with no prediction or no band has nothing to test.
+ */
+export function testable(readout: Readout): boolean {
+  return bandFor(readout).kind === 'usable';
 }
 
 /**
@@ -106,13 +262,24 @@ export function verdictOf(readout: Readout): Reading {
   if (!Number.isFinite(readout.value)) return { text: 'not measured yet', state: 'none' };
   const target = readout.target;
   if (target === undefined) return { text: readout.hint ?? '', state: 'none' };
+  const band = bandFor(readout);
+  // Nothing was declared, or what was declared cannot judge. The prediction is
+  // not quoted, because quoting it is what makes the sentence a claim.
+  if (band.kind === 'undeclared') return { text: UNRESOLVED_TEXT, state: 'none' };
+  // A band too wide to rule anything out is a run that has not got there yet,
+  // and that is what the reader is told. "matches the prediction of 3.14159"
+  // under a printed 3.36000 is read as a claim about π, never as a claim about
+  // a 16 % band.
+  if (band.kind === 'too-wide') return { text: SETTLING_TEXT, state: 'far' };
   // With its unit, where there is one: the hero prints "79.3 %" above this
   // line, and a prediction of "78.5" under it is a different quantity.
   const shown = num(target, readout.digits ?? 4) + (readout.unit ? ` ${readout.unit}` : '');
-  if (agrees(readout, target)) return { text: `matches the prediction of ${shown}`, state: 'agree' };
+  if (Math.abs(readout.value - target) <= band.half) {
+    return { text: `matches the prediction of ${shown}`, state: 'agree' };
+  }
   const off = target === 0 ? Infinity : Math.abs((readout.value - target) / target);
   if (off < SETTLING_FROM) return { text: `within ${percent(off)} of ${shown}`, state: 'near' };
-  return { text: 'still settling', state: 'far' };
+  return { text: SETTLING_TEXT, state: 'far' };
 }
 
 /** The headline as one spoken sentence, for the live region. */
@@ -123,11 +290,6 @@ export function sentenceOf(readout: Readout): string {
   if (readout.unit) text += ` ${readout.unit}`;
   if (readout.target !== undefined) text += `, ${verdictOf(readout).text}`;
   return `${text}.`;
-}
-
-function toleranceOf(readout: Readout): number {
-  const declared = readout.tolerance;
-  return typeof declared === 'number' && declared > 0 ? declared : DEFAULT_TOLERANCE;
 }
 
 /**
@@ -364,8 +526,11 @@ function buildExact(): Exact {
     ),
   );
 
-  root.open = readStore(EXACT_KEY) === 'open';
-  const onToggle = (): void => writeStore(EXACT_KEY, root.open ? 'open' : 'closed');
+  root.open = exactOpen;
+  const onToggle = (): void => {
+    exactOpen = root.open;
+    writeStore(EXACT_KEY, root.open ? 'open' : 'closed');
+  };
   root.addEventListener('toggle', onToggle);
 
   return {
@@ -511,14 +676,29 @@ function writeRow(parts: RowParts, readout: Readout): void {
     return;
   }
 
-  const ok = measured && agrees(readout, target);
+  // One rule, one call: the row's state is the hero's verdict translated into
+  // the table's vocabulary, so the simple view and the exact one cannot
+  // disagree about whether a number arrived.
+  const reading = verdictOf(readout);
+  const ok = reading.state === 'agree';
   setText(parts.target, num(target, digits));
   setText(parts.abs, measured ? signed(readout.value - target, digits) : '');
   setText(parts.rel, measured ? relative(readout.value, target) : '');
   // The state is carried three ways — colour, the dotted underline the CSS drops
   // on agreement, and the square — plus text, because none of the three is
-  // available to a screen reader.
-  setText(parts.stateText, ok ? 'agrees with the prediction' : measured ? 'not there yet' : 'not measured yet');
+  // available to a screen reader. "not there yet" is a claim of its own — that
+  // the run is still arriving — so a row with no band to judge by says the
+  // other thing rather than borrowing it.
+  setText(
+    parts.stateText,
+    ok
+      ? 'agrees with the prediction'
+      : !measured
+        ? 'not measured yet'
+        : reading.state === 'none'
+          ? UNRESOLVED_TEXT
+          : 'not there yet',
+  );
   parts.tr.dataset['state'] = ok ? 'agree' : 'off';
 }
 
@@ -555,6 +735,19 @@ function setText(node: Text, text: string): void {
 function clock(): number {
   return typeof performance === 'object' ? performance.now() : Date.now();
 }
+
+/**
+ * Whether the exact table is open, for the life of the page.
+ *
+ * The ledger is rebuilt from scratch on every route change, so storage was
+ * being asked to carry a preference across two components one tab click apart —
+ * and where storage is blocked, or writes throw, the reader's choice evaporated
+ * on every tab change and the disclosure could not be kept open (or, with
+ * writes failing and a stale value stored, could not be kept closed). Memory is
+ * the source of truth and storage is a mirror read once, so a blocked origin
+ * costs persistence across a reload, which is all it can honestly cost.
+ */
+let exactOpen = readStore(EXACT_KEY) === 'open';
 
 /** localStorage throws outright in some privacy modes; a missing preference is not an error. */
 function readStore(key: string): string | null {

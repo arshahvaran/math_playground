@@ -15,7 +15,6 @@ import {
   Orchard,
   VISIBLE_FRACTION,
   drawPair,
-  fractionStandardError,
   piFromFraction,
   piStandardError,
 } from './lattice';
@@ -117,6 +116,22 @@ const WINDOW_SAMPLE = 'π ≈ 00.0000';
 
 const DEFAULT_SEED = 42;
 
+/**
+ * How near 6/π² a finite corner's own exact share has to be before the ledger
+ * calls it arrival.
+ *
+ * The two exhaustive rows are counted tree by tree, so there is no sampling
+ * noise in them at all and this is not a standard error: it is the display
+ * decision of how close to the endless orchard's limit a corner has to sit to
+ * be reading it. The run does not enter the number, because the run does not
+ * enter the quantity — a hundred a side is 0.13 % above the constant however
+ * many trees are checked, forty a side 0.65 %, and twelve a side 4 %. One per
+ * cent sits between the second and the third, so the big corners read as
+ * agreement and the small one reads as the 4 % it is, which is the lesson the
+ * two rows exist to teach.
+ */
+const MAX_STRUCTURAL_BIAS = 0.01;
+
 const TAU = 2 * Math.PI;
 
 const params: readonly ParamSpec[] = [
@@ -151,7 +166,10 @@ const presets: readonly Preset[] = [
     id: 'small-orchard',
     label: 'Small orchard',
     caption: 'Twelve trees a side is small enough to follow one sight line at a time and see it stop at the nearer tree in the way.',
-    values: { size: 12, checks: 2_000 },
+    // Five thousand checks rather than two: at two the sampled share's own bar
+    // is a hair over a twentieth of what it is measuring, so the chip would
+    // print a reading that is arriving and a verdict that says it is not.
+    values: { size: 12, checks: 5_000 },
   },
   {
     id: 'forty-a-side',
@@ -312,7 +330,22 @@ function create(ctx: VizContext): VizInstance {
   function readouts(): Readout[] {
     const checks = log.checks;
     const share = log.fraction;
-    const target = checkTarget(ctx.params);
+    // What the random checks are an estimate *of*.
+    //
+    // Not 6/π². The checks sample this corner with replacement, so what they
+    // converge on is this corner's own exact share: twelve a side has 91 of its
+    // 144 trees in view, so the share converges on 0.63194 and π̂ on
+    // √(6·144/91) = 3.08132, and no amount of checking moves either. Held to the
+    // constant instead, the statistical bar at 2,000 checks was wider than the
+    // 1.9 % gap and the shipped "Small orchard" chip printed "✓ matches the
+    // prediction of 3.14159" — then *retracted* it as the reader gathered more
+    // data, which rewards them for gathering less. Deriving the target from the
+    // orchard in force is what makes that unrepresentable: every size is judged
+    // against the value it can actually reach, and no fader position certifies
+    // a limit it provably cannot. The two exhaustive rows below carry the
+    // comparison with the constant, where the finite corner is the lesson.
+    const corner = orchard.fraction;
+    const cornerPi = piFromFraction(corner);
     return [
       { key: 'checked', label: 'Trees checked', value: checks, digits: 6, plain: 'trees checked at random' },
       {
@@ -320,53 +353,70 @@ function create(ctx: VizContext): VizInstance {
         label: 'Share in view, checked',
         value: share,
         digits: 4,
-        target: VISIBLE_FRACTION,
-        // §5: the hero prints "analytic" and the closed form behind the target.
-        formula: ['6/', { v: 'π' }, '²'],
+        target: corner,
         plain: 'share in view among the ones checked',
-        // The ledger's 1% default is six standard deviations at the top of the
-        // fader, so the row would read agreement whatever the run did. Three
-        // standard deviations at the count the run is going to reach is the
-        // honest bar, and it makes the reading start off and arrive rather than
-        // be true from the first check.
-        tolerance: (3 * fractionStandardError(target)) / VISIBLE_FRACTION,
+        // One check is a Bernoulli draw at the corner's own share, so sd of one
+        // observation is √(p(1−p)) and the ledger divides by the root of the
+        // checks made *so far*.
+        //
+        // What it replaces was three standard errors at the ceiling the fader
+        // names, and a ceiling is not evidence: the bar was honest on the last
+        // frame of the run and on no other, and dragging the fader from 200,000
+        // down to 200 widened it 32× without a single new check behind it.
+        band: { kind: 'sampled', sigma: Math.sqrt(corner * (1 - corner)), samples: checks },
+        range: [0, 1],
       },
       {
         key: 'pi',
         label: 'π estimate',
         value: piFromFraction(share),
         digits: 6,
-        target: Math.PI,
+        target: cornerPi,
         headline: true,
         plain: 'our estimate of pi',
-        // Statistical only, with no allowance for the corner being finite. A
-        // corner of a given size cannot do better than its own exact share —
-        // forty a side caps π at 3.1314 however long it runs — and folding that
-        // gap into the bar would print agreement on a reading that is honestly
-        // half a percent out. It reads "within 0.4%" instead, which is true.
-        tolerance: (3 * piStandardError(target)) / Math.PI,
+        // §5: the hero prints "analytic" and the closed form behind the target.
+        formula: ['√(6/', { v: 'p' }, ')'],
+        // π = √(6/p), so |dπ/dp| = π/2p and sd(π̂) = (π/2)·√((1−p)/p): a share's
+        // *relative* error is halved on its way into π. That factor of a half is
+        // why this row can resolve while the share row two lines up is still
+        // settling — they are one measurement in two coordinates, and π is the
+        // sharper of the two in relative terms, which is arithmetic and not a
+        // disagreement.
+        band: {
+          kind: 'sampled',
+          sigma: (cornerPi / 2) * Math.sqrt((1 - corner) / corner),
+          samples: checks,
+        },
+        hint: 'an endless orchard would give π itself, and a corner of one stops a little short',
       },
       {
         key: 'picture',
         label: 'Share in view, whole picture',
-        value: orchard.fraction,
+        value: corner,
         digits: 4,
         target: VISIBLE_FRACTION,
         formula: ['6/', { v: 'π' }, '²'],
         plain: 'share in view over the whole picture',
-        // No declared tolerance: this one is counted tree by tree, so the
-        // ledger's 1% is exactly the right bar. A hundred a side lands 0.13%
-        // out and reads as agreement; twelve a side lands 4% out and says so,
-        // which is the lesson — a finite corner is not an endless orchard.
+        // Counted tree by tree, so there is no sampling noise here and the
+        // allowance is a display decision rather than a standard error — see
+        // MAX_STRUCTURAL_BIAS. A hundred a side lands 0.13 % out and reads as
+        // agreement; twelve a side lands 4 % out and says so, which is the
+        // lesson: a finite corner is not an endless orchard.
+        band: { kind: 'absolute', half: MAX_STRUCTURAL_BIAS * VISIBLE_FRACTION },
+        range: [0, 1],
       },
       { key: 'lit', label: 'Trees in view', value: orchard.visible, digits: 6, expertOnly: true },
       { key: 'trees', label: 'Trees in the picture', value: orchard.trees, digits: 6, expertOnly: true },
       {
         key: 'picturePi',
         label: 'π from the whole picture',
-        value: piFromFraction(orchard.fraction),
+        value: cornerPi,
         digits: 6,
         target: Math.PI,
+        // Half the share row's allowance, through the same |dπ/dp| = π/2p that
+        // halves its noise, so the two exhaustive rows cannot reach opposite
+        // verdicts about one corner four rows apart.
+        band: { kind: 'absolute', half: (MAX_STRUCTURAL_BIAS / 2) * Math.PI },
         expertOnly: true,
       },
       {
@@ -520,6 +570,16 @@ function create(ctx: VizContext): VizInstance {
       // measured from it. The side is a different orchard and the seed is a
       // different run, so the shell resets on both.
       if (key !== 'checks') return false;
+      // A *lowered* ceiling is not absorbable, and this is the guard the three
+      // sibling tabs with a counted ceiling all carry — montecarlo-pi, chaos
+      // game and dla — and this one did not. Without it `step()` stops at once
+      // (`log.checks >= target`) and freezes the old, much sharper run under the
+      // new label: the ledger went on reporting 200,000 checks while the fader,
+      // the caption and the permalink all said 200, and `readouts()` recomputed
+      // both tolerances from the *new* ceiling, widening the agreement bar 32×
+      // without a single new measurement behind it. Falling through to the
+      // shell's reset() makes the page and the link it advertises the same run.
+      if (checkTarget(ctx.params) < log.checks) return false;
       rate = checkRateFor(checkTarget(ctx.params));
       paintEvery = paintEveryFor(rate);
       return true;

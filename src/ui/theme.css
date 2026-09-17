@@ -315,6 +315,12 @@
   --rail-w-wide: 26rem;
   --label-col: 8.5rem;
   --measure: 68ch;           /* blurb, chip caption and facts ONLY, never a wrapper */
+  /* The shortest measure the blurb is worth reading at, and the whole of the
+     decision about whether it sits beside the title or under it — see §6. It is
+     a flex basis rather than a grid track, so a line that will not hold both
+     BREAKS instead of squeezing one of them to nothing. In ch of the blurb's
+     own 16 px type, so it scales with the reader's text like the title does. */
+  --blurb-min: 24ch;
 
   /* ------------------------------------------------------------------------
      Control sizes. Desktop default 36 px; the primary action and the transport
@@ -327,9 +333,20 @@
   --key-h: 2.25rem;          /* 36 */
   --key-h-lg: 2.75rem;       /* 44 — Play/Pause and every transport key */
   --key-s: 1.875rem;         /* 30 visual; target extended to 44 by ::after */
-  --key-h-touch: 2.75rem;
+  --key-h-small: 2rem;       /* 32 visual; target extended to 44 by ::after */
+  --key-h-touch: 2.75rem;    /* THE target floor: SC 2.5.5 is 44 x 44 */
   --window-h: 1.75rem;       /* 28 — was 22, i.e. a 98.css text field */
   --input-h: 2.25rem;        /* 36 */
+  /* How far a small key's transparent ::after has to reach to make 44 px —
+     never a constant. A fixed -7px is 14 px of invisible box beyond the control
+     in BOTH axes, and the two blocks above already raise --key-s to the touch
+     size on a coarse pointer and on a handheld, which is exactly where that
+     overhang is at once useless (the ink is already 44 px) and expensive (it is
+     7 px of scrollable document past the gutter, and the page then scrolls
+     sideways). min() pins it at zero the moment the visual key reaches the
+     floor, so the overhang cannot outlive the reason for it. */
+  --hit-extend: min(0px, calc((var(--key-s) - var(--key-h-touch)) / 2));
+  --hit-extend-small: min(0px, calc((var(--key-h-small) - var(--key-h-touch)) / 2));
   /* The hero's three fixed lines — 44 px numeral, 20 px label, 22 px sentence —
      plus two 4 px gaps and 32 px of padding. A FLOOR, never a fit: the region
      under the plate must not change height while a run is going. The hint line
@@ -495,8 +512,10 @@
 }
 
 /* Every interactive box reaches 44 x 44 on a finger without growing the ink on
-   a mouse. This one block plus the three ::after target extensions below is the
-   whole SC 2.5.5 / 2.5.8 requirement. */
+   a mouse. This one block plus the two ::after target extensions below is the
+   whole SC 2.5.5 / 2.5.8 requirement — and because this block raises --key-s,
+   --hit-extend takes those extensions to zero here rather than stacking a
+   second 14 px on top of a key that already measures 44. */
 @media (pointer: coarse) {
   :root {
     --key-h: 2.75rem;
@@ -645,8 +664,17 @@ canvas {
    and the source live in the footer line, where a reader who wants them looks.
    -------------------------------------------------------------------------- */
 
+/* It WRAPS, for the same reason the transport in the rail does. The wordmark is
+   type at --t-18 and the toggle is a --key-h key: both are rem, the viewport is
+   not, and at 200 % text the two wanted 344 px of a 288 px row. A wrapped
+   masthead is two lines; an unwrapped one is a document 40 px wider than the
+   phone, and on a mobile viewport a document wider than the screen widens the
+   LAYOUT VIEWPORT, which is what stretched the fixed transport deck to 568 px
+   inside a 360 px screen. The auto margin keeps the toggle on the right whether
+   it shares the line or has one to itself. */
 .masthead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
@@ -654,7 +682,10 @@ canvas {
   padding: var(--s-2) var(--gutter) 0;
 }
 
+/* No `white-space: nowrap`: "Math Playground" is two words and the break
+   between them is the one the reader can afford. */
 .masthead__wordmark {
+  min-width: 0;
   font-family: var(--font-display);
   font-size: var(--t-18);
   font-weight: 800;
@@ -662,7 +693,6 @@ canvas {
   font-stretch: var(--wdth-wordmark);
   color: var(--ink);
   text-decoration: none;
-  white-space: nowrap;
 }
 
 /* The scheme toggle. Two states, aria-pressed, one glyph that fills as the
@@ -670,6 +700,7 @@ canvas {
    there; this rule exists so the masthead can find it. */
 .theme-toggle {
   flex: none;
+  margin-inline-start: auto;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -843,9 +874,24 @@ canvas {
    is the restraint that keeps the redesign from becoming a card grid.
    -------------------------------------------------------------------------- */
 
+/* The rail track is capped by a FRACTION of the bench, not by its rem width
+   alone. --rail-w is rem and the stacking breakpoint below is a media query,
+   and the two do not measure the same thing: `rem` in a media query is the
+   reader's DEFAULT font size, while `rem` in a declaration is the root's
+   CURRENT one, so a reader who enlarges text past the default — Chrome's
+   minimum-font-size setting is the common way — grows the rail without moving
+   the breakpoint that would have stacked it. Measured at 1024 px with 200 %
+   text: the rail asked for 768 px of a 961 px bench and left the plate 97 px,
+   the stage 65 px; at 224 % it leaves nothing and the backing store rounds to
+   one device pixel, which is the blank canvas. A percentage cannot desync
+   because it is measured on the bench itself, so the figure — the subject of
+   the page — keeps the majority of the row at any text size, and the control
+   rows restack themselves through the `controls` container query. At the
+   default size 45 % is 432 px at the narrowest two-column width and the cap
+   never binds: every measurement in this file is unchanged. */
 .bench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--rail-w);
+  grid-template-columns: minmax(0, 1fr) min(var(--rail-w), 45%);
   gap: var(--bench-gap);
   align-items: start;
   padding-inline: var(--gutter);
@@ -863,11 +909,32 @@ canvas {
   flex: 1 0 auto;
 }
 
+/* The title and the blurb share a baseline line when the FIGURE COLUMN has room
+   for both, and the blurb takes a full-width line of its own when it does not.
+   That is a flex line break, and it replaces the `@media (min-width: 64rem)`
+   two-track grid revision 4 used here, which asked the VIEWPORT a question only
+   the figure column and this tab's title could answer. The title's `auto` track
+   was sized by its own 26ch cap and the blurb's `minmax(0, 1fr)` was allowed to
+   reach zero, so a long title took the whole column: measured on
+   Diffusion-Limited Aggregation, the blurb's track was 0 px at 1024, 51 px at
+   1100 and 135 px at 1200, and one word per line made the head 565 / 539 /
+   227 px tall — the plate below the fold at every one of them.
+
+   A wrapping line cannot starve anything: an item whose basis will not fit
+   moves to the next line and is full width there. The decision is then made per
+   tab, per width and per text size, with no number in it but --blurb-min, which
+   is a measure rather than a breakpoint. */
 .figure__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--s-6);
+  row-gap: var(--s-2);
   padding-block: 0;
 }
 
 .figure__title {
+  flex: 0 1 auto;
   font-family: var(--font-display);
   font-size: var(--title-size);
   font-weight: var(--wght-display);
@@ -877,31 +944,30 @@ canvas {
   color: var(--ink);
   max-width: 26ch;
   text-wrap: balance;
+  /* The one place in the page where a single word can be wider than the column
+     it is in: "Aggregation" is 363 px at 200 % text and the figure column on a
+     320 px phone is 288. Breaking a word is ugly; a title that widens the
+     DOCUMENT past the screen takes the whole page sideways with it, deck
+     included. This only ever engages when the word genuinely cannot fit.
+
+     `anywhere` and not `break-word`: they break identically at layout time, but
+     only `anywhere` lowers the MIN-CONTENT size, and min-content is what a flex
+     item's automatic minimum is made of. With break-word the title still
+     floored its own flex line at 363 px and the page still went sideways —
+     measured, and the reason the first version of this line did nothing. */
+  overflow-wrap: anywhere;
 }
 
+/* The basis is the whole condition: the blurb sits beside the title while
+   --blurb-min of it fits on the line and takes its own line otherwise, growing
+   to the column and stopping at the prose measure. The row-gap above replaces
+   the margin-top this rule used to carry, so the stacked case has one owner. */
 .figure__blurb {
-  margin-top: var(--s-2);
+  flex: 1 1 var(--blurb-min);
   max-width: var(--measure);
   font-size: var(--t-16);
   line-height: var(--lh-16);
   color: var(--ink-muted);
-}
-
-/* From 1024 px the blurb sits on the title's baseline row rather than under it,
-   which buys the readouts back roughly 28 px of fold — the space the taller
-   masthead and hero spend. Revision 2 held this at 1280 px and paid for it at
-   exactly the width DESIGN §4 measures. */
-@media (min-width: 64rem) {
-  .figure__head {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: baseline;
-    column-gap: var(--s-6);
-  }
-
-  .figure__blurb {
-    margin-top: 0;
-  }
 }
 
 /* The plate: white bed, plotter margin, four L-shaped registration marks
@@ -1528,10 +1594,6 @@ canvas {
 
 .rail {
   min-width: 0;
-  /* The control grid restacks by the RAIL's own width rather than the
-     viewport's, which is the thing that actually matters when a reader zooms. */
-  container-type: inline-size;
-  container-name: rail;
 }
 
 .rail__panel {
@@ -1556,10 +1618,13 @@ canvas {
    rather than as a gap in a strip. Revision 2's `margin-inline: -1px` shared
    seams were a Motif idiom.
 
-   It WRAPS. Six controls want 342 px and a 24rem rail gives 344 px of panel;
-   that is two pixels of headroom, and a font that measures differently would
-   push the picker out of the panel rather than onto a second row. Wrapping is
-   the only version of this that cannot overflow. */
+   IN THE RAIL IT WRAPS. Six controls want 342 px and a 24rem rail gives 344 px
+   of panel; that is two pixels of headroom, and a font that measures
+   differently would push the picker out of the panel rather than onto a second
+   row. Wrapping is the only version of this that cannot overflow HERE, because
+   the panel grows with it. In the handheld deck the panel does not grow — the
+   deck is a fixed --deck-h and the page's clearances are calc()s of it — so
+   §15 turns wrapping off and lets the row scroll instead. */
 .transport {
   display: flex;
   flex-wrap: wrap;
@@ -1622,13 +1687,26 @@ canvas {
   border-radius: var(--radius-3);
 }
 
-/* Generated controls: one row per ParamSpec, separated by space. */
+/* Generated controls: one row per ParamSpec, separated by space.
+
+   THE CONTROL ROWS ARE THEIR OWN QUERY CONTAINER. The container was the rail,
+   and the rail is not reliably their ancestor — the shell puts this form in the
+   figure column at every width — so the collapse below had stopped matching
+   anywhere at all, silently, which is what a container query that names a
+   container off the element's ancestor chain does. Measured consequence: a
+   204 px label column and a 211 px stepper were still being asked to share a
+   288 px row on a 320 px phone at 150 % text, and the stepper's own tracks hung
+   132 px past the screen. The row is what the question is about — "does a label
+   fit beside this control?" — so the row is the container, and it answers for
+   itself wherever the shell decides to put it. */
 .controls {
   display: flex;
   flex-direction: column;
   gap: var(--s-5);
   margin: 0;
   padding: 0;
+  container-type: inline-size;
+  container-name: controls;
 }
 
 .control {
@@ -1662,6 +1740,22 @@ canvas {
   grid-area: scale;
   display: flex;
   justify-content: space-between;
+  /* The end numerals are allowed to hang one gutter outside this row, and are
+     not allowed to widen the document by doing it. Capping the TRANSFORM is not
+     enough on its own: a numeral wider than the slot left for it already
+     overflows this flex row before it is translated at all, and the translate
+     then carries that overshoot out of the page. Measured on the Lorenz gap
+     fader at 320 px with 200 % text — "0.001" is 67 px in a slot with 26 px
+     left, so its right edge sat at 329 px inside a 320 px viewport and the
+     document scrolled 9 px sideways.
+     `clip` is the operative word rather than `hidden` or `visible`: clipped
+     overflow never contributes to the scrollable area, so no label, at any
+     length or text size, can reach the document's width through this row —
+     while `overflow-clip-margin` keeps the one gutter of deliberate hang the
+     rule below asks for. The failure is bounded by construction instead of by
+     the numerals happening to be short enough. */
+  overflow: clip;
+  overflow-clip-margin: var(--gutter);
   font-family: var(--font-mono);
   font-size: var(--t-11);
   font-weight: 500;
@@ -1673,17 +1767,21 @@ canvas {
 }
 
 /* Centre the end numerals under the carriage's end positions — but never
-   further out than 22 px, which keeps a long numeral inside the gutter. A
-   "0.000000000001" at the low end of the Lorenz gap fader is 100 px wide,
-   and centred it hung 40 px off the left edge of a phone. */
+   further out than THE GUTTER, which is the only distance there is between the
+   row's edge and the edge of the screen. A "0.000000000001" at the low end of
+   the Lorenz gap fader is 100 px wide, and centred it hung 40 px off the left
+   edge of a phone. The cap was 1.375rem, which is that distance at the default
+   text size and 44 px against a 32 px gutter at 200 %: measured 2 px of
+   sideways document at 360 px. Naming the gutter makes it exact at every text
+   size rather than right at one of them. */
 .control__min {
   margin-inline-start: calc(var(--thumb) / 2);
-  transform: translateX(max(-50%, -1.375rem));
+  transform: translateX(max(-50%, calc(-1 * var(--gutter))));
 }
 
 .control__max {
   margin-inline-end: calc(var(--thumb) / 2);
-  transform: translateX(min(50%, 1.375rem));
+  transform: translateX(min(50%, var(--gutter)));
 }
 
 /* "The window being adjusted takes an accent ring" — targeted at the window
@@ -1716,9 +1814,14 @@ canvas {
   color: var(--ink-soft);
 }
 
-/* Under 17rem of RAIL — a zoomed reader, not a narrow window — the label column
-   collapses and every control gets the full width. */
-@container rail (max-width: 17rem) {
+/* Under 17rem of ROW — a zoomed reader, or a phone once the text is enlarged —
+   the label column collapses and every control gets the full width. Seventeen
+   rem is 8.5 for the label column, 0.75 for the gap and what is left for the
+   widest control, the stepper: two --key-s keys around a 5ch window. Because
+   the threshold and the tracks are both rem, enlarging the text moves the
+   collapse and the row it protects together — a media query in px could not,
+   which is the same mismatch that starves the bench in §6. */
+@container controls (max-width: 17rem) {
   .control {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
@@ -1889,17 +1992,25 @@ input.window:disabled {
 }
 
 .key--small {
-  height: 2rem;
+  height: var(--key-h-small);
   padding: 0 10px;
   font-size: var(--t-13);
   line-height: var(--lh-13);
 }
 
-/* 32 px of ink, 44 px of target. */
+/* 32 px of ink, 44 px of target — by the DEFICIT in the block axis, and in the
+   inline axis not by an overhang at all. These keys carry a word ("Copy link",
+   a preset name) and every one of them is already wider than 44 px, so `inset-
+   inline: 0` costs nothing and keeps the invisible box off the axis the page
+   edge is on; the min-width is the floor for a key that one day is not, and it
+   is on the ::after rather than on the key so it cannot silently overrule the
+   width .share__key reserves for its two labels. */
 .key--small::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset-block: var(--hit-extend-small);
+  inset-inline: 0;
+  min-width: var(--key-h-touch);
 }
 
 /* Solid glyphs. A 1.5 px round-capped stroke at 16 px is the Feather/Lucide
@@ -2163,11 +2274,13 @@ input.window:disabled {
     translate var(--dur-2) var(--ease-tactile);
 }
 
-/* 30 px of ink, 44 px of target. */
+/* 30 px of ink, 44 px of target — and 44 px of ink, 44 px of target wherever
+   --key-s has already risen to the touch size, where a fixed -7px was 7 px of
+   invisible box past the rail's own edge on a handheld. */
 .stepper__key::after {
   content: "";
   position: absolute;
-  inset: -7px;
+  inset: var(--hit-extend);
 }
 
 .stepper__key:active:not(:disabled) {
@@ -2568,6 +2681,22 @@ input.window:disabled {
     scroll-padding-bottom: calc(var(--deck-h) + var(--s-4) + env(safe-area-inset-bottom, 0px));
   }
 
+  /* ONE ROW, and it cannot wrap. Wrapping is right in the rail, where the panel
+     grows; here the deck is exactly --deck-h tall and the page's two clearances
+     — the body's end padding and the root's scroll-padding — are calc()s of
+     that same token, so a second flex line is not a taller deck, it is a
+     control painted BELOW the deck, outside the lit panel, over the plate.
+     Measured at 360 px: the six controls wanted exactly the 328 px the deck's
+     content box had, the speed picker lost the tie and sat 33 px under the
+     deck's bottom edge. Tightening the deck's own inline padding to its block
+     padding buys 8 px, which is what 360 and 375 need; where the controls
+     genuinely cannot share a row — 320 px, or any width once the text is
+     enlarged — the row scrolls instead, and the deck's height stays --deck-h by
+     construction at every text size. `safe center` centres the row while it
+     fits and falls back to flush start when it does not, rather than centring
+     the overflow and putting the first control out of reach past the scroll
+     origin. The inline padding is also the ring's clearance: 4 px holds a 2 px
+     outline at its 2 px offset against the clip edge. */
   .transport {
     position: fixed;
     inset-inline: var(--s-2);
@@ -2575,11 +2704,21 @@ input.window:disabled {
     z-index: 20;
     order: 0;
     height: var(--deck-h);
-    padding-inline: var(--s-2);
+    padding-inline: var(--s-1);
     border-radius: var(--radius-5);
     background: var(--surface-raised);
     box-shadow: var(--e-float);
-    justify-content: center;
+    flex-wrap: nowrap;
+    justify-content: safe center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    scroll-padding-inline: var(--s-1);
+    overscroll-behavior-inline: contain;
+  }
+
+  .transport::-webkit-scrollbar {
+    display: none;
   }
 
   .transport[data-running="true"] {
@@ -2627,7 +2766,15 @@ input.window:disabled {
      and ellipsizes instead when the two together are wider than the row. */
   .readout {
     display: grid;
-    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 11rem;
+    /* Eleven rem, but never more of the row than the row has: a bare 11rem is
+       352 px at 200 % text and the row is 328 px on a 360 px phone, so the
+       value and error cells hung 96 px past the screen and the page scrolled
+       sideways — with the layout viewport widening to match and the fixed deck
+       stretching with it. The cap is still a constant for a given layout width,
+       which is the whole point of the column: it does not depend on the digits
+       in it, so nothing moves while a run is going. The 8ch it leaves is the
+       label's own minimum. */
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) min(11rem, calc(100% - 8ch));
     grid-template-areas:
       "label  leader value"
       "target target error";

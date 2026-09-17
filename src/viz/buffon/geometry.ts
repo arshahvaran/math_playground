@@ -116,6 +116,10 @@ export function estimatePi(drops: number, crossings: number, length: number, spa
  */
 export function piStandardError(drops: number, length: number, spacing: number): number {
   const p = crossingProbability(length, spacing);
+  // NaN over no drops: a standard error needs a sample. Dividing by zero gave
+  // Infinity, which was published as a Readout on the frame after every reset
+  // and every parameter change.
+  if (!(drops > 0) || !(p > 0)) return NaN;
   return Math.PI * Math.sqrt((1 - p) / (p * drops));
 }
 

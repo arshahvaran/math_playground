@@ -5,9 +5,13 @@ import { createRng } from '../src/core/rng';
 import type { ParamValue, Readout, Viz, VizContext } from '../src/core/types';
 import { registry } from '../src/viz/registry';
 import {
+  agrees,
+  bandOf,
   createReadouts,
   headlineOf,
+  MAX_BAND_FRACTION,
   sentenceOf,
+  testable,
   verdictOf,
   type ReadoutsHandle,
 } from '../src/ui/readouts';
@@ -50,7 +54,15 @@ afterEach(() => {
   dom.teardown();
 });
 
-/** The Galton board's readouts, with the plain-language fields the simple view reads. */
+/**
+ * The Galton board's readouts, with the plain-language fields the simple view
+ * reads.
+ *
+ * The mean bin declares a real band, because there is no longer any such thing
+ * as a reading with a prediction and no band: one ball through twelve rows has
+ * a standard deviation of √(12·¼) = √3, so three standard errors over the 500
+ * the board drops is 0.067 bins, or 1.1 % of the six it is aimed at.
+ */
 function galton(mean: number, landed: number): Readout[] {
   return [
     { key: 'landed', label: 'Balls landed', value: landed, digits: 6, plain: 'balls landed' },
@@ -59,6 +71,8 @@ function galton(mean: number, landed: number): Readout[] {
       label: 'Mean bin',
       value: mean,
       target: 6,
+      band: { kind: 'sampled', sigma: Math.sqrt(3), samples: 6_000 },
+      range: [0, 12],
       plain: 'average landing spot',
       headline: true,
       formula: [{ v: 'n' }, '·', { v: 'p' }],
@@ -118,6 +132,7 @@ describe('the simple view', () => {
         value: 78.7,
         digits: 3,
         target: 78.5,
+        tolerance: 0.01,
         headline: true,
         plain: 'players poorer than when they started',
         hint: 'the coin has to land heads 56% of the time just to break even',
@@ -177,12 +192,12 @@ describe('the headline', () => {
 
 describe('the verdict', () => {
   it('agrees, is close, or is still settling — never a signed error', () => {
-    const at = (value: number, tolerance?: number): Readout => ({
+    const at = (value: number, tolerance = 0.01): Readout => ({
       key: 'k',
       label: 'K',
       value,
       target: 6,
-      ...(tolerance === undefined ? {} : { tolerance }),
+      tolerance,
     });
     expect(verdictOf(at(5.981))).toEqual({ text: 'matches the prediction of 6', state: 'agree' });
     expect(verdictOf(at(6.5))).toEqual({ text: 'within 9% of 6', state: 'near' });
@@ -200,7 +215,15 @@ describe('the verdict', () => {
   });
 
   it('prints the prediction with its unit, so the sentence names the same quantity as the number', () => {
-    const share: Readout = { key: 'below', label: 'Below the stake', value: 78.7, digits: 3, unit: '%', target: 78.5 };
+    const share: Readout = {
+      key: 'below',
+      label: 'Below the stake',
+      value: 78.7,
+      digits: 3,
+      unit: '%',
+      target: 78.5,
+      tolerance: 0.01,
+    };
     expect(verdictOf(share).text).toBe('matches the prediction of 78.5 %');
   });
 
@@ -222,11 +245,236 @@ describe('the verdict', () => {
     }
   });
 
+  it('says the same thing in the table when there is no band and when the band is too wide', () => {
+    // The two ways a row can fail to be a test are not the same sentence, and
+    // neither of them may borrow "not there yet" — that one claims the run is
+    // arriving somewhere.
+    const h = mount();
+    const bare: Readout = { key: 'k', label: 'K', value: 5, target: 6, headline: true };
+    h.update([bare]);
+    expect(verdict()).toBe('not enough data to judge');
+    expect(hero().dataset['state']).toBe('none');
+    expect(row('K').textContent).toContain('not enough data to judge');
+
+    h.update([{ ...bare, key: 'k2', label: 'K2', tolerance: 2 }]);
+    expect(verdict()).toBe('still settling');
+    expect(hero().dataset['state']).toBe('far');
+    expect(row('K2').textContent).toContain('not there yet');
+  });
+
   it('is what the live region speaks', () => {
     expect(sentenceOf(galton(5.981, 1)[1] as Readout)).toBe(
       'average landing spot 5.981, matches the prediction of 6.',
     );
     expect(sentenceOf(galton(Number.NaN, 0)[1] as Readout)).toBe('average landing spot not measured yet.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The band — what a verdict may claim, and on what evidence
+// ---------------------------------------------------------------------------
+
+/**
+ * Six properties, and the app was breaking all six.
+ *
+ * A tolerance is not a taste. It is the width of the interval inside which the
+ * reading and the prediction are not distinguishable *on the evidence gathered
+ * so far*, and that fixes almost everything about it: it shrinks as the
+ * evidence accumulates, it is never most of the answer, it never spills outside
+ * the values the quantity is allowed to take, it never reaches across zero when
+ * the sign is the whole result, a declared zero is a real claim of exactness,
+ * and where a tab declares nothing the page invents nothing.
+ *
+ * The numbers below are the ones measured on the shipped app, so every case
+ * here is a sentence a reader was shown and not a hypothetical.
+ */
+describe('the band', () => {
+  /**
+   * The standard deviation of one dart's contribution to the estimate. The
+   * estimate is 4·(share inside), so one dart contributes 4·Bernoulli(π/4),
+   * whose standard deviation is √(π(4 − π)) = 1.6427.
+   */
+  const DART_SIGMA = Math.sqrt(Math.PI * (4 - Math.PI));
+
+  const pi = (samples: number, value = Math.PI): Readout => ({
+    key: 'pi',
+    label: 'π estimate',
+    value,
+    digits: 6,
+    target: Math.PI,
+    band: { kind: 'sampled', sigma: DART_SIGMA, samples },
+  });
+
+  it('shrinks as the run gathers evidence, as 1/√n', () => {
+    // A hundred times the darts is a band ten times narrower. The visualization
+    // declares the spread of one observation and the count so far; the division
+    // is the ledger's, so there is no way to hand it the count the run will
+    // *finish* on and hold a wide early band for the whole run.
+    const wide = bandOf(pi(10_000));
+    const narrow = bandOf(pi(1_000_000));
+    expect(wide).not.toBeNull();
+    expect(narrow).toBeCloseTo((wide as number) / 10, 12);
+
+    let previous = Infinity;
+    for (const samples of [1_000, 10_000, 100_000, 1_000_000]) {
+      const half = bandOf(pi(samples));
+      expect(half, `${samples} darts`).not.toBeNull();
+      expect(half as number).toBeLessThan(previous);
+      previous = half as number;
+    }
+  });
+
+  it('refuses to certify through a band too wide to rule anything out', () => {
+    // The Monte Carlo tab at the left stop of its fader: a hundred darts is a
+    // 16 % band, and 3.36000 was printed under "matches the prediction of
+    // 3.14159".
+    const loose = pi(100, 3.36);
+    expect(testable(loose)).toBe(false);
+    expect(bandOf(loose)).toBeNull();
+    expect(agrees(loose)).toBe(false);
+    expect(verdictOf(loose)).toEqual({ text: 'still settling', state: 'far' });
+
+    // The same reading once the run can test it: a million darts resolves π to
+    // 0.16 %, and 3.36 then fails on the evidence rather than for want of it.
+    expect(testable(pi(1_000_000, 3.36))).toBe(true);
+    expect(agrees(pi(1_000_000, 3.36))).toBe(false);
+    expect(agrees(pi(1_000_000, 3.1417))).toBe(true);
+  });
+
+  it('will not certify by luck what it has no power to test', () => {
+    // Galton's Variance row declared 424 % at one ball and printed "agrees with
+    // the prediction" beside a 100 % error. A band that wide accepts every
+    // reading the board can produce — including the right one, which is why the
+    // reading landing on the answer does not rescue it.
+    const variance = (value: number, tolerance: number): Readout => ({
+      key: 'variance',
+      label: 'Variance',
+      value,
+      target: 3,
+      tolerance,
+    });
+    expect(agrees(variance(0, 4.24))).toBe(false);
+    expect(agrees(variance(3, 4.24))).toBe(false);
+    expect(verdictOf(variance(3, 4.24)).state).not.toBe('agree');
+    // Three standard errors of a variance over 500 balls is 19 %, which is
+    // honest statistics and still not a test; over 200,000 it is 0.95 %, which
+    // is.
+    expect(agrees(variance(3.01, 3 * Math.sqrt(2 / 500)))).toBe(false);
+    expect(agrees(variance(3.01, 3 * Math.sqrt(2 / 200_000)))).toBe(true);
+  });
+
+  it('is never more than a twentieth of the range the quantity can occupy', () => {
+    // Kuramoto's order parameter lives in [0, 1] by construction, and at the
+    // fewest fireflies its row accepted 0.74 of that — three quarters of
+    // everything the number was ever allowed to be.
+    const order = (value: number, half: number): Readout => ({
+      key: 'order',
+      label: 'Order parameter r',
+      value,
+      target: 0.707,
+      range: [0, 1],
+      band: { kind: 'absolute', half },
+    });
+    expect(bandOf(order(0.35, 0.74))).toBeNull();
+    expect(verdictOf(order(0.35, 0.74))).toEqual({ text: 'still settling', state: 'far' });
+    expect(bandOf(order(0.7, 0.03))).toBe(0.03);
+
+    // The range binds where it is tighter than the prediction, which is the
+    // case the prediction alone cannot catch: a critical temperature of 2.269
+    // on a fader that runs from 2.0 to 2.5 has half a degree of room, not
+    // 2.269, so a band of 0.05 covers a fifth of the interval in question.
+    const critical = (range?: readonly [number, number]): Readout => ({
+      key: 'tc',
+      label: 'Critical temperature',
+      value: 2.28,
+      target: 2.269,
+      band: { kind: 'absolute', half: 0.05 },
+      ...(range === undefined ? {} : { range }),
+    });
+    expect(bandOf(critical())).toBe(0.05);
+    expect(bandOf(critical([2, 2.5]))).toBeNull();
+  });
+
+  it('never reaches across zero, so a sign is never certified by its opposite', () => {
+    // Parrondo's Game A: the claim is that the game *loses*, at −1.000 coins
+    // per hundred rounds, and the shipped band was 52.7 % of that — an interval
+    // reaching to −0.47, and one widening of the fader away from admitting a
+    // game that wins. Every band the ledger will use is a twentieth of the
+    // prediction at most, so target ± band cannot change sign.
+    const gain = (value: number, tolerance: number): Readout => ({
+      key: 'gainA',
+      label: 'Game A, coins per 100 rounds',
+      value,
+      digits: 4,
+      target: -1,
+      tolerance,
+    });
+    expect(agrees(gain(-1.527, 0.527))).toBe(false);
+    expect(verdictOf(gain(-1.527, 0.527)).text).not.toContain('matches');
+    for (const tolerance of [0.01, 0.02, 0.04, 0.05, 0.5, 2]) {
+      const half = bandOf(gain(-1, tolerance));
+      if (half === null) continue;
+      expect(Math.sign(-1 - half), `tolerance ${tolerance}`).toBe(-1);
+      expect(Math.sign(-1 + half), `tolerance ${tolerance}`).toBe(-1);
+    }
+  });
+
+  it('honours a declared zero as exact and never swaps a default in for it', () => {
+    // 3·cv/√gaps is legitimately zero at cv = 0 — a timetable with no spread
+    // has nothing to be uncertain about — and the old test read that as "not
+    // declared" and handed the row a 1 % bar it never asked for.
+    const gap = (value: number, tolerance: number): Readout => ({
+      key: 'gapAverage',
+      label: 'Average gap on the timetable',
+      value,
+      digits: 4,
+      unit: 'min',
+      target: 10,
+      tolerance,
+    });
+    expect(agrees(gap(10, 0))).toBe(true);
+    expect(agrees(gap(10.000000001, 0))).toBe(false);
+    // The 1 % it used to be given would have called this one a match.
+    expect(agrees(gap(10.05, 0))).toBe(false);
+    expect(agrees(gap(10.05, 0.01))).toBe(true);
+    // And the same statement in the form that cannot be confused with a number.
+    const exact: Readout = { key: 'n', label: 'Balls landed', value: 500, target: 500, band: { kind: 'exact' } };
+    expect(agrees(exact)).toBe(true);
+    expect(agrees({ ...exact, value: 499 })).toBe(false);
+  });
+
+  it('invents nothing where a visualization declares nothing', () => {
+    // Buffon's π estimate and its crossing fraction both ship a prediction and
+    // no band, and both were being judged against a 1 % nobody chose. A reading
+    // with nothing to judge it by is reported as a reading: no check mark, and
+    // the prediction is not quoted, because quoting it is what turns the
+    // sentence into a claim.
+    const bare: Readout = { key: 'pi', label: 'π estimate', value: 3.1416, digits: 5, target: Math.PI };
+    expect(bandOf(bare)).toBeNull();
+    expect(agrees(bare)).toBe(false);
+    expect(verdictOf(bare)).toEqual({ text: 'not enough data to judge', state: 'none' });
+    expect(sentenceOf({ ...bare, plain: 'the estimate of π' })).toBe(
+      'the estimate of π 3.1416, not enough data to judge.',
+    );
+
+    // Declaring both forms is a contradiction rather than a fallback: the
+    // ledger does not get to pick which of two numbers a tab meant.
+    expect(bandOf({ ...bare, tolerance: 0.01, band: { kind: 'relative', fraction: 0.5 } })).toBeNull();
+
+    // A band that is not a number — a standard error over zero observations, a
+    // fit with no residual degrees of freedom — is not a band either.
+    expect(bandOf({ ...bare, band: { kind: 'sampled', sigma: DART_SIGMA, samples: 0 } })).toBeNull();
+    expect(bandOf({ ...bare, tolerance: Number.NaN })).toBeNull();
+    expect(bandOf({ ...bare, tolerance: -0.01 })).toBeNull();
+
+    // A relative band on a prediction of zero states nothing — every band is
+    // infinitely many times zero — so it has to be declared absolutely, and
+    // against a range, since there is no other scale on the page to read it
+    // against.
+    const gap: Readout = { key: 'gap', label: 'Largest gap to the curve', value: 0.004, target: 0 };
+    expect(bandOf({ ...gap, band: { kind: 'relative', fraction: 0.1 } })).toBeNull();
+    expect(bandOf({ ...gap, band: { kind: 'absolute', half: 0.01 } })).toBeNull();
+    expect(bandOf({ ...gap, range: [0, 1], band: { kind: 'absolute', half: 0.01 } })).toBe(0.01);
   });
 });
 
@@ -419,6 +667,12 @@ function readoutsOf(viz: Viz): readonly Readout[] {
   return emitted;
 }
 
+/** The span a readout says its quantity can occupy, or 0 where it says nothing. */
+function rangeWidth(readout: Readout): number {
+  const range = readout.range;
+  return range === undefined ? 0 : range[1] - range[0];
+}
+
 describe('every tab in the registry', () => {
   it('marks exactly one headline reading', () => {
     for (const viz of registry) {
@@ -449,6 +703,51 @@ describe('every tab in the registry', () => {
         const shown = verdictOf(r).text;
         const quoted = shown.replace(/^.*?of /, '');
         expect(r.hint, `${viz.id}/${r.key}`).not.toContain(quoted);
+      }
+    }
+  });
+
+  it('never puts a check mark beside a reading a twentieth away from its prediction', () => {
+    // The ceiling is what the reader actually sees: the widest disagreement a
+    // check mark can ever sit beside. It holds whatever a tab declares, so a
+    // band nobody looked at can cost a verdict but can never buy a false one.
+    for (const viz of registry) {
+      for (const r of readoutsOf(viz)) {
+        const target = r.target;
+        if (target === undefined || verdictOf(r).state !== 'agree') continue;
+        const scale = Math.abs(target) > 0 ? Math.abs(target) : rangeWidth(r);
+        expect(Math.abs(r.value - target), `${viz.id}/${r.key}`).toBeLessThanOrEqual(
+          MAX_BAND_FRACTION * scale,
+        );
+      }
+    }
+  });
+
+  it('declares one band per reading, never two', () => {
+    // `band` and `tolerance` say the same thing in two notations, and a tab
+    // part-way through moving from one to the other would otherwise have the
+    // ledger silently pick a winner. It refuses instead, and this is what stops
+    // that refusal reaching a reader.
+    for (const viz of registry) {
+      for (const r of readoutsOf(viz)) {
+        const both = r.band !== undefined && r.tolerance !== undefined;
+        expect(both, `${viz.id}/${r.key}: declare band or tolerance, not both`).toBe(false);
+      }
+    }
+  });
+
+  it('declares a range that contains the value it predicts', () => {
+    // A range is the span the quantity can occupy, so a prediction outside it
+    // is one of the two wrong — and the band is measured against that span, so
+    // the mistake would be quietly paid for in the verdict.
+    for (const viz of registry) {
+      for (const r of readoutsOf(viz)) {
+        if (r.range === undefined) continue;
+        const [lo, hi] = r.range;
+        expect(hi, `${viz.id}/${r.key}: an empty range`).toBeGreaterThan(lo);
+        if (r.target === undefined) continue;
+        expect(r.target, `${viz.id}/${r.key}: the prediction is outside the range`).toBeGreaterThanOrEqual(lo);
+        expect(r.target).toBeLessThanOrEqual(hi);
       }
     }
   });

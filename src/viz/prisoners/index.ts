@@ -28,11 +28,18 @@ const DEFAULT_PEOPLE = 100;
 /**
  * Where a run stops, and the length of the two history arrays.
  *
- * Two thousand rounds pin the share to about ±0.01 at three standard errors,
- * which is the point at which the plate's curve visibly stops moving. More
- * rounds would buy a digit nobody reads and cost the run its patience.
+ * Ten thousand, and the number comes from the one claim this tab makes. The
+ * share is a proportion, so three standard errors of it are 3·√(p(1−p)/R), and
+ * the ledger certifies agreement only inside a twentieth of the prediction:
+ * 3·√(0.3118·0.6882/R) ≤ 0.3118/20 needs R ≥ 7,944. At the two thousand this
+ * used to stop at, the honest bar is 0.031 — a tenth of the answer — and the
+ * headline could never do better than "still settling" however perfect the run.
+ * Ten thousand clears the bar with room to spare and still takes fifteen
+ * seconds, because what is painted was never the round count: the plate shows
+ * four permutations a second and the curve spends PAINTED_SAMPLES vertices,
+ * whatever the counters are doing.
  */
-const MAX_ROUNDS = 2_000;
+const MAX_ROUNDS = 10_000;
 const MIN_ROUNDS = 20;
 const DEFAULT_ROUNDS = 300;
 
@@ -41,16 +48,20 @@ const DEFAULT_SEED = 42;
 /**
  * The stream is paced so a run takes about this long whatever the round count,
  * between a floor that lets a reader watch single permutations come and go and
- * a ceiling that keeps two thousand of them from being a smear.
+ * a ceiling no run needs to reach.
+ *
+ * The ceiling is a rate, not a picture: `SHOW_MS` already holds the plate to
+ * four permutations a second at any pace, so it costs nothing to let the
+ * counters run at the 667 rounds a second a full ten thousand takes.
  */
 const RUN_SECONDS = 15;
 const MIN_ROUND_RATE = 1.5;
-const MAX_ROUND_RATE = 150;
+const MAX_ROUND_RATE = 700;
 
 /**
  * How long one permutation is held on the plate, in simulation milliseconds.
  *
- * The counters run at up to 150 rounds a second; the picture changes four times
+ * The counters run at up to 667 rounds a second; the picture changes four times
  * a second. This is the same separation Buffon needed between what is counted
  * and what is painted, arrived at from the other side: there the ink saturated,
  * here the reader cannot see a loop that is replaced before the eye lands on
@@ -60,8 +71,8 @@ const MAX_ROUND_RATE = 150;
 const SHOW_MS = 250;
 
 /**
- * Vertices the tally curve may spend. At 2,000 rounds over a 650 px box a
- * vertex per round is three per pixel; 360 is about one every two.
+ * Vertices the tally curve may spend. At the 10,000-round ceiling over a 650 px
+ * box a vertex per round is fifteen per pixel; 360 is about one every two.
  */
 const PAINTED_SAMPLES = 360;
 
@@ -410,8 +421,8 @@ const presets: readonly Preset[] = [
   },
   {
     id: 'long-run',
-    label: 'Two thousand rounds',
-    caption: 'Two thousand rounds settle the share right onto the predicted 0.3118.',
+    label: 'Ten thousand rounds',
+    caption: 'Ten thousand rounds settle the share right onto the predicted 0.3118.',
     values: { people: 100, rounds: MAX_ROUNDS },
   },
 ];
@@ -604,13 +615,20 @@ function create(ctx: VizContext): VizInstance {
         formula: ['1 − (', { v: 'Hₙ' }, ' − ', { v: 'Hₖ' }, ')'],
         headline: true,
         plain: 'share of rounds everyone got out',
-        // A share over R rounds is a proportion, and its *relative* standard
-        // error is √((1−p)/(p·R)) — 8.0% at p = 0.3118 over the 300-round
-        // default. The ledger's 1% would therefore read "not yet" for a run
-        // that is statistically perfect. Three of those, measured at the round
-        // count the run is going to reach rather than the count so far, so the
-        // row starts off and arrives at agreement as the rounds go by.
-        tolerance: 3 * Math.sqrt((1 - prediction) / (prediction * target)),
+        // One round is a Bernoulli draw at the prediction, so sd of a single
+        // observation is √(p(1−p)) and the ledger divides by the root of the
+        // rounds played *so far*.
+        //
+        // Taken at the round count the run was going to *reach*, this bar was
+        // 25.9 % of the answer on the 300-round default and 100 % of it at the
+        // fader's twenty-round stop, where the hero duly printed "0.5000" under
+        // "matches the prediction of 0.3093" — a run that won half its rounds,
+        // certified against a third. A bar that shrinks as the rounds arrive
+        // cannot make that claim: at twenty rounds it is 0.31 wide, and the
+        // ledger refuses to say "matches" through a band wider than a twentieth
+        // of what it is measuring.
+        band: { kind: 'sampled', sigma: Math.sqrt(prediction * (1 - prediction)), samples: tally.rounds },
+        range: [0, 1],
       },
       {
         // The other half of the lesson, and the second row of the key on the
@@ -619,20 +637,21 @@ function create(ctx: VizContext): VizInstance {
         // round's probability — 6.22e-61 at two hundred people — so neither of
         // them is this running share, and without it the reading a screen
         // reader gets is the half that climbs and not the half that never
-        // leaves zero. Its target is that per-round probability: over any
-        // number of rounds the expected share is exactly the odds.
+        // leaves zero.
+        //
+        // No target, and that is the honest shape for it. The per-round
+        // probability is 2⁻ⁿ — 7.9e-31 at a hundred people — and no finite run
+        // can test a prediction that small: held to three standard errors of a
+        // proportion, the bar came out around 10³⁰, which certifies every
+        // reading the row could ever take, including a hundred per cent error.
+        // A prediction nothing can falsify is not a measurement, so the odds are
+        // published as the stated fact they are, in the `guessOdds` row below,
+        // and this one is left as the reading it is: a line that never leaves
+        // zero.
         key: 'guessShare',
         label: 'Success rate, guessing',
         value: tally.guessShare,
         digits: 4,
-        target: guessOdds,
-        // The same bar the chain rule's share is held to — three standard
-        // errors of a proportion over the rounds this run will reach, which is
-        // √((1 − p)/(p·R)) relative. With p = (k/n)ⁿ that bar is astronomically
-        // wide, and that is the reading rather than a licence: the run would
-        // have to be 10⁵⁷ times longer before one win were likely, so a
-        // measured zero *is* this prediction.
-        tolerance: 3 * Math.sqrt((1 - guessOdds) / (guessOdds * target)),
         plain: 'share of rounds guessing worked',
       },
       {

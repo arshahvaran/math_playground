@@ -368,12 +368,22 @@ function create(ctx: VizContext): VizInstance {
         value: 100 * s.shareBelow,
         digits: 3,
         unit: '%',
+        // A percentage of the crowd, so the band is judged against a hundred
+        // points as well as against the prediction — never against whichever of
+        // the two is larger.
+        range: [0, 100],
         // The prediction is for the round reached, not for the round the run is
         // aiming at: a reading being compared against the end of a run it is
         // only a third of the way through would be off all the way and right at
         // the last frame.
-        target: 100 * shareBelowStake(s.round),
-        tolerance: shareTolerance(players, s.round),
+        //
+        // Before the first round there is no prediction to make: every player is
+        // on the stake and nobody is under it, so 0 against 0 is arithmetic
+        // rather than evidence — and a declared zero now means *exact*, which is
+        // a claim this row would be making about a run that has not started.
+        ...(s.round >= 1
+          ? { target: 100 * shareBelowStake(s.round), tolerance: shareTolerance(players, s.round) }
+          : {}),
         plain: 'players poorer than when they started',
         headline: true,
         hint: 'the coin has to land heads 56% of the time just to break even',

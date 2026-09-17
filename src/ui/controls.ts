@@ -31,8 +31,15 @@
  * permalinks.
  */
 
+import { decimalsForStep, snapToStep } from '../core/grid';
 import type { ParamSpec, ParamValue, ParamValues } from '../core/types';
 import { clear, h, monoMinus, withMinus } from './dom';
+
+// The grid lives in core, because the router reads values onto it too and two
+// implementations of one grid is exactly how the fader and the address bar came
+// to disagree. It is re-exported here so the rail's own tests still reach it
+// through the module that uses it.
+export { decimalsForStep, snapToStep };
 
 export interface ControlsHandle {
   /** Apply a whole parameter set at once — Story mode writes every value, then resets once. */
@@ -107,15 +114,6 @@ export function logPositions(min: number, max: number, step: number): number {
   if (!(min > 0) || !(max > min) || !(step > 0)) return LOG_NOTCHES;
   const needed = Math.ceil((2 * max * Math.log(max / min)) / step);
   return Math.min(MAX_LOG_POSITIONS, Math.max(LOG_NOTCHES, needed));
-}
-
-/**
- * A value on the grid the parameter actually takes: on `step`, inside the ends,
- * and rounded back out of the binary noise snapping accumulates — the number is
- * about to be printed, compared against a default and put in a URL.
- */
-export function snapToStep(value: number, min: number, max: number, step: number): number {
-  return quantize(value, min, max, step, decimalsForStep(step));
 }
 
 /** Log fader: value → the integer slider position that decodes back to it. */
@@ -319,7 +317,26 @@ function rangeRow(
     onChange(spec.key, value);
   };
 
-  input.addEventListener('input', () => commit(valueFor(input.valueAsNumber)));
+  /**
+   * A drag reports the *position* it landed on, so that is what decides whether
+   * anything moved.
+   *
+   * Comparing decoded values instead assumes every value is reachable from some
+   * position, and one fader in the registry breaks that assumption:
+   * `lorenz.twinGap` asks for a 10⁻¹² step across nine decades, which needs
+   * 4·10¹⁰ positions, and `logPositions()` caps at a million. At the top of that
+   * range one position spans twenty thousand steps, so the value the thumb was
+   * mounted at is not the value its own position decodes to — and a drag that
+   * ended on the pixel it started from reported a change, restarted the twins at
+   * a gap nobody asked for, and rewrote the permalink. Guarding on the position
+   * makes "the thumb did not move" mean exactly that, on every fader, at every
+   * resolution, however coarse the grid the cap leaves.
+   */
+  input.addEventListener('input', () => {
+    const position = input.valueAsNumber;
+    if (isLog && position === positionFor(current)) return;
+    commit(valueFor(position));
+  });
 
   if (isLog) {
     // The browser's own arrow moves one position, which over the lower decades
@@ -447,7 +464,26 @@ function intRow(
 
   // The number field commits on `change`, not `input`: mid-typing, "1" on the
   // way to "12" is a legal number and clamping it would fight the typist.
+  //
+  // `change` alone is not enough, because the browser decides when it fires and
+  // its rule leaves the row displaying a number the experiment is not running.
+  // The rail is a `<form>` with several controls and no submit button, so Enter
+  // performs no implicit submission and fires no `change`; and text that is not
+  // a valid number leaves the sanitized value unmoved, so no `change` fires on
+  // blur either. Typing 999 into Buffon's spacing and pressing Enter left "999"
+  // in the window over a board still ruled at 64 — and the next press of `+`
+  // finally fired `change` with the stale text and clamped it to 160.
+  //
+  // So the two endings of an entry are bound explicitly. `commit()` is already
+  // the revert path — it puts `current` back for an empty or out-of-range entry
+  // — which is why both can go through it.
   field.addEventListener('change', () => commit(field.value));
+  field.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    commit(field.value);
+  });
+  field.addEventListener('blur', () => commit(field.value));
   fader.addEventListener('input', () => commit(fader.valueAsNumber));
 
   // The keys never go `disabled` at the ends. `.control:has(:disabled)` mutes
@@ -600,17 +636,6 @@ function engrave(input: HTMLInputElement, min: number, max: number, step: number
   if (steps >= 1 && steps <= MAX_ENGRAVED_TICKS) input.style.setProperty('--ticks', String(round4(steps)));
 }
 
-function quantize(value: number, min: number, max: number, step: number, decimals: number): number {
-  const clamped = value < min ? min : value > max ? max : value;
-  if (!Number.isFinite(clamped)) return min;
-  if (!(step > 0)) return clamped;
-  const snapped = min + Math.round((clamped - min) / step) * step;
-  const bounded = snapped < min ? min : snapped > max ? max : snapped;
-  // Snapping accumulates the usual binary noise — 0.1 + 0.2 — and the value is
-  // about to be printed, compared against a default and put in a URL.
-  return decimals > 0 ? Number(bounded.toFixed(decimals)) : Math.round(bounded);
-}
-
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   const n = Math.round(value);
@@ -621,26 +646,6 @@ function asNumber(value: ParamValue, fallback: number): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
-}
-
-/**
- * Decimals a value on this step grid needs to print without rounding away.
- * Capped at twelve, which is what the finest step in the registry — the
- * Lorenz twins' 10⁻¹² starting gap — needs to survive `toFixed()`: at ten,
- * that gap quantised to exactly 0, and the "A thousand times closer" chip put
- * 0.0000000000 in its own window.
- */
-const MAX_DECIMALS = 12;
-
-function decimalsForStep(step: number): number {
-  if (!Number.isFinite(step) || step <= 0 || Number.isInteger(step)) return 0;
-  const text = String(step);
-  const e = text.indexOf('e');
-  if (e < 0) return Math.min(MAX_DECIMALS, (text.split('.')[1] ?? '').length);
-  // 1e-7 prints in exponent form; the exponent is where the decimals went.
-  const exponent = Number(text.slice(e + 1));
-  const mantissa = (text.slice(0, e).split('.')[1] ?? '').length;
-  return Math.min(MAX_DECIMALS, Math.max(0, mantissa - exponent));
 }
 
 function round4(n: number): number {

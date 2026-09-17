@@ -1,3 +1,4 @@
+import { onMediaChange } from '../core/canvas';
 import type { Viz, VizGroup } from '../core/types';
 import { h, svg, type Attrs } from './dom';
 
@@ -357,8 +358,33 @@ export function createShell(
     themeToggle.setAttribute('aria-pressed', String(dark));
   }
 
+  /**
+   * The key's state is derived from the scheme actually on the plate, never
+   * assumed.
+   *
+   * With no stored preference the effective scheme came from `color-scheme:
+   * light dark` and the OS, while the button was built with a hard-coded
+   * `aria-pressed="false"` and the click handler read the *next* state off that
+   * attribute. On a dark OS the button therefore announced the dark scheme as
+   * off while the page was dark, and the first press asked for the scheme
+   * already showing — a dead key. Writing `data-theme` explicitly at startup, in
+   * both directions, leaves one source of truth for the attribute and makes the
+   * no-op press unrepresentable.
+   */
+  const darkQuery =
+    typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
   const storedScheme = readStore(SCHEME_KEY);
-  if (storedScheme === 'dark' || storedScheme === 'light') applyScheme(storedScheme === 'dark');
+  const chosen = storedScheme === 'dark' || storedScheme === 'light';
+  applyScheme(chosen ? storedScheme === 'dark' : (darkQuery?.matches ?? false));
+
+  if (!chosen && darkQuery) {
+    // Until the reader picks a scheme, the OS is still in charge and the page
+    // has to follow it. The subscription is dropped on the first press.
+    const unwatch = onMediaChange(darkQuery, () => applyScheme(darkQuery.matches));
+    cleanups.push(unwatch);
+    on(themeToggle, 'click', unwatch);
+  }
 
   on(themeToggle, 'click', () => {
     const dark = themeToggle.getAttribute('aria-pressed') !== 'true';
@@ -369,7 +395,23 @@ export function createShell(
   // -- tab keyboard model ---------------------------------------------------
 
   let activeIndex = -1;
-  let focusIndex = 0;
+
+  /**
+   * Where the arrow keys are walking from: the platform's own focus, and only
+   * as a fallback the selected tab.
+   *
+   * Keeping a second cursor and writing it from `setActiveTab()` was correct
+   * when the route changed *because* a tab was activated, and wrong for every
+   * other route change — Back, Forward, a pasted link, the unknown-id fallback
+   * — where the focus is still wherever the reader left it. The two cursors then
+   * disagreed and one arrow press teleported the focus ring six tabs backwards.
+   * Derived, there is only one cursor and no route change can move it.
+   */
+  function cursorIndex(): number {
+    const active = typeof document === 'undefined' ? null : document.activeElement;
+    const here = active === null ? -1 : tabs.findIndex((tab) => tab === active);
+    return here >= 0 ? here : Math.max(activeIndex, 0);
+  }
 
   /** Roving tabindex: exactly one tab is in the tab order at any moment. */
   function focusTab(index: number): void {
@@ -377,7 +419,6 @@ export function createShell(
     if (count === 0) return;
     const next = ((index % count) + count) % count;
     for (const [i, tab] of tabs.entries()) tab.tabIndex = i === next ? 0 : -1;
-    focusIndex = next;
     tabs[next]?.focus();
   }
 
@@ -385,10 +426,10 @@ export function createShell(
     let target: number | null = null;
     switch (event.key) {
       case 'ArrowLeft':
-        target = focusIndex - 1;
+        target = cursorIndex() - 1;
         break;
       case 'ArrowRight':
-        target = focusIndex + 1;
+        target = cursorIndex() + 1;
         break;
       case 'Home':
         target = 0;
@@ -433,10 +474,28 @@ export function createShell(
       flashShare('Copy unavailable', false);
       return;
     }
+    /**
+     * The link is the token. A clipboard write settles a few milliseconds
+     * later — longer behind a permission chip, a DLP extension, or a busy main
+     * thread — and by then the reader may have clicked a tab or moved a control,
+     * both of which rewrite the permalink. Without this guard the continuation
+     * printed "Link copied" beside a link that is not the one on the clipboard:
+     * `restoreShare()` cancels the 2 s timer on a route change but cannot cancel
+     * a promise. Comparing the string the write was issued for against the one
+     * the page now advertises needs no extra state and covers every way the
+     * permalink can move, including ones added later.
+     */
+    const issued = permalink;
     // Insecure origins and denied permissions both reject rather than throw.
-    void clipboard.writeText(permalink).then(
-      () => flashShare('Link copied', true),
-      () => flashShare('Copy failed', false),
+    void clipboard.writeText(issued).then(
+      () => {
+        if (issued !== permalink) return;
+        flashShare('Link copied', true);
+      },
+      () => {
+        if (issued !== permalink) return;
+        flashShare('Copy failed', false);
+      },
     );
   });
 
@@ -498,9 +557,11 @@ export function createShell(
     typeof window.matchMedia === 'function' ? window.matchMedia(BENCH_STACK_QUERY) : null;
   restack(stackQuery?.matches ?? false);
   if (stackQuery) {
-    const onStackChange = (event: MediaQueryListEvent): void => restack(event.matches);
-    stackQuery.addEventListener('change', onStackChange);
-    cleanups.push(() => stackQuery.removeEventListener('change', onStackChange));
+    // Through the helper: a MediaQueryList without `addEventListener` — an
+    // extension's matchMedia wrapper, a polyfill — threw here, in the last few
+    // statements of createShell(), and the shell never returned. The page then
+    // rendered the masthead and fifteen inert tabs and nothing else.
+    cleanups.push(onMediaChange(stackQuery, () => restack(stackQuery.matches)));
   }
 
   return {
@@ -535,7 +596,6 @@ export function createShell(
         tab.setAttribute('aria-selected', String(selected));
         tab.tabIndex = selected ? 0 : -1;
       }
-      focusIndex = index;
 
       bench.setAttribute('aria-labelledby', `tab-${id}`);
       applyAspect(viz);
@@ -554,7 +614,14 @@ export function createShell(
     },
 
     setPermalink(hash) {
-      permalink = absolutize(hash);
+      const next = absolutize(hash);
+      if (next === permalink) return;
+      // A confirmation is about a link, so it cannot outlive that link. A route
+      // change is only one of the three ways the permalink moves — a parameter
+      // change and a preset move it too, through `syncUrl()` — and folding the
+      // invalidation into the write means no future call site can forget it.
+      permalink = next;
+      restoreShare();
       share.setAttribute('data-permalink', permalink);
     },
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
+import { testable, verdictOf } from '../src/ui/readouts';
 import type { ParamValue, Readout, VizContext } from '../src/core/types';
 import {
   BINS,
@@ -7,6 +8,7 @@ import {
   DOMINANT_EXCESS,
   FAIR_EXCESS,
   FLIP_STEP,
+  KS_CRITICAL,
   MAX_FLIPS,
   MAX_GAMES,
   MIN_FLIPS,
@@ -24,6 +26,7 @@ import {
   DOMINANT_P,
   FAIR_HI,
   FAIR_LO,
+  FAIR_P,
   LEAD_HIGH,
   LEAD_LOW,
   LEAD_MEAN,
@@ -790,23 +793,88 @@ describe('arcsine instance: readouts', () => {
     expect(rows.get('games')?.value).toBe(GAMES);
   });
 
-  it('agrees with all five predictions at the default run', () => {
+  /**
+   * The half-width each row declares, from the theory at the top of this file
+   * and the games in hand — never from the count the run will finish on.
+   *
+   * A band read at the final count is a constant for the whole run: the
+   * headline's was 8.4 % of its own prediction at the defaults and 26 % near
+   * the bottom of the fader, and 26 % of 0.4097 certified a reading of 0.5150.
+   * A band a reading cannot fall outside is not a test of it.
+   */
+  function theoreticalBands(games: number, flips: number): Map<string, number> {
+    return new Map([
+      ['dominated', proportionBand(DOMINANT_P, games, DOMINANT_EXCESS, flips)],
+      ['fair', proportionBand(FAIR_P, games, FAIR_EXCESS, flips)],
+      ['average', SIGMAS * Math.sqrt(LEAD_VARIANCE / games)],
+      // √(μ₄ − σ⁴) written out rather than as the 0.088388 the convergence
+      // block rounds it to: this row asserts the declaration itself, to the
+      // last bit, and a rounded literal would be asserting the rounding.
+      [
+        'spread',
+        (SIGMAS * Math.sqrt(3 / 128 - 1 / 64)) / Math.sqrt(games) + (LEAD_VARIANCE * VARIANCE_EXCESS) / flips,
+      ],
+      ['gap', KS_CRITICAL / Math.sqrt(games) + CDF_EXCESS],
+    ]);
+  }
+
+  it('declares the band the theory gives, in the reading’s own units', () => {
     const v = stubViz();
     tick(v, ticksFor(GAMES));
     paint(v);
+    const rows = ledger(v);
+    const expected = theoreticalBands(GAMES, FLIPS);
+    // The mean is the one row with no finite-game bias to carry — the exact law
+    // has mean exactly ½ at every game length — so it is the one that can state
+    // a σ and let the ledger divide. The other three carry a bias, which is not
+    // noise and does not fall as 1/√M, so they state a half-width outright.
+    expect(rows.get('average')?.band).toEqual({
+      kind: 'sampled',
+      sigma: Math.sqrt(LEAD_VARIANCE),
+      samples: GAMES,
+    });
+    for (const key of ['dominated', 'fair', 'spread', 'gap']) {
+      const band = rows.get(key)?.band;
+      expect(band?.kind, key).toBe('absolute');
+      expect(band?.kind === 'absolute' ? band.half : NaN, key).toBeCloseTo(expected.get(key) ?? NaN, 12);
+    }
+    // And no row declares the legacy relative form as well: two bands are a
+    // contradiction, and the ledger refuses both rather than picking one.
+    for (const row of v.emitted[v.emitted.length - 1] ?? []) {
+      expect(row.tolerance, row.key).toBeUndefined();
+    }
+  });
+
+  it('sits inside all five of those bands at the default run', () => {
+    const v = stubViz();
+    tick(v, ticksFor(GAMES));
+    paint(v);
+    const expected = theoreticalBands(GAMES, FLIPS);
     const measured: string[] = [];
     for (const row of v.emitted[v.emitted.length - 1] ?? []) {
       const target = row.target;
       if (target === undefined) continue;
-      const tolerance = row.tolerance ?? 0.01;
-      const error = Math.abs(row.value - target);
-      const relative = target === 0 ? error : error / Math.abs(target);
+      const half = expected.get(row.key) ?? NaN;
       measured.push(`${row.key} ${row.value.toFixed(5)} vs ${target.toFixed(5)}`);
-      expect(relative, `${row.key}: ${row.value} vs ${target}, tolerance ${tolerance}`).toBeLessThanOrEqual(
-        tolerance,
+      expect(Math.abs(row.value - target), `${row.key}: ${row.value} vs ${target}, band ±${half}`).toBeLessThanOrEqual(
+        half,
       );
     }
     expect(measured).toHaveLength(5);
+  });
+
+  it('declares the range each share is confined to, so no band can be most of it', () => {
+    const v = stubViz();
+    tick(v, ticksFor(GAMES));
+    paint(v);
+    const rows = ledger(v);
+    // Four shares and a distance between two distribution functions: every one
+    // of them lives in [0, 1], and the gap's prediction is exactly zero — no
+    // scale of its own at all, so without the range there is nothing for its
+    // band to be judged against and the row gets no verdict for ever.
+    for (const key of ['dominated', 'fair', 'average', 'gap']) {
+      expect(rows.get(key)?.range, key).toEqual([0, 1]);
+    }
   });
 
   it('marks exactly one headline and gives every plain reading plain words', () => {
@@ -843,24 +911,65 @@ describe('arcsine instance: readouts', () => {
     }
   });
 
-  it('sets its band from the run it is going to finish, not the games so far', () => {
-    const few = stubViz({ flips: MIN_FLIPS, games: MIN_GAMES });
-    const many = stubViz({ flips: MAX_FLIPS, games: MAX_GAMES });
-    tick(few, 120);
-    tick(many, 120);
-    paint(few);
-    paint(many);
-    const a = ledger(few).get('dominated')?.tolerance ?? 0;
-    const b = ledger(many).get('dominated')?.tolerance ?? 0;
-    expect(a).toBeGreaterThan(b);
-    // Three standard errors of a proportion at p = 0.4097 over the 5,000 games
-    // that run will finish on: 3·√(0.5903/(0.4097·5000)) = 5.1%, plus 3/10,000
-    // of finite-game margin. Neither moves as the run fills up.
-    expect(b).toBeGreaterThan(0.05);
-    expect(b).toBeLessThan(0.06);
-    tick(many, 1_200);
-    paint(many);
-    expect(ledger(many).get('dominated')?.tolerance).toBe(b);
+  it('sharpens every band as the games come in, rather than fixing it at the run’s end', () => {
+    // The replaced declaration took its standard errors at the game count the
+    // run was going to reach, which is a constant for the whole run: the row
+    // opened with the band it would have earned by the end and certified
+    // anything that happened to be near the target on the way. Every band here
+    // is 1/√M of the games actually tallied, so it can only narrow.
+    const v = stubViz({ flips: MAX_FLIPS, games: MAX_GAMES });
+    const halfOf = (key: string): number => {
+      const band = ledger(v).get(key)?.band;
+      if (band === undefined) return NaN;
+      if (band.kind === 'absolute') return band.half;
+      if (band.kind === 'sampled') return (3 * band.sigma) / Math.sqrt(band.samples);
+      return NaN;
+    };
+    const keys = ['dominated', 'fair', 'average', 'spread', 'gap'];
+    tick(v, 600);
+    paint(v);
+    const early = ledger(v).get('games')?.value ?? 0;
+    const first = keys.map(halfOf);
+    tick(v, 600);
+    paint(v);
+    expect(ledger(v).get('games')?.value ?? 0).toBeGreaterThan(early);
+    keys.forEach((key, i) => {
+      expect(halfOf(key), key).toBeLessThan(first[i] ?? 0);
+    });
+  });
+
+  it('withholds the headline’s verdict until the run can test it', () => {
+    // The defect this replaced, in one line: 26 % of 0.4097 is a band no
+    // reading the experiment could produce would fall outside, and the ledger
+    // printed "matches" through it. A proportion near 0.41 is settled to a
+    // twentieth of itself only from about 5,200 games, so the default run
+    // cannot certify the headline and the top of the fader can.
+    const defaults = stubViz();
+    tick(defaults, ticksFor(GAMES));
+    paint(defaults);
+    const headline = ledger(defaults).get('dominated');
+    expect(headline?.headline).toBe(true);
+    expect(testable(headline!)).toBe(false);
+    expect(verdictOf(headline!).state).not.toBe('agree');
+
+    const most = stubViz({ flips: MAX_FLIPS, games: MAX_GAMES });
+    tick(most, ticksFor(MAX_GAMES));
+    paint(most);
+    const best = ledger(most).get('dominated');
+    expect(ledger(most).get('games')?.value).toBe(MAX_GAMES);
+    expect(testable(best!)).toBe(true);
+  });
+
+  it('carries the last preset to a game count that can test the headline', () => {
+    // The preset list is the guided tour, and its last stop is the one place a
+    // reader meets the tab's own claim being checked. A ceiling under the count
+    // that claim needs would have left the headline reading "still settling"
+    // at every setting there is — as unhelpful as the check mark it replaced.
+    const last = (arcsine.presets ?? []).at(-1);
+    expect(last?.id).toBe('many-games');
+    expect(last?.values['games']).toBe(MAX_GAMES);
+    // 3·√(p(1−p)/M) ≤ a twentieth of p needs M ≥ 9(1−p)/(p·0.05²) = 5,184.
+    expect(MAX_GAMES).toBeGreaterThan((9 * (1 - DOMINANT_P)) / (DOMINANT_P * 0.05 ** 2));
   });
 });
 

@@ -1,3 +1,4 @@
+import { snapToStep } from './grid';
 import type { ParamSpec, ParamValue, ParamValues } from './types';
 
 /**
@@ -132,10 +133,12 @@ function coerceOne(spec: ParamSpec, text: string | undefined): ParamValue {
   switch (spec.kind) {
     case 'range': {
       const n = Number(s);
-      // Same rounding `serializeOne()` applies, so an off-step permalink is
-      // reproducible: without it p=0.3333 would run while the address bar, the
-      // caption and the copied link all said 0.33 — a different distribution.
-      return Number.isFinite(n) ? clamp(roundToStep(n, spec.step), spec.min, spec.max) : spec.default;
+      // The rail's own grid, not a second definition of it: without this
+      // `temp=2.27` runs while the fader, the address bar and the copied link
+      // all say 2.25 — three opinions about one experiment. `snapToStep` clamps
+      // to the ends as part of snapping, so there is no separate clamp to keep
+      // in step with it.
+      return Number.isFinite(n) ? snapToStep(n, spec.min, spec.max, spec.step) : spec.default;
     }
     case 'int': {
       const n = Number(s);
@@ -176,11 +179,13 @@ function serializeOne(spec: ParamSpec, value: ParamValue | undefined): string | 
   switch (spec.kind) {
     case 'range': {
       if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-      // Round both sides to the slider's resolution: 0.1 + 0.2 must serialize
-      // as 0.3, and an untouched control must never appear in the URL even if
-      // its stored value has drifted by an ulp.
-      const v = roundToStep(value, spec.step);
-      return v === roundToStep(spec.default, spec.step) ? null : String(v);
+      // Snap both sides to the same grid `coerceOne()` reads into: 0.1 + 0.2
+      // must serialize as 0.3, and an untouched control must never appear in
+      // the URL even if its stored value has drifted by an ulp. Because both
+      // directions use one grid, `coerce(serialize(coerce(x)))` is a fixed
+      // point — the permalink and the run are the same experiment.
+      const v = snapToStep(value, spec.min, spec.max, spec.step);
+      return v === snapToStep(spec.default, spec.min, spec.max, spec.step) ? null : String(v);
     }
     case 'int': {
       if (typeof value !== 'number' || !Number.isFinite(value)) return null;
@@ -205,27 +210,6 @@ function clamp(n: number, lo: number, hi: number): number {
   return n < lo ? lo : n > hi ? hi : n;
 }
 
-/** Round to the decimal precision of `step`. A step that is not a positive finite number rounds nothing. */
-function roundToStep(value: number, step: number): number {
-  if (!(step > 0) || !Number.isFinite(step)) return value;
-  return Number(value.toFixed(decimalPlaces(step)));
-}
-
-/**
- * Decimal places needed to write `step` exactly. `String(1e-7)` is "1e-7", not
- * "0.0000001", so the exponent has to be folded into the count. Capped at 20 —
- * beyond that `toFixed` is printing binary noise, not slider resolution.
- */
-function decimalPlaces(step: number): number {
-  const s = String(step);
-  const e = s.indexOf('e');
-  const mantissa = e >= 0 ? s.slice(0, e) : s;
-  const exponent = e >= 0 ? Number(s.slice(e + 1)) : 0;
-  const dot = mantissa.indexOf('.');
-  const fraction = dot >= 0 ? mantissa.length - dot - 1 : 0;
-  return Math.max(0, Math.min(20, fraction - exponent));
-}
-
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -241,19 +225,47 @@ const REPLACE_DEBOUNCE_MS = 150;
 interface HashSource {
   read(): string;
   push(hash: string): void;
-  replace(hash: string): void;
+  /** True when the bar took the write. A refusal is a fact, never an exception. */
+  replace(hash: string): boolean;
   listen(onChange: () => void): () => void;
 }
 
+/**
+ * Both writes are guarded, because both of them throw in environments the app
+ * is expected to survive. `history.replaceState` throws a SecurityError at an
+ * opaque origin — a `sandbox="allow-scripts"` iframe, which is what Notion and
+ * most LMSs embed with — and again when WebKit's ceiling of 100 calls per 30 s
+ * is reached, which a 15 s slider drag at a 150 ms debounce does on its own.
+ * Unguarded, that throw escapes a `setTimeout` as an uncaught error once per
+ * debounce tick, and — because `navigate()` flushes before it pushes — it also
+ * swallows the tab click that came after it.
+ *
+ * A refused write is reported rather than thrown, and it costs only the address
+ * bar: the route still moves, the Share key still composes the right link, and
+ * `seen` is re-anchored to what the bar really holds so the next write composes
+ * against it. It is deliberately *not* retried through `location.hash`, which
+ * would push one history entry per debounce tick and trap the Back button.
+ */
 function browserSource(): HashSource {
   return {
     read: () => window.location.hash,
     push: (hash) => {
-      window.location.hash = hash;
+      try {
+        window.location.hash = hash;
+      } catch {
+        /* Navigation is app state; `navigate()` moves the route without the bar. */
+      }
     },
     // A bare fragment resolves against the current URL. replaceState fires
     // neither hashchange nor popstate, so the bar updates silently.
-    replace: (hash) => window.history.replaceState(window.history.state, '', hash),
+    replace: (hash) => {
+      try {
+        window.history.replaceState(window.history.state, '', hash);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     listen: (onChange) => {
       window.addEventListener('hashchange', onChange);
       return () => window.removeEventListener('hashchange', onChange);
@@ -273,6 +285,7 @@ function memorySource(): HashSource {
     },
     replace: (next) => {
       hash = next;
+      return true;
     },
     listen: (onChange) => {
       listeners.add(onChange);
@@ -281,6 +294,10 @@ function memorySource(): HashSource {
       };
     },
   };
+}
+
+function clock(): number {
+  return typeof performance === 'object' ? performance.now() : Date.now();
 }
 
 export function createRouter(): Router {
@@ -303,6 +320,8 @@ export function createRouter(): Router {
   let pendingBase: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let replacing = false;
+  /** When the bar was last written. The debounce's leading edge is measured from it. */
+  let lastWrite = -Infinity;
 
   function cancelPending(): void {
     if (timer !== null) clearTimeout(timer);
@@ -325,13 +344,19 @@ export function createRouter(): Router {
     // and leave the new fragment alone — `sync()` adopts it when the event runs.
     if (base !== null && source.read() !== base) return;
     replacing = true;
+    let wrote = false;
     try {
-      source.replace(hash);
+      wrote = source.replace(hash);
     } finally {
       replacing = false;
     }
-    // Re-read rather than trust our own string: the browser may normalize the fragment.
+    lastWrite = clock();
+    // Re-read rather than trust our own string: the browser may normalize the
+    // fragment. On a refused write this re-anchors `seen` to what the bar
+    // actually holds, so the router cannot spend the rest of the session
+    // believing a fragment it never managed to write.
     seen = source.read();
+    if (!wrote) current = parseHash(seen);
   }
 
   /** Adopt the address bar's fragment if it moved since we last looked. */
@@ -371,13 +396,24 @@ export function createRouter(): Router {
       // Land the pending write on the entry we are about to leave rather than
       // drop it, so a control moved in the last 150 ms is still there when Back
       // returns here. Safe against the race above: `flush()` abandons the write
-      // itself if the bar has already moved under it.
+      // itself if the bar has already moved under it, and it cannot throw.
       flush();
-      source.push(buildHash(id, params));
+      const hash = buildHash(id, params);
+      const before = source.read();
+      source.push(hash);
       // The browser updates location.hash synchronously but queues the event;
       // syncing here keeps `route` current for the caller's next line. The
       // queued hashchange then finds nothing new.
       sync();
+      if (source.read() === before && seen !== hash) {
+        // The bar refused the write. Navigation is the app's state, not a URL
+        // cosmetic: a tab click must move the route whether or not the fragment
+        // can be written, so the subscribers are told directly.
+        seen = hash;
+        current = parseHash(hash);
+        cancelPending();
+        for (const cb of subscribers) cb(current);
+      }
     },
 
     replaceParams(params) {
@@ -387,13 +423,24 @@ export function createRouter(): Router {
       // The route reflects the shell's state immediately; only the URL write waits.
       seen = hash;
       current = parseHash(hash);
+      pending = hash;
+      if (timer !== null) return;
       // The bar stays untouched for the whole debounce window, so the fragment
       // this write amends is whatever it held when the window opened.
-      if (timer === null) {
-        pendingBase = source.read();
-        timer = setTimeout(flush, REPLACE_DEBOUNCE_MS);
+      pendingBase = source.read();
+      // Leading edge. The debounce exists because one slider drag emits sixty
+      // input events and must not emit sixty `replaceState` calls — not because
+      // the first of them should be withheld. Deferring it too meant a control
+      // moved less than 150 ms before a hash navigation never reached the bar
+      // at all: `sync()` cancels the pending write, and the entry the reader
+      // left kept the parameters they had already replaced. Writing the first
+      // change of a gesture at once makes the entry always carry at least the
+      // value in force when the gesture began, whatever the timing.
+      if (clock() - lastWrite >= REPLACE_DEBOUNCE_MS) {
+        flush();
+        return;
       }
-      pending = hash;
+      timer = setTimeout(flush, REPLACE_DEBOUNCE_MS);
     },
 
     destroy() {

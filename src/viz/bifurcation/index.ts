@@ -14,35 +14,60 @@ import { fmt } from '../../core/stats';
 import {
   DEFAULT_PERIOD_TOL,
   FEIGENBAUM_DELTA,
+  PERIOD_THREE_ONSET,
   detectPeriod,
+  lyapunovExponent,
   lyapunovFrom,
   sampleAttractor,
 } from './logistic';
 
 /**
- * Columns the sweep can hold, one CSS pixel each. A plate wider than this does
- * not exist in the layout; the cap is what lets every per-column array be
- * allocated once at load rather than on every resize.
+ * Columns the plot rectangle can hold, one CSS pixel each. A plate wider than
+ * this does not exist in the layout.
  */
 const MAX_COLUMNS = 2048;
+
+/**
+ * Columns the sweep *computes*, fixed and independent of the plate.
+ *
+ * The mathematics is sampled on this grid and the plate is a picture of the
+ * result, never the other way round. A column used to be a CSS pixel, which
+ * made every published number a function of the reader's window: r itself was
+ * `rLo + (c + ½)·span/plateWidth`, so the doubling onsets landed at different
+ * values of r on a laptop and on a phone, and the Feigenbaum ratio a permalink
+ * showed was not the one it had been shared for. It also made a resize an
+ * *invalidation* — one pixel of plate height threw the whole diagram away and
+ * spent tens of seconds recomputing it — because the stored rows had been
+ * quantised against a rectangle that no longer existed.
+ *
+ * 1,024 is chosen against the two things that bind. The sweep's pace is
+ * `columns/SWEEP_SECONDS` capped by the iteration budget, and at 1,024 the pace
+ * is the one that binds, so the sweep still takes its 2.5 s rather than longer
+ * on a wide screen. And the onsets are resolved to `span/1024`, which on the
+ * whole map is 1.6e-3 — the resolution the Feigenbaum reading's band is derived
+ * from, and now the same resolution for every reader.
+ */
+export const SWEEP_COLUMNS = 1024;
+
+/**
+ * Vertical quantisation of the attractor, as a power of two.
+ *
+ * A column is stored as the set of levels its samples occupy — one bit each, 128
+ * words a column, 512 KB for the whole sweep — rather than as the pixel rows
+ * they landed on. That is what makes the stored sweep independent of the plate:
+ * 4,096 levels is `MAX_PLOT_ROWS`, so the quantisation is never coarser than the
+ * rectangle it is painted into, and the painter merges the levels that share a
+ * row rather than drawing them twice.
+ */
+const VALUE_BITS = 12;
+const VALUE_LEVELS = 1 << VALUE_BITS;
+const LEVEL_WORDS = VALUE_LEVELS >>> 5;
 
 /** The Detail control's range. `MAX_DETAIL ≤ MAX_PLOT_ROWS` is what makes the dedupe below safe. */
 const MIN_DETAIL = 100;
 const MAX_DETAIL = 1000;
 const DEFAULT_DETAIL = 400;
 const MAX_PLOT_ROWS = 4096;
-
-/**
- * Pixel rows held between two frames, across every column not yet painted.
- *
- * `step()` computes columns and `draw()` puts them on the background layer, so
- * something has to hold the ones in between — and a fast-forward runs hundreds
- * of steps with no frame between them. A ring of columns is that buffer: at the
- * default 400 samples it holds 1,280 columns, more than any plate has, so a
- * single fast-forward finishes the sweep; at 1,000 samples it holds 512 and the
- * sweep simply advances in batches of that. Nothing here ever reallocates.
- */
-const MAX_PENDING_POINTS = 512_000;
 
 /** Deepest doubling the onset tracker records: period 64, which is `MAX_PERIOD`. */
 const MAX_LEVEL = 6;
@@ -56,17 +81,29 @@ const MAX_LEVEL = 6;
  * is neutral, so an orbit takes many thousands of iterations to separate onto
  * the new branches, and the column where it manages that is not exactly the one
  * containing rₖ. Two column widths per onset is the honest figure; the readout
- * publishes the resulting relative uncertainty as its tolerance, so the ledger
- * judges the ratio against what the sweep can actually see.
+ * publishes the resulting uncertainty as its band, so the ledger judges the
+ * ratio against what the sweep can actually see.
+ *
+ * There is no second ceiling on top of that. A cap of 25 % used to withhold the
+ * reading here as well, which put two ceilings on one claim — the ledger's, and
+ * a looser one the tab kept for itself — and the two could disagree about the
+ * same number. The band is now stated and judged in exactly one place.
  */
 const ONSET_SPREAD = 2;
 
 /**
- * Relative uncertainty above which the Feigenbaum reading is withheld. A ratio
- * this loose says nothing about a constant known to ten digits, and the
- * ledger's "waiting for the first sample" is the honest reading instead.
+ * Column widths of uncertainty on the r where a *tangent* bifurcation is first
+ * resolved, which is a larger number than `ONSET_SPREAD` and for a different
+ * reason.
+ *
+ * The period-3 window opens at r = 1 + √8, where the new 3-cycle is born
+ * neutral and the orbit spends an intermittent transient near the tangency
+ * before it lands on the cycle, so the first column reporting period 3 is always
+ * *past* the onset rather than scattered about it. Four column widths is the
+ * resolution allowance; the bias itself is `TANGENT_BIAS` and is added on top,
+ * because it does not shrink when the window does.
  */
-const MAX_RATIO_UNCERTAINTY = 0.25;
+const TANGENT_SPREAD = 4;
 
 /**
  * Seconds a full sweep takes when nothing else binds. Slow enough that the
@@ -89,7 +126,37 @@ const ITERATION_BUDGET = 4e6;
  * to land on the new branches — 5,000 is what locates the cascade's onsets to
  * the column, and the map is cheap enough that nothing else notices.
  */
-const TRANSIENT = 5000;
+export const TRANSIENT = 5000;
+
+/**
+ * The r-offset a finite transient adds to a *doubling* the sweep resolves.
+ *
+ * A column reports the new period only once the orbit has actually landed on the
+ * new cycle to within `DEFAULT_PERIOD_TOL`, and either side of a doubling it has
+ * not: at r = 3 − δ the fixed point's multiplier is −(1 − δ), so an orbit a
+ * distance A from it is still A·e^(−nδ) away after n iterations and reads as a
+ * 2-cycle while that exceeds the tolerance. The sweep therefore resolves the
+ * split about δ = ln(A/tol)/TRANSIENT on the wrong side of r = 3 — 2.3e-3 at
+ * A ≈ 0.1 and 5,000 iterations, measured 1.9e-3 early.
+ *
+ * It is a property of the transient and not of the grid, which is why it is
+ * added to the band rather than counted in columns: zooming in makes a column
+ * narrower and leaves this exactly where it was, and a band that shrank with the
+ * zoom would certify a correct reading out of existence.
+ *
+ * It does not appear in the Feigenbaum band, because that reading is built from
+ * *differences* of onsets and a common offset cancels in rₖ₊₁ − rₖ. What is left
+ * there is the resolution, which is what `ONSET_SPREAD` counts.
+ */
+const SETTLE_BIAS = Math.log(0.1 / DEFAULT_PERIOD_TOL) / TRANSIENT;
+
+/**
+ * The same offset at the period-3 tangency. The approach to the new cycle is
+ * algebraic there rather than geometric, so the sweep resolves it far more
+ * sharply: measured 3.0e-5 past 1 + √8, three quarters of a column on the island
+ * window. Twice the measurement, so the allowance does not rest on one number.
+ */
+const TANGENT_BIAS = 6e-5;
 
 /**
  * Was the Lyapunov toggle. Always on: the curve touching zero is what marks
@@ -126,14 +193,29 @@ const DEFAULT_SEED = 42;
  * typed by hand found nothing these five do not show.
  */
 const WINDOWS = [
-  { id: 'whole', label: 'The whole map', lo: 2.4, hi: 4 },
-  { id: 'first-split', label: 'First split', lo: 2.9, hi: 3.1 },
-  { id: 'cascade', label: 'The cascade', lo: 3.4, hi: 3.57 },
-  { id: 'island', label: 'The island of order', lo: 3.82, hi: 3.86 },
-  { id: 'deep-chaos', label: 'Deep chaos', lo: 3.95, hi: 4 },
+  { id: 'whole', label: 'The whole map', lo: 2.4, hi: 4, measures: 'feigenbaum' },
+  { id: 'first-split', label: 'First split', lo: 2.9, hi: 3.1, measures: 'split' },
+  { id: 'cascade', label: 'The cascade', lo: 3.4, hi: 3.57, measures: 'feigenbaum' },
+  { id: 'island', label: 'The island of order', lo: 3.82, hi: 3.86, measures: 'window3' },
+  { id: 'deep-chaos', label: 'Deep chaos', lo: 3.95, hi: 4, measures: 'lyapunov' },
 ] as const;
 
 type Window = (typeof WINDOWS)[number];
+
+/**
+ * The reading a window is *for*: the one quantity inside it that has a closed
+ * form to be held to, and therefore the one the hero shows.
+ *
+ * It is a property of the window and not of the tab, because three of the five
+ * contain no cascade at all — the first split has one doubling in it, the island
+ * of order and deep chaos have none — and the Feigenbaum ratio needs three
+ * consecutive ones. Publishing δ as the headline everywhere left three zooms,
+ * one of them a shipped preset, with a permanent em dash and "not measured yet"
+ * under it on a *finished* sweep. Naming the measurement here is what makes that
+ * unrepresentable: every window ships with something it can measure, and the
+ * compiler lists every site when one is added.
+ */
+type Measurement = Window['measures'];
 
 const DEFAULT_ZOOM: Window['id'] = 'whole';
 
@@ -144,6 +226,33 @@ const DEFAULT_ZOOM: Window['id'] = 'whole';
  * reading that has a closed-form target.
  */
 const LAMBDA_SIGMA_AT_FOUR = Math.PI / Math.sqrt(12);
+
+/**
+ * Iterates behind the exponent quoted at r = 4.
+ *
+ * λ̂ is an average of terms whose spread is `LAMBDA_SIGMA_AT_FOUR`, so three
+ * standard errors of it are 2.72/√n — 19.6 % of ln 2 over the 400 samples a
+ * column plots, and still 12 % at the Detail control's ceiling. A band that wide
+ * cannot test a constant known exactly, so the sweep reads this one off an orbit
+ * of its own: 20,000 iterates put the band at 2.8 %, and the whole extra run
+ * costs four thousandths of what the sweep spends anyway.
+ *
+ * Detail is a drawing control — how many points of each column's attractor are
+ * plotted — and tying a measurement's precision to it was the mistake. The
+ * points on the plate and the iterates behind a published exponent are not the
+ * same quantity.
+ */
+export const LAMBDA_4_SAMPLES = 20_000;
+
+/**
+ * Where the first doubling happens, exactly.
+ *
+ * The map's non-zero fixed point is x* = 1 − 1/r and its multiplier is
+ * f′(x*) = 2 − r, so the fixed point is stable while |2 − r| < 1 and loses
+ * stability at r = 3 with multiplier −1 — a period doubling, and the one point
+ * of the cascade with a closed form a reader can check by hand.
+ */
+const FIRST_SPLIT = 3;
 
 /**
  * The widest lines the corner window can ever show. Its plate is sized to
@@ -312,29 +421,32 @@ function create(ctx: VizContext): VizInstance {
   let rLo: number = WINDOWS[0].lo;
   let rHi: number = WINDOWS[0].hi;
   let samples = DEFAULT_DETAIL;
+  let measures: Measurement = WINDOWS[0].measures;
 
   let plot = layoutPlot(ctx.width, ctx.height, fontPx(ctx.theme.labelFont));
 
-  // Every array is allocated here, once, at its ceiling.
+  // Every array is allocated here, once, at its ceiling, and every one of them
+  // is indexed by a *sweep* column rather than by a pixel.
   const orbit = new Float64Array(MAX_DETAIL);
-  const jitter = new Float64Array(MAX_COLUMNS);
-  const lyap = new Float64Array(MAX_COLUMNS);
-  const periods = new Uint8Array(MAX_COLUMNS);
-  /** Ring of columns, each `stride` pixel rows wide. */
-  const pixelRows = new Uint16Array(MAX_PENDING_POINTS);
-  const rowCount = new Uint16Array(MAX_COLUMNS);
+  const jitter = new Float64Array(SWEEP_COLUMNS);
+  const lyap = new Float64Array(SWEEP_COLUMNS);
+  const periods = new Uint8Array(SWEEP_COLUMNS);
   /**
-   * One stamp per pixel row, holding the column that last claimed it. Four
-   * hundred iterates of a period-2 orbit land on two rows; stamping instead of
-   * clearing turns that into two fillRect calls rather than four hundred, and
-   * needs no clear between columns because the stamp is the column index.
+   * The sweep itself: one bitset of occupied attractor levels per column.
+   *
+   * This is the diagram, and the background bitmap is a picture of it. Keeping
+   * it — rather than a ring of the few hundred columns not yet painted — is what
+   * lets a resize repaint instead of recompute, which is the difference between
+   * a one-pixel change of plate height costing nothing and costing the whole
+   * sweep.
    */
-  const rowStamp = new Uint16Array(MAX_PLOT_ROWS);
+  const levels = new Uint32Array(SWEEP_COLUMNS * LEVEL_WORDS);
   /** Observed r of the first column resolving period 2ᵏ, NaN where not seen. */
   const onsets = new Float64Array(MAX_LEVEL + 1);
-
-  let stride = DEFAULT_DETAIL;
-  let ringColumns = 1;
+  /** Observed r of the first column resolving period 3, NaN where not seen. */
+  let windowOnset = NaN;
+  /** λ at r = 4 over its own long orbit, NaN until the sweep reaches that column. */
+  let lambdaAtFour = NaN;
 
   let computed = 0;
   let painted = 0;
@@ -343,17 +455,32 @@ function create(ctx: VizContext): VizInstance {
   /** Doubling level of the last column that resolved one; −1 before the first. */
   let prevLevel = -1;
 
-  /** Centre of column `c` in r. */
+  /** Centre of sweep column `c` in r. A property of the window, never of the plate. */
   function rAt(c: number): number {
-    return rLo + ((c + 0.5) * (rHi - rLo)) / plot.columns;
+    return rLo + ((c + 0.5) * (rHi - rLo)) / SWEEP_COLUMNS;
   }
 
-  /** Screen row for an attractor value in [0, 1]. */
-  function valueRow(x: number): number {
-    const y = Math.round(plot.y0 + (1 - x) * plot.h);
-    if (y < plot.y0) return plot.y0;
+  /** The r a column of the sweep resolves to, as a half-width. */
+  function columnWidth(): number {
+    return (rHi - rLo) / SWEEP_COLUMNS;
+  }
+
+  /** Quantised level of an attractor value in [0, 1], counted down from the top. */
+  function valueLevel(x: number): number {
+    const v = Math.floor((1 - x) * VALUE_LEVELS);
+    return v < 0 ? 0 : v >= VALUE_LEVELS ? VALUE_LEVELS - 1 : v;
+  }
+
+  /** Screen row of a quantised level. */
+  function levelRow(level: number): number {
+    const y = plot.y0 + Math.floor((level * plot.h) / VALUE_LEVELS);
     const floor = plot.y0 + plot.h - 1;
     return y > floor ? floor : y;
+  }
+
+  /** Left edge of sweep column `c` on the plate, CSS px, integer. */
+  function columnX(c: number): number {
+    return plot.x0 + Math.floor((c * plot.columns) / SWEEP_COLUMNS);
   }
 
   /** Screen y for a Lyapunov exponent, clamped to the drawn band. */
@@ -366,22 +493,31 @@ function create(ctx: VizContext): VizInstance {
     const zoom = windowFor(ctx.params['zoom']);
     rLo = zoom.lo;
     rHi = zoom.hi;
+    measures = zoom.measures;
     samples = Math.max(MIN_DETAIL, Math.min(MAX_DETAIL, Math.round(num(ctx.params, 'detail', DEFAULT_DETAIL))));
-    // Dedupe caps a column at one row per pixel, and samples ≤ MAX_PLOT_ROWS,
-    // so `samples` rows per slot can never overflow.
-    stride = samples;
-    ringColumns = Math.max(1, Math.min(MAX_COLUMNS, Math.floor(MAX_PENDING_POINTS / stride)));
   }
 
   /**
-   * Rewind the sweep without touching a pixel.
+   * What the columns already computed were computed *for*: the window and the
+   * sample count, and nothing about the plate.
    *
-   * Called by both `reset()` and `drawBackground()`, because either can be the
-   * one that invalidates the columns already computed and the contract does not
-   * fix which the shell calls first: a resize moves every column's r, and the
-   * pixel rows in the ring were quantised against a plate that no longer
-   * exists. Running it twice is free.
+   * This is the whole difference between a repaint and an invalidation. The
+   * shell calls `drawBackground()` for things that are not changes at all — the
+   * in-canvas label face arrives as a promise continuation, one microtask after
+   * `activate()` returns — and it calls it for a resize, which changes where the
+   * diagram is drawn but not what it is. The sweep is kept as mathematics rather
+   * than as pixels, so neither one can destroy it: a re-lettering and a
+   * one-pixel change of plate height both cost a repaint from `levels`, and
+   * `--viz-max-h` is in `dvh`, so a phone's URL bar collapsing during a scroll
+   * is exactly that change, sixty times a second.
    */
+  let sweptShape = '';
+
+  function shapeOf(): string {
+    return `${rLo}|${rHi}|${samples}`;
+  }
+
+  /** Rewind the sweep without touching a pixel. Running it twice is free. */
   function rewind(): void {
     computed = 0;
     painted = 0;
@@ -389,12 +525,19 @@ function create(ctx: VizContext): VizInstance {
     pending = 0;
     prevLevel = -1;
     onsets.fill(NaN);
-    rowStamp.fill(0);
+    windowOnset = NaN;
+    lambdaAtFour = NaN;
+    sweptShape = shapeOf();
+  }
+
+  /** Does sweep column `c` contain r = 4, the one r with a closed-form exponent? */
+  function holdsFour(c: number): boolean {
+    return Math.abs(rAt(c) - 4) <= columnWidth() / 2 + 1e-12;
   }
 
   /**
    * Compute one column: its attractor, its period, its Lyapunov exponent, and
-   * the distinct pixel rows the samples occupy.
+   * the distinct levels the samples occupy.
    */
   function computeColumn(c: number): void {
     const r = rAt(c);
@@ -423,18 +566,69 @@ function create(ctx: VizContext): VizInstance {
     const level = doublingLevel(period);
     if (level >= 1 && level === prevLevel + 1 && Number.isNaN(onsets[level]!)) onsets[level] = r;
     if (level >= 0) prevLevel = level;
+    // The tangent bifurcation at 1 + √8, which is not a doubling and is not on
+    // the cascade's chain: the first column that resolves a 3-cycle at all.
+    if (period === 3 && Number.isNaN(windowOnset)) windowOnset = r;
 
-    const slot = (c % ringColumns) * stride;
-    const stamp = c + 1;
-    let n = 0;
-    for (let i = 0; i < samples; i++) {
-      const row = valueRow(orbit[i]!);
-      if (rowStamp[row] === stamp) continue;
-      rowStamp[row] = stamp;
-      pixelRows[slot + n] = row;
-      n++;
+    // The one r in this family whose exponent has a closed form, measured on an
+    // orbit of its own rather than on the handful of points the column plots.
+    if (Number.isNaN(lambdaAtFour) && holdsFour(c)) {
+      lambdaAtFour = lyapunovExponent(4, TRANSIENT, LAMBDA_4_SAMPLES, 0.3 + 0.4 * jitter[c]!);
+      iterations += TRANSIENT + LAMBDA_4_SAMPLES;
     }
-    rowCount[c % ringColumns] = n;
+
+    const base = c * LEVEL_WORDS;
+    levels.fill(0, base, base + LEVEL_WORDS);
+    for (let i = 0; i < samples; i++) {
+      const v = valueLevel(orbit[i]!);
+      const w = base + (v >>> 5);
+      levels[w] = (levels[w] ?? 0) | (1 << (v & 31));
+    }
+  }
+
+  /**
+   * Paint sweep columns `[from, to)` onto the background.
+   *
+   * A sweep column is a block of `plate ÷ 1024` pixels wide, which is one pixel
+   * on a plate near the grid's own resolution and never fewer: a plate narrower
+   * than the grid draws several columns onto the same pixel, which is all it can
+   * show.
+   *
+   * Levels arrive in order, so the rows they land on are non-decreasing and a
+   * run of them is one rectangle. That is what keeps a repaint affordable: a
+   * chaotic column's four hundred samples cover a solid band of the plate and
+   * cost two or three marks rather than four hundred, and a repaint of the whole
+   * sweep is the difference between a hitch and a dropped second.
+   */
+  function paintColumns(bg: CanvasRenderingContext2D, from: number, to: number): void {
+    bg.fillStyle = ctx.theme.data1;
+    for (let c = from; c < to; c++) {
+      const x = columnX(c);
+      const w = Math.max(1, columnX(c + 1) - x);
+      const base = c * LEVEL_WORDS;
+      // The open run, as [runY, runEnd). −1 is "none".
+      let runY = -1;
+      let runEnd = -1;
+      for (let k = 0; k < LEVEL_WORDS; k++) {
+        let bits = levels[base + k] ?? 0;
+        while (bits !== 0) {
+          // Lowest set bit first: Math.clz32 of the isolated bit gives its index.
+          const lowest = bits & -bits;
+          const b = 31 - Math.clz32(lowest);
+          bits ^= lowest;
+          const y = levelRow((k << 5) + b);
+          if (y < runEnd) continue;
+          if (y === runEnd) {
+            runEnd = y + 1;
+            continue;
+          }
+          if (runY >= 0) bg.fillRect(x, runY, w, runEnd - runY);
+          runY = y;
+          runEnd = y + 1;
+        }
+      }
+      if (runY >= 0) bg.fillRect(x, runY, w, runEnd - runY);
+    }
   }
 
   /**
@@ -444,19 +638,19 @@ function create(ctx: VizContext): VizInstance {
    * Intervals shrink by δ each time, so the fourth is a fifth of a percent of
    * the window and a handful of columns wide: the triple with the smallest
    * uncertainty, not the deepest one, is the honest reading. Zooming in shrinks
-   * h and the reading sharpens — on the whole map it measures 4.714, 1.0% from
-   * δ, with 5.8% of slack; on the Cascade window 4.624, 1.0% out, with 2.9%.
+   * h and the reading sharpens.
    *
-   * Nothing is reported at all above `MAX_RATIO_UNCERTAINTY`: a window with no
-   * cascade in it — the island of order, or 3.95 to 4 — can still produce three
-   * shrinking intervals out of unrelated periodic windows in the chaos, and a
-   * "ratio" known to ±240% is not a measurement of a constant known to ten
-   * digits. The ledger's empty state says so better than a number would.
+   * A triple whose intervals do not shrink is refused: a window with no cascade
+   * in it can still produce three "onsets" out of unrelated periodic windows up
+   * in the chaos, and their ratio is not a measurement of anything. Everything
+   * else is left to the band — a ratio resolved to ±240 % is reported with a
+   * ±240 % band and the ledger declines to call it a match, which is one rule in
+   * one place rather than two ceilings that can disagree.
    */
-  function measuredRatio(): { value: number; tolerance: number } {
-    const h = (rHi - rLo) / plot.columns;
+  function measuredRatio(): { value: number; half: number } {
+    const h = columnWidth();
     let value = NaN;
-    let tolerance = NaN;
+    let half = NaN;
     for (let j = 1; j + 2 <= MAX_LEVEL; j++) {
       const first = onsets[j]!;
       const second = onsets[j + 1]!;
@@ -466,14 +660,15 @@ function create(ctx: VizContext): VizInstance {
       // Intervals of a real cascade shrink; anything else is two unrelated
       // windows and its "ratio" means nothing.
       if (!(lower > upper && upper > 0)) continue;
-      const u = ONSET_SPREAD * h * (1 / lower + 1 / upper);
-      if (u > MAX_RATIO_UNCERTAINTY) continue;
-      if (Number.isNaN(tolerance) || u < tolerance) {
+      // Each onset carries ONSET_SPREAD column widths, and the ratio is a
+      // quotient, so the relative errors of the two intervals add.
+      const u = (lower / upper) * ONSET_SPREAD * h * (1 / lower + 1 / upper);
+      if (Number.isNaN(half) || u < half) {
         value = lower / upper;
-        tolerance = u;
+        half = u;
       }
     }
-    return { value, tolerance };
+    return { value, half };
   }
 
   function readouts(): Readout[] {
@@ -481,37 +676,58 @@ function create(ctx: VizContext): VizInstance {
     const r = cursor >= 0 ? rAt(cursor) : NaN;
     const lambda = cursor >= 0 ? lyap[cursor]! : NaN;
     const period = cursor >= 0 ? periods[cursor]! : 0;
-    const ratio = measuredRatio();
-    // r = 4 is the one parameter where λ has a closed form: the map is
-    // conjugate to the tent map there, so λ = ln 2. The cursor reads a column's
-    // centre, and the rightmost column's centre is half a column short of the
-    // window's edge, so the test is whether the column *contains* r = 4.
-    const atFour = cursor >= 0 && Math.abs(r - 4) <= (rHi - rLo) / (2 * plot.columns) + 1e-12;
-    return [
+    const h = columnWidth();
+    const out: Readout[] = [
       { key: 'columns', label: 'Columns rendered', value: computed, digits: 6, plain: 'columns drawn so far' },
       { key: 'span', label: 'r range', value: rHi - rLo, digits: 6, expertOnly: true },
       { key: 'r', label: 'r at cursor', value: r, digits: 7, plain: 'r under the cursor' },
       // 0 is not a period: it is "no cycle up to 64 repeats", which is chaos or
-      // an orbit that has not finished settling.
-      { key: 'period', label: 'Detected period', value: period, digits: 2, plain: 'values x cycles through' },
+      // an orbit that has not finished settling. The canvas window already says
+      // "never repeats" for it, and printing the sentinel as a number made the
+      // accessible rendering of that same reading "values x cycles through 0" —
+      // a cycle of length zero, which is not a thing, and indistinguishable from
+      // the "no column computed yet" case that emits the same 0. NaN is the
+      // app's own sentinel for a reading that does not exist: the ledger renders
+      // it as an em dash and "not measured yet", for free.
       {
-        key: 'lyapunov',
-        label: 'Lyapunov exponent',
-        value: lambda,
-        digits: 4,
-        expertOnly: true,
-        ...(atFour
-          ? {
-              target: Math.LN2,
-              formula: ['ln 2'],
-              // λ̂ is a mean of `samples` terms whose standard deviation under
-              // the arcsine density is π/√12, so its standard error is
-              // 0.9069/√n — 6.5% of ln 2 at 400 samples. Three of those.
-              tolerance: (3 * LAMBDA_SIGMA_AT_FOUR) / (Math.sqrt(samples) * Math.LN2),
-            }
-          : {}),
+        key: 'period',
+        label: 'Detected period',
+        value: period > 0 ? period : NaN,
+        digits: 2,
+        plain: 'values x cycles through',
       },
-      {
+      // The λ the curve on the plate is drawn from, at the cursor. It carries no
+      // prediction: λ has a closed form at exactly one r, and that reading is
+      // `lambda4` below, measured over an orbit long enough to test it.
+      { key: 'lyapunov', label: 'Lyapunov exponent', value: lambda, digits: 4, expertOnly: true },
+    ];
+
+    // r = 4 is the one parameter where λ has a closed form: the map is conjugate
+    // to the tent map there, so λ = ln 2. Two of the five windows reach it.
+    if (rHi >= 4 - 1e-12) {
+      out.push({
+        key: 'lambda4',
+        label: 'Lyapunov exponent at r = 4',
+        value: lambdaAtFour,
+        digits: 5,
+        target: Math.LN2,
+        formula: ['ln 2'],
+        band: { kind: 'sampled', sigma: LAMBDA_SIGMA_AT_FOUR, samples: LAMBDA_4_SAMPLES },
+        ...(measures === 'lyapunov'
+          ? {
+              headline: true,
+              plain: 'how fast two close values pull apart',
+              hint: 'above zero, two values that start out close run away from each other',
+            }
+          : { expertOnly: true }),
+      });
+    }
+
+    // The window's own measurement. Exactly one of these is the headline, and it
+    // is the one the window was chosen to show — see `Measurement`.
+    if (measures === 'feigenbaum') {
+      const ratio = measuredRatio();
+      out.push({
         key: 'feigenbaum',
         label: 'Feigenbaum ratio',
         value: ratio.value,
@@ -521,10 +737,43 @@ function create(ctx: VizContext): VizInstance {
         plain: 'the doubling ratio',
         headline: true,
         hint: 'the gaps between splits shrink by this much each time',
-        ...(Number.isFinite(ratio.tolerance) ? { tolerance: ratio.tolerance } : {}),
-      },
-      { key: 'iterations', label: 'Map iterations', value: iterations, digits: 9, plain: 'times the rule has run' },
-    ];
+        ...(Number.isFinite(ratio.half) ? { band: { kind: 'absolute', half: ratio.half } } : {}),
+      });
+    } else if (measures === 'split') {
+      out.push({
+        key: 'split',
+        label: 'First doubling',
+        value: onsets[1]!,
+        digits: 7,
+        target: FIRST_SPLIT,
+        formula: ['3'],
+        plain: 'where x first splits in two',
+        headline: true,
+        hint: 'below it x settles down; above it, x never stops bouncing',
+        // Two column widths of resolution, plus the offset a finite transient
+        // puts on a resolved doubling — which does not shrink when the window
+        // does, so it is added rather than counted in columns.
+        band: { kind: 'absolute', half: ONSET_SPREAD * h + SETTLE_BIAS },
+        range: [rLo, rHi],
+      });
+    } else if (measures === 'window3') {
+      out.push({
+        key: 'window3',
+        label: 'Period-3 window',
+        value: windowOnset,
+        digits: 7,
+        target: PERIOD_THREE_ONSET,
+        formula: ['1 + √8'],
+        plain: 'where x starts cycling through three values',
+        headline: true,
+        hint: 'a band of order sitting in the middle of the chaos',
+        band: { kind: 'absolute', half: TANGENT_SPREAD * h + TANGENT_BIAS },
+        range: [rLo, rHi],
+      });
+    }
+
+    out.push({ key: 'iterations', label: 'Map iterations', value: iterations, digits: 9, plain: 'times the rule has run' });
+    return out;
   }
 
   /**
@@ -560,31 +809,33 @@ function create(ctx: VizContext): VizInstance {
 
   const instance: VizInstance = {
     step(dt) {
-      if (computed >= plot.columns) return;
+      if (computed >= SWEEP_COLUMNS) return;
       // Columns per second: the sweep's own pace, capped by an iteration budget
       // so that 5,000 transient iterations at 1,000 samples cannot turn one
-      // tick into a dropped frame.
-      const pace = Math.min(plot.columns / SWEEP_SECONDS, ITERATION_BUDGET / (TRANSIENT + samples));
+      // tick into a dropped frame. Both terms are properties of the window, not
+      // of the plate, so the sweep advances at the same rate on every screen.
+      const pace = Math.min(SWEEP_COLUMNS / SWEEP_SECONDS, ITERATION_BUDGET / (TRANSIENT + samples));
       pending += (pace * dt) / 1000;
-      while (pending >= 1 && computed < plot.columns && computed - painted < ringColumns) {
+      // A column is kept the moment it is computed, so there is no buffer to
+      // outrun and no back-pressure to apply: a fast-forward simply finishes
+      // more of the sweep.
+      if (pending > SWEEP_COLUMNS) pending = SWEEP_COLUMNS;
+      while (pending >= 1 && computed < SWEEP_COLUMNS) {
         computeColumn(computed);
         computed++;
         pending -= 1;
       }
-      // With the ring full — a fast-forward outrunning the frames that drain it
-      // — the debt would otherwise grow without bound and then discharge in one
-      // burst that skips half the plate.
-      if (pending > ringColumns) pending = ringColumns;
-      if (computed >= plot.columns) pending = 0;
+      if (computed >= SWEEP_COLUMNS) pending = 0;
     },
 
     drawBackground() {
-      // Resize and parameter change both land here, and both invalidate every
-      // column already computed: the rows in the ring were quantised against
-      // the old plate, and r is a different function of the column index.
       syncStructure();
       plot = layoutPlot(ctx.width, ctx.height, fontPx(ctx.theme.labelFont));
-      rewind();
+      // Only a change of the *mathematics* invalidates: a new window is a
+      // different r for every column, and a new sample count is a different
+      // orbit. A resize and a re-lettering change neither, and this method is
+      // what the shell calls for both of them.
+      if (shapeOf() !== sweptShape) rewind();
 
       const bg = ctx.layers.background;
       const { width, height, theme } = ctx;
@@ -634,6 +885,13 @@ function create(ctx: VizContext): VizInstance {
         const x = Math.min(Math.max(at, labelW / 2 + 2), width - labelW / 2 - 2);
         bg.fillText(t.toFixed(decimals), x, axisY + AXIS_TICK + LABEL_GAP);
       }
+
+      // The diagram itself, back out of `levels`. This is the whole of what a
+      // resize costs now: the sweep is mathematics and the bitmap is a picture
+      // of it, so a plate that changed shape is repainted rather than re-run.
+      painted = 0;
+      paintColumns(bg, 0, computed);
+      painted = computed;
     },
 
     draw() {
@@ -646,13 +904,7 @@ function create(ctx: VizContext): VizInstance {
       // to right instead of appearing after a stall, and a finished sweep costs
       // nothing per frame.
       if (computed > painted) {
-        bg.fillStyle = theme.data1;
-        for (let c = painted; c < computed; c++) {
-          const x = plot.x0 + c;
-          const slot = (c % ringColumns) * stride;
-          const n = rowCount[c % ringColumns]!;
-          for (let i = 0; i < n; i++) bg.fillRect(x, pixelRows[slot + i]!, 1, 1);
-        }
+        paintColumns(bg, painted, computed);
         painted = computed;
       }
 
@@ -685,7 +937,7 @@ function create(ctx: VizContext): VizInstance {
             open = false;
             continue;
           }
-          const x = plot.x0 + c + 0.5;
+          const x = columnX(c) + Math.max(1, columnX(c + 1) - columnX(c)) / 2;
           const y = lambdaY(v);
           if (open) fg.lineTo(x, y);
           else {
@@ -700,8 +952,8 @@ function create(ctx: VizContext): VizInstance {
 
       // The sweep cursor: the one thing on this plate that is current and
       // moving, and it disappears when the sweep is done.
-      if (computed < plot.columns) {
-        const x = plot.x0 + computed + 0.5;
+      if (computed < SWEEP_COLUMNS) {
+        const x = columnX(computed) + 0.5;
         fg.strokeStyle = theme.data1;
         fg.lineWidth = 2 * theme.lineWidth;
         fg.beginPath();
@@ -732,7 +984,7 @@ function create(ctx: VizContext): VizInstance {
       // reaches it: a resize rewinds the sweep, and a run that consumed the
       // stream column by column would come back a different diagram for the
       // same seed.
-      for (let c = 0; c < MAX_COLUMNS; c++) jitter[c] = ctx.rng.next();
+      for (let c = 0; c < SWEEP_COLUMNS; c++) jitter[c] = ctx.rng.next();
       syncStructure();
       rewind();
       ctx.layers.foreground.clearRect(0, 0, ctx.width, ctx.height);
@@ -763,6 +1015,8 @@ export const bifurcation: Viz = {
   params,
   presets,
   facts,
-  budget: { maxEntities: MAX_PENDING_POINTS },
+  // Orbit samples the sweep holds: one bit per attractor level per column, the
+  // whole diagram kept as mathematics rather than as pixels.
+  budget: { maxEntities: SWEEP_COLUMNS * VALUE_LEVELS },
   create,
 };

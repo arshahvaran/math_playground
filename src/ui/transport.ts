@@ -51,6 +51,25 @@ export const SPEEDS: readonly number[] = [0.5, 1, 2, 4, 8];
 /** Holding Fast-forward keeps skipping — one burst per press would be a stutter. */
 const HOLD_REPEAT_MS = 100;
 
+/**
+ * A held key is re-armed from the end of the burst it just ran, never from a
+ * clock, and never sooner than that burst cost.
+ *
+ * A burst is a fixed number of ticks and a tick is not a fixed cost: it is
+ * 0.02 ms on the orchard and about 0.6 ms on the Ising sheet at 128², so one
+ * burst measured 100–235 ms against a 100 ms interval. `setInterval` does not
+ * care — it simply runs the next callback as soon as the previous one returns —
+ * so on the five heaviest tabs the page got no idle slot at all while the key
+ * was down, and answered clicks, hover and the Pause key one burst late. Waiting
+ * out what the last burst actually cost bounds the hold at half the main thread
+ * on any visualization at any slider position, which is the property a fixed
+ * period cannot provide. `settle()` in main.ts sizes its batches the same way,
+ * from measurement rather than from a constant.
+ */
+function holdDelay(spentMs: number): number {
+  return Math.max(HOLD_REPEAT_MS, spentMs);
+}
+
 export interface PressGuard {
   /** A press has begun and has already fired its burst. */
   arm(): void;
@@ -72,14 +91,38 @@ export interface PressGuard {
  * the virtual cursor, VO-Space, Dragon, switch access — so the key would look
  * pressed and do nothing.
  */
-export function createPressGuard(): PressGuard {
+export function createPressGuard(
+  defer: (fn: () => void) => void = (fn) => {
+    setTimeout(fn, 0);
+  },
+): PressGuard {
   let armed = false;
+  let press = 0;
   return {
     arm() {
       armed = true;
+      press += 1;
     },
     end(clickFollows) {
-      if (!clickFollows) armed = false;
+      if (!clickFollows) {
+        armed = false;
+        return;
+      }
+      /**
+       * Even when a click is expected, the bit is dropped at the end of the
+       * task. Whether a click is coming cannot be known from where the release
+       * landed: a touch pointer is implicitly captured at `pointerdown`, so
+       * `pointerup` is delivered to the key even when the finger lifted
+       * somewhere else entirely — and no click is synthesised. Geometry says
+       * "a click is coming", nothing consumes the bit, and the next *bare*
+       * click is swallowed instead. The synthesised click always arrives in the
+       * same task as its release, so an armed bit that survives that task
+       * belonged to a press whose click never came.
+       */
+      const issued = press;
+      defer(() => {
+        if (press === issued) armed = false;
+      });
     },
     swallows() {
       const echo = armed;
@@ -104,7 +147,7 @@ export function createTransport(
   // waits: the key reads Play, and the shell does not autoplay.
   let playing = !opts.reducedMotion;
   let holding = false;
-  let holdTimer: ReturnType<typeof setInterval> | null = null;
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
   const heldPress = createPressGuard();
 
   const play = h('button', {
@@ -163,20 +206,27 @@ export function createTransport(
 
   // --- Fast-forward, held ---------------------------------------------------
 
+  /** One burst, then the next one scheduled from what this one cost. */
+  function burst(): void {
+    const before = clock();
+    cb.onFastForward();
+    if (!holding) return;
+    holdTimer = setTimeout(burst, holdDelay(clock() - before));
+  }
+
   function beginHold(): void {
     if (holding) return;
     holding = true;
     heldPress.arm();
     ff.setAttribute('aria-pressed', 'true');
-    cb.onFastForward();
-    holdTimer = setInterval(() => cb.onFastForward(), HOLD_REPEAT_MS);
+    burst();
   }
 
   function endHold(): void {
     if (!holding) return;
     holding = false;
     if (holdTimer !== null) {
-      clearInterval(holdTimer);
+      clearTimeout(holdTimer);
       holdTimer = null;
     }
     ff.setAttribute('aria-pressed', 'false');
@@ -196,8 +246,31 @@ export function createTransport(
     );
   }
 
-  ff.addEventListener('pointerdown', beginHold);
+  /**
+   * Only the gesture that activates a button starts a hold. A secondary or
+   * middle press is not an activation in any platform's button semantics, and
+   * binding it fired a burst, armed the repeat and announced `aria-pressed` for
+   * a right-click that was on its way to the context menu — which no listener
+   * would have ended. A pointer whose `button` or `isPrimary` the environment
+   * does not report is treated as primary: the property being absent is not
+   * evidence of a secondary press.
+   */
+  function isPrimaryPress(event: PointerEvent): boolean {
+    const button = (event as Partial<PointerEvent>).button;
+    const primary = (event as Partial<PointerEvent>).isPrimary;
+    return (button === undefined || button === 0) && primary !== false;
+  }
+
+  ff.addEventListener('pointerdown', (event) => {
+    if (!isPrimaryPress(event)) return;
+    beginHold();
+  });
   ff.addEventListener('pointerleave', endHold);
+  // The menu takes the pointer with it: no `pointerup` is guaranteed to follow.
+  ff.addEventListener('contextmenu', () => {
+    endHold();
+    heldPress.end(false);
+  });
   ff.addEventListener('blur', () => {
     // A key that has lost focus is not going to receive the pending click.
     endHold();
@@ -277,6 +350,10 @@ function iconKey(
     },
     glyph(...paths),
   );
+}
+
+function clock(): number {
+  return typeof performance === 'object' ? performance.now() : Date.now();
 }
 
 /** Solid 16 px glyphs, no stroke — the fill comes from `.key__glyph`. */

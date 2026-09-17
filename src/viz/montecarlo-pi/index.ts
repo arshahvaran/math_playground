@@ -406,13 +406,17 @@ function create(ctx: VizContext): VizInstance {
         target: Math.PI,
         headline: true,
         plain: 'our estimate of pi',
-        // The ledger's 1% default is 0.031 on π — nineteen standard errors at a
-        // million darts, so the row would read "converged" whatever the
-        // simulation did. Three standard errors at the count the run is going
-        // to reach is the honest bar, and it is the same bet the plot draws:
-        // the reading starts off and arrives at agreement as the darts land,
-        // rather than being true from the first one.
-        tolerance: (3 * piStandardError(maxDarts)) / Math.PI,
+        // π̂ = 4·p̂ is a constant multiple of a Bernoulli mean, so one dart
+        // contributes exactly `PI_SE_COEFFICIENT` = 4√(p(1−p)) of standard
+        // deviation and the ledger's σ/√n is `piStandardError(darts)` itself —
+        // the reference line the plot draws, and the row in the table below.
+        //
+        // At the count the run *will* reach it was a constant: 16 % of π at the
+        // hundred-dart stop of the fader, which certified a printed 3.36000
+        // under "matches the prediction of 3.14159". At the count in hand it
+        // starts far too wide to test anything, which is the truth about a
+        // hundred darts, and reaches the ceiling at about a thousand.
+        band: { kind: 'sampled', sigma: PI_SE_COEFFICIENT, samples: darts },
       },
       { key: 'error', label: 'Absolute error', value: Math.abs(pi - Math.PI), digits: 3, expertOnly: true },
       {

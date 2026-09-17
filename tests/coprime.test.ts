@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
+import { bandOf, verdictOf } from '../src/ui/readouts';
 import {
   checkRateFor,
   checkTarget,
@@ -615,6 +616,20 @@ function ledger(v: Viz): Record<string, number> {
   return Object.fromEntries((last ?? []).map((r) => [r.key, r.value]));
 }
 
+/** The last emitted frame, keyed — what the ledger is handed, bands and all. */
+function rows(v: Viz): Record<string, Readout | undefined> {
+  const last = v.emitted.at(-1);
+  expect(last).toBeDefined();
+  return Object.fromEntries((last ?? []).map((r) => [r.key, r]));
+}
+
+/** One configuration, run for `checks` checks, as keyed readouts. */
+function rowsAfter(params: Record<string, ParamValue>, checks: number): Record<string, Readout | undefined> {
+  const v = stubViz(params);
+  until(v, checks);
+  return rows(v);
+}
+
 /** The sight lines painted in the last frame, halo strokes and all. */
 function rays(v: Viz): Seg[] {
   return v.fg.strokes.flatMap((s) => s.segments);
@@ -637,9 +652,15 @@ describe('coprime instance: readouts', () => {
       'se',
     ]);
     const by = Object.fromEntries((last ?? []).map((r) => [r.key, r]));
-    expect(by['share']?.target).toBe(VISIBLE_FRACTION);
+    const orchard = new Orchard(MAX_SIDE);
+    orchard.setSide(MAX_SIDE);
+    // The two sampled rows are judged against what they are estimating — this
+    // corner's own share, and the π that comes out of it — and the two
+    // exhaustive rows against the endless orchard's constants.
+    expect(by['share']?.target).toBe(orchard.fraction);
+    expect(by['pi']?.target).toBe(piFromFraction(orchard.fraction));
     expect(by['picture']?.target).toBe(VISIBLE_FRACTION);
-    expect(by['pi']?.target).toBe(Math.PI);
+    expect(by['picturePi']?.target).toBe(Math.PI);
     expect(by['trees']?.value).toBe(MAX_SIDE * MAX_SIDE);
     expect(by['lit']?.value).toBe(2 * totientSum(MAX_SIDE) - 1);
     // 5,000 checks: sd(π̂) is 0.0178, so 0.08 is 4.5σ.
@@ -677,8 +698,13 @@ describe('coprime instance: readouts', () => {
     const headline = last.filter((r) => r.headline === true);
     expect(headline.map((r) => r.key)).toEqual(['pi']);
     expect(headline[0]?.plain).toBe('our estimate of pi');
-    // No hint: the verdict line already prints the prediction it would quote.
-    expect(headline[0]?.hint).toBeUndefined();
+    // The headline is held to the π *this corner* can reach, so the hero prints
+    // a prediction of 3.13962 at a hundred a side and 3.08132 at twelve. The
+    // hint is what keeps that from reading as a claim about π itself — and it
+    // names the constant rather than quoting the prediction, which the verdict
+    // line above it is already printing.
+    expect(headline[0]?.hint).toMatch(/endless orchard/);
+    expect(headline[0]?.hint).not.toContain(String(headline[0]?.target));
 
     const shown = last.filter((r) => r.expertOnly !== true).map((r) => r.key);
     expect(shown).toEqual(['checked', 'share', 'pi', 'picture']);
@@ -689,15 +715,74 @@ describe('coprime instance: readouts', () => {
     }
   });
 
-  it('declares a tolerance the run can actually reach, three standard errors wide', () => {
+  it('declares a band from the checks in hand, never from the ceiling the fader names', () => {
+    // The ceiling is where the run stops; it is not evidence. Taken from it, the
+    // bar was the end of the run's bar on every frame before the last — and
+    // dragging the fader re-scaled it 32× without a single new check behind it.
     const v = stubViz({ checks: MAX_CHECKS });
-    until(v, 1_000);
-    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
-    expect(by['pi']?.tolerance).toBeCloseTo((3 * piStandardError(MAX_CHECKS)) / Math.PI, 12);
-    expect(by['share']?.tolerance).toBeCloseTo((3 * fractionStandardError(MAX_CHECKS)) / VISIBLE_FRACTION, 12);
-    // The exactly counted row keeps the ledger's own 1%: it is not an estimate,
-    // so its distance from 6/π² is the finite corner and should read as such.
-    expect(by['picture']?.tolerance).toBeUndefined();
+    until(v, 5_000);
+    const early = rows(v);
+    const share = early['share'];
+    const pi = early['pi'];
+    const orchard = new Orchard(MAX_SIDE);
+    orchard.setSide(MAX_SIDE);
+    const f = orchard.fraction;
+    expect(share?.band).toEqual({ kind: 'sampled', sigma: Math.sqrt(f * (1 - f)), samples: 5_000 });
+    // π = √(6/p), so |dπ/dp| = π/2p and sd(π̂) = (π/2)·√((1−p)/p) — which at the
+    // endless orchard's share is the 1.26/√N coefficient the module publishes.
+    expect(pi?.band).toEqual({
+      kind: 'sampled',
+      sigma: (piFromFraction(f) / 2) * Math.sqrt((1 - f) / f),
+      samples: 5_000,
+    });
+    expect(PI_SE_COEFFICIENT).toBeCloseTo((Math.PI / 2) * Math.sqrt((1 - VISIBLE_FRACTION) / VISIBLE_FRACTION), 12);
+    // One band per reading: a half-migrated row declaring both costs the verdict.
+    for (const r of v.emitted.at(-1) ?? []) expect(r.tolerance, r.key).toBeUndefined();
+
+    // Four times the checks, half the band, with the ceiling untouched.
+    const half = bandOf(share as Readout);
+    expect(half).toBeGreaterThan(0);
+    until(v, 15_000);
+    const later = rows(v)['share'];
+    expect(later?.band).toMatchObject({ samples: 20_000 });
+    expect(bandOf(later as Readout)).toBeCloseTo((half ?? 0) / 2, 12);
+  });
+
+  it('holds the exactly counted rows to the endless orchard, with the corner’s own bias allowed for', () => {
+    // These two are counted tree by tree: no sampling noise, and the allowance
+    // is the display decision of how near 6/π² a finite corner has to sit to be
+    // reading it. A hundred a side is 0.13% out and agrees; twelve a side is 4%
+    // out and says so — and the two rows, which are one count in two
+    // coordinates, can no longer reach opposite verdicts about one corner.
+    const big = rowsAfter({ size: MAX_SIDE, checks: 2_000 }, 2_000);
+    expect(verdictOf(big['picture'] as Readout).state).toBe('agree');
+    expect(verdictOf(big['picturePi'] as Readout).state).toBe('agree');
+
+    const small = rowsAfter({ size: 12, checks: 2_000 }, 2_000);
+    expect(verdictOf(small['picture'] as Readout).state).not.toBe('agree');
+    expect(verdictOf(small['picturePi'] as Readout).state).not.toBe('agree');
+    // π's half of the allowance is half the share's, by the same |dπ/dp| = π/2p.
+    expect(small['picturePi']?.band).toEqual({ kind: 'absolute', half: 0.005 * Math.PI });
+    expect(small['picture']?.band).toEqual({ kind: 'absolute', half: 0.01 * VISIBLE_FRACTION });
+  });
+
+  it('never certifies a corner against a limit it cannot reach, however long it runs', () => {
+    // The shipped "Small orchard" chip printed "✓ matches the prediction of
+    // 3.14159" at 2,000 checks and took it back at 20,000: the bar was
+    // statistical and the gap was structural, so the reader was rewarded for
+    // gathering less data. Twelve a side converges on √(6·144/91) = 3.08132,
+    // and that is what the row is held to at every check count.
+    for (const checks of [2_000, 20_000, 200_000]) {
+      const by = rowsAfter({ size: 12, checks }, checks);
+      const pi = by['pi'] as Readout;
+      expect(pi.target, `${checks} checks`).toBeCloseTo(3.08132, 5);
+      expect(verdictOf(pi).state, `${checks} checks`).toBe('agree');
+      // …and the sentence the reader gets quotes the corner's own limit. The
+      // tick is a claim about this orchard and can no longer be read as one
+      // about π, whatever the check count does to the width of the band.
+      expect(verdictOf(pi).text, `${checks} checks`).toContain('3.08132');
+      expect(verdictOf(pi).text, `${checks} checks`).not.toContain('3.14159');
+    }
   });
 
   it('draws without mutating the simulation, and resets to an empty run', () => {
@@ -736,6 +821,34 @@ describe('coprime instance: the run', () => {
     tick(v, 600);
     paint(v);
     expect(ledger(v)['checked']).toBeGreaterThan(before ?? 0);
+  });
+
+  it('starts over when the ceiling is dragged below the checks already made', () => {
+    // A *lowered* ceiling cannot be absorbed: `step()` stops at once, so the old
+    // and much sharper run froze under the new label and the ledger went on
+    // reporting 20,000 checks while the fader, the caption and the permalink all
+    // said 200. Falling through to the shell's reset makes the page and the link
+    // it advertises the same run.
+    const v = stubViz({ checks: 20_000 });
+    until(v, 20_000);
+    expect(ledger(v)['checked']).toBeGreaterThan(19_000);
+    expect(setParam(v, 'checks', 200)).toBe(false);
+    expect(ledger(v)['checked']).toBe(0);
+    until(v, 200);
+    expect(ledger(v)['checked']).toBe(200);
+
+    const fresh = stubViz({ checks: 200 });
+    until(fresh, 200);
+    expect(ledger(v)).toEqual(ledger(fresh));
+  });
+
+  it('never reports more checks than the fader is set to, drag it where you like', () => {
+    const v = stubViz({ checks: MAX_CHECKS });
+    for (const checks of [50_000, 200, 2_000, MAX_CHECKS, 1_000]) {
+      setParam(v, 'checks', checks);
+      until(v, checks);
+      expect(ledger(v)['checked'], `checks=${checks}`).toBeLessThanOrEqual(checkTarget({ checks }));
+    }
   });
 
   it('resets on the side and the seed, so each is a fresh experiment', () => {

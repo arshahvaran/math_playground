@@ -40,12 +40,20 @@ export const BINS = 21;
  *
  * A game costs one `rng.next()` and a comparison per flip, which measures about
  * 50 M flips a second. A run is paced to finish in `RUN_SECONDS` whatever it is
- * asked for, so the peak rate is MAX_GAMES·MAX_FLIPS/RUN_SECONDS = 4.2 M flips
- * a second — 70,000 in a 60 Hz frame, 1.4 ms of the 16 ms budget, and 170 ms
- * for the two seconds of simulated time one Fast-forward press buys. Raising
- * either ceiling raises all three together.
+ * asked for, so the peak rate is MAX_GAMES·MAX_FLIPS/RUN_SECONDS = 5 M flips a
+ * second — 83,000 in a 60 Hz frame, 1.7 ms of the 16 ms budget, and 200 ms for
+ * the two seconds of simulated time one Fast-forward press buys. Raising either
+ * ceiling raises all three together.
+ *
+ * Six thousand rather than five, because of what the headline is measuring: a
+ * proportion near 0.41 is settled to a twentieth of itself only from about
+ * 5,200 games, so at five thousand there was no setting of the two faders at
+ * which the tab's own headline could be tested — it would have read "still
+ * settling" for ever, which is as unhelpful as the false check mark it
+ * replaced. The ceiling is now just past that count, and the last preset is
+ * where the reader meets it.
  */
-export const MAX_GAMES = 5_000;
+export const MAX_GAMES = 6_000;
 export const MAX_FLIPS = 10_000;
 export const MIN_GAMES = 200;
 export const MIN_FLIPS = 400;
@@ -156,7 +164,7 @@ export const VARIANCE_EXCESS = 2;
  * measures is taken at the bars' edges only, so it is bounded above by Dₘ and
  * this is a conservative band for it.
  */
-const KS_CRITICAL = 1.628;
+export const KS_CRITICAL = 1.628;
 
 const params: readonly ParamSpec[] = [
   {
@@ -205,8 +213,8 @@ const presets: readonly Preset[] = [
   {
     id: 'many-games',
     label: 'More games',
-    caption: 'Five thousand games, and the bars settle onto the curve the mathematics predicts.',
-    values: { flips: 10_000, games: 5_000 },
+    caption: 'Six thousand games, and the bars settle onto the curve the mathematics predicts.',
+    values: { flips: 10_000, games: MAX_GAMES },
   },
 ];
 
@@ -269,12 +277,15 @@ export function gameRateFor(games: number): number {
 }
 
 /**
- * Three standard errors of a measured proportion, relative to the proportion
- * itself: 3·√(p(1−p)/M) / p. The ledger compares relative errors, so the
- * tolerance it is given has to be one too.
+ * Three standard errors of a measured proportion, in the proportion's own
+ * units: 3·√(p(1−p)/M) over the games tallied *so far*.
+ *
+ * NaN before the first game, which the ledger reads as no band at all rather
+ * than as a band of unlimited width — the reading is NaN then too, and neither
+ * one is a claim about anything.
  */
-function proportionTolerance(p: number, games: number): number {
-  return games > 0 ? SIGMAS * Math.sqrt((1 - p) / (p * games)) : Infinity;
+function proportionBand(p: number, games: number): number {
+  return games > 0 ? SIGMAS * Math.sqrt((p * (1 - p)) / games) : Number.NaN;
 }
 
 export interface PlateLayout {
@@ -362,16 +373,21 @@ function create(ctx: VizContext): VizInstance {
       { key: 'games', label: 'Games played', value: games, digits: 6, plain: 'games played' },
       // §5: the hero prints "analytic" and the closed form behind the target.
       //
-      // Every tolerance below is three standard errors of the reading plus the
-      // margin by which the exact law for a game this long sits above the limit
-      // it is being compared against — at 400 flips the coins are not quite
-      // obeying the limit yet, and that gap is the tab's, not the reader's.
+      // Every band below is three standard errors of the reading plus, where
+      // there is one, the margin by which the exact law for a game this long
+      // sits above the limit it is being compared against — at 400 flips the
+      // coins are not quite obeying the limit yet, and that gap is the tab's,
+      // not the reader's. The rows that carry such a bias state their band
+      // absolutely, because a bias is not noise and cannot be divided by √M;
+      // the one that has none (the mean is exactly ½ at every game length)
+      // states its σ and lets the ledger do the dividing.
       //
-      // The standard errors are taken at the game count the run is going to
-      // reach, not the count so far, exactly as the Galton board takes its
-      // variance band at the ball count it will finish on: a band that widens
-      // as the sample shrinks is true from the first game, so the row would
-      // open agreeing and never move. This way it starts off and arrives.
+      // All five counts are `tally.games`, the games played so far. Taken at
+      // the count the run was going to *finish* on, the headline's band was
+      // 8.4 % of its own prediction at the defaults and 26 % near the bottom of
+      // the fader, which is how a reading of 0.5150 came to be certified
+      // against 0.4097: a band that wide cannot be falsified by any result the
+      // experiment could produce, so it was not a test of anything.
       {
         key: 'dominated',
         label: 'One side led ≥ 90%',
@@ -379,7 +395,11 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         target: DOMINANT_P,
         formula: ['(4/', { v: 'π' }, ')·arcsin(√0.1)'],
-        tolerance: proportionTolerance(DOMINANT_P, target) + DOMINANT_EXCESS / flips / DOMINANT_P,
+        band: {
+          kind: 'absolute',
+          half: proportionBand(DOMINANT_P, games) + DOMINANT_EXCESS / flips,
+        },
+        range: [0, 1],
         plain: 'share of games where one side led 90% of the game or more',
         headline: true,
       },
@@ -390,7 +410,8 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         target: FAIR_P,
         formula: ['(2/', { v: 'π' }, ')·(arcsin√0.55 − arcsin√0.45)'],
-        tolerance: proportionTolerance(FAIR_P, target) + FAIR_EXCESS / flips / FAIR_P,
+        band: { kind: 'absolute', half: proportionBand(FAIR_P, games) + FAIR_EXCESS / flips },
+        range: [0, 1],
         plain: 'share of games that came out looking even',
       },
       {
@@ -400,9 +421,11 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         target: LEAD_MEAN,
         formula: '1/2',
-        // √(1/8)/√M over a target of ½, three of them. No finite-game term:
-        // the exact law has mean exactly ½ at every game length.
-        tolerance: (SIGMAS * Math.sqrt(LEAD_VARIANCE / target)) / LEAD_MEAN,
+        // One game's lead fraction has standard deviation √(1/8); the ledger
+        // divides by the games in hand. No finite-game term: the exact law has
+        // mean exactly ½ at every game length.
+        band: { kind: 'sampled', sigma: Math.sqrt(LEAD_VARIANCE), samples: games },
+        range: [0, 1],
         plain: 'average share of the game spent ahead',
       },
       {
@@ -413,10 +436,16 @@ function create(ctx: VizContext): VizInstance {
         target: LEAD_VARIANCE,
         formula: '1/8',
         // The arcsine law has kurtosis 3/2, so its fourth central moment is
-        // (3/2)·(1/8)² = 3/128 and the standard error of a variance over M
-        // games is √((3/128 − 1/64)/M) = 0.0884/√M, which is 0.707/√M of the
-        // target itself. The exact variance is (n+2)/(8n), over by 2/n.
-        tolerance: (SIGMAS * Math.sqrt(LEAD_VARIANCE / target)) / LEAD_MEAN + VARIANCE_EXCESS / flips,
+        // (3/2)·(1/8)² = 3/128 and one game carries √(3/128 − 1/64) = 0.0884 of
+        // standard deviation — its own, not the mean's, which is 0.354 and is
+        // what this row used to borrow. The exact variance is (n+2)/(8n), over
+        // by 2/n of itself.
+        band: {
+          kind: 'absolute',
+          half:
+            (SIGMAS * Math.sqrt(3 / 128 - 1 / 64)) / Math.sqrt(Math.max(1, games)) +
+            (LEAD_VARIANCE * VARIANCE_EXCESS) / flips,
+        },
         expertOnly: true,
       },
       {
@@ -425,10 +454,13 @@ function create(ctx: VizContext): VizInstance {
         value: tally.cdfGap(),
         digits: 3,
         target: 0,
-        // A target of zero is read as an absolute tolerance. Kolmogorov's 99th
-        // percentile for the run's own game count, plus the gap the exact
+        // A prediction of exactly zero is no scale at all, so the band is
+        // judged against the span instead: a gap between two distribution
+        // functions lives in [0, 1] whatever either of them is. Kolmogorov's
+        // 99th percentile at the games played so far, plus the gap the exact
         // finite-game law has against the limit before a single coin is thrown.
-        tolerance: KS_CRITICAL / Math.sqrt(target) + CDF_EXCESS,
+        band: { kind: 'absolute', half: KS_CRITICAL / Math.sqrt(Math.max(1, games)) + CDF_EXCESS },
+        range: [0, 1],
         expertOnly: true,
       },
     ];

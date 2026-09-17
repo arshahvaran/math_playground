@@ -83,12 +83,17 @@ export const PI_SE_COEFFICIENT = PI_SENSITIVITY * FRACTION_SE_COEFFICIENT;
 
 /** sd of the sampled share after `checks` independent checks. */
 export function fractionStandardError(checks: number): number {
-  return FRACTION_SE_COEFFICIENT / Math.sqrt(checks);
+  // NaN over no checks at all — see `piStandardError`.
+  return checks > 0 ? FRACTION_SE_COEFFICIENT / Math.sqrt(checks) : NaN;
 }
 
 /** sd of the π recovered from `checks` independent checks. */
 export function piStandardError(checks: number): number {
-  return PI_SE_COEFFICIENT / Math.sqrt(checks);
+  // A standard error over zero checks is not an infinitely wide bar, it is no
+  // reading at all — and a reset zeroes the count one frame before `draw()`
+  // emits, so this was published as Infinity on the frame after every
+  // parameter change. NaN is the app's own sentinel for "not measured".
+  return checks > 0 ? PI_SE_COEFFICIENT / Math.sqrt(checks) : NaN;
 }
 
 /**

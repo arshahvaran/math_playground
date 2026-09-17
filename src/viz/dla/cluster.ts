@@ -127,6 +127,32 @@ const HISTORY_MAX = 128;
  */
 export const FIT_FROM = 300;
 
+/**
+ * How much growth a fit has to span, and over how many checkpoints, before its
+ * slope is a dimension rather than an accident of which way the first arms went.
+ *
+ * A least-squares slope through four checkpoints spanning N = 305 to 400 —
+ * ln(400/305) = 0.27 of a natural log unit, less than a third of an octave — is
+ * dominated by noise, and the tab published it as a fractal dimension: 1.747 at
+ * 400 particles read "✓ matches the prediction of 1.710", and asking for *more*
+ * particles then turned that into a permanent 14 % disagreement. One octave is
+ * the minimum span over which a power law can be said to have been observed at
+ * all; the checkpoint count on its own is not the constraint, because the
+ * geometric spacing puts nine of them inside one octave.
+ */
+export const FIT_MIN_SPAN = Math.LN2;
+
+/**
+ * Smallest particle target at which `fractalDimension()` can return a value.
+ *
+ * Checkpoints run geometrically from 16 at 2^(1/8) and the fit discards
+ * everything below `FIT_FROM`, so the lowest one it keeps is 304.4 and the span
+ * requirement needs another at 608.9 or beyond. Below this the fit has no power
+ * at all, and a fader whose lower fifth cannot produce the tab's one headline
+ * number is a fader with a dead band in it.
+ */
+export const FIT_MIN_PARTICLES = 700;
+
 export interface ClusterOptions {
   /** Particles to freeze, including the seed. */
   particles: number;
@@ -209,15 +235,23 @@ export function fractalDimension(
   let sx = 0;
   let sy = 0;
   let k = 0;
+  let loN = Infinity;
+  let hiN = 0;
   for (let i = 0; i < m; i++) {
     const n = ns[i]!;
     const rg = rgs[i]!;
     if (n < minN || !(rg > 0)) continue;
     sx += Math.log(rg);
     sy += Math.log(n);
+    if (n < loN) loN = n;
+    if (n > hiN) hiN = n;
     k++;
   }
-  if (k < 3) return { dimension: NaN, stderr: Infinity, residual: NaN, points: k };
+  // A span as well as a count: three points a quarter of an octave apart have a
+  // slope, but that slope is not a dimension. See FIT_MIN_SPAN.
+  if (k < 3 || !(Math.log(hiN / loN) >= FIT_MIN_SPAN)) {
+    return { dimension: NaN, stderr: Infinity, residual: NaN, points: k };
+  }
   const mx = sx / k;
   const my = sy / k;
   let sxx = 0;

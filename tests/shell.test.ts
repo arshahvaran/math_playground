@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { byClass, byLabel, fire, installDom, type Harness, type MElement } from './dom-harness';
+import {
+  byClass,
+  byLabel,
+  fire,
+  installDom,
+  makeEvent,
+  type Harness,
+  type MElement,
+  type MEvent,
+} from './dom-harness';
 import { createFacts, firstSentence } from '../src/ui/facts';
 import { createShell, type ShellHandle } from '../src/ui/shell';
 import { createStory } from '../src/ui/story';
@@ -14,6 +23,8 @@ import { registry } from '../src/viz/registry';
  */
 
 const STACKED = '(max-width: 63.9375rem)';
+const DARK_OS = '(prefers-color-scheme: dark)';
+const SCHEME_KEY = 'mp:scheme';
 
 let dom: Harness;
 let shell: ShellHandle | null = null;
@@ -37,8 +48,28 @@ afterEach(() => {
   shell = null;
   vi.clearAllTimers();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   dom.teardown();
 });
+
+/** The scheme actually on the plate, which is the toggle's only source of truth. */
+function painted(): string | null {
+  return dom.document.documentElement.getAttribute('data-theme');
+}
+
+function schemeKey(): MElement {
+  const key = byLabel(dom, 'Dark scheme');
+  if (!key) throw new Error('no scheme key');
+  return key;
+}
+
+function tabs(): MElement[] {
+  return dom.findAll((el) => el.getAttribute('role') === 'tab');
+}
+
+function focused(): MElement | null {
+  return dom.document.activeElement;
+}
 
 /** The bench's children in document order, by class — the tab order, in short. */
 function benchOrder(): string[] {
@@ -184,6 +215,258 @@ describe('the share confirmation', () => {
     // The key must not still be vouching for the previous route's link.
     expect(share?.textContent).toBe('Share');
     expect(share?.dataset['state']).toBeUndefined();
+  });
+
+  /**
+   * A clipboard write settles a few milliseconds later — longer behind a
+   * permission chip, a DLP extension or a busy main thread — and by then a tab,
+   * a control or a preset may have rewritten the permalink. `restoreShare()`
+   * can cancel the two-second timer on a route change; it cannot cancel a
+   * promise, so the continuation itself has to know which link it wrote.
+   */
+  function stubClipboard(): { writes: string[]; settle: () => void; fail: () => void } {
+    const writes: string[] = [];
+    let settle = (): void => undefined;
+    let fail = (): void => undefined;
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        writeText: (text: string): Promise<void> => {
+          writes.push(text);
+          return new Promise<void>((resolve, reject) => {
+            settle = () => resolve();
+            fail = () => reject(new Error('denied'));
+          });
+        },
+      },
+    });
+    return { writes, settle: () => settle(), fail: () => fail() };
+  }
+
+  function shareKey(): MElement {
+    const key = byClass(dom, 'share__key')[0];
+    if (!key) throw new Error('no share key');
+    return key;
+  }
+
+  it('confirms the link it wrote when nothing moved under it', async () => {
+    const clipboard = stubClipboard();
+    const handle = mount();
+    handle.setPermalink('#/galton?seed=1');
+
+    fire(shareKey(), 'click');
+    expect(clipboard.writes).toEqual(['http://localhost/math_playground/#/galton?seed=1']);
+
+    clipboard.settle();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shareKey().textContent).toBe('Link copied');
+    expect(shareKey().dataset['state']).toBe('done');
+
+    // And the confirmation does not outlive the link either: a control moved.
+    handle.setPermalink('#/galton?seed=1&rows=20');
+    expect(shareKey().textContent).toBe('Share');
+    expect(shareKey().dataset['state']).toBeUndefined();
+  });
+
+  it('says nothing when the write lands after the permalink has moved', async () => {
+    const clipboard = stubClipboard();
+    const handle = mount();
+    handle.setPermalink('#/galton?seed=1');
+
+    fire(shareKey(), 'click');
+    // The reader drags a fader while the write is in flight. What is on the
+    // clipboard is seed=1; what the page now advertises is seed=2.
+    handle.setPermalink('#/galton?seed=2');
+    clipboard.settle();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(shareKey().textContent).toBe('Share');
+    expect(shareKey().dataset['state']).toBeUndefined();
+  });
+
+  it('reports a failure only for the link that failed', async () => {
+    const clipboard = stubClipboard();
+    const handle = mount();
+    handle.setPermalink('#/galton?seed=1');
+
+    fire(shareKey(), 'click');
+    const other = registry[1];
+    if (other) handle.setActiveTab(other.id);
+    handle.setPermalink(`#/${other?.id ?? 'galton'}`);
+    clipboard.fail();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(shareKey().textContent).toBe('Share');
+  });
+});
+
+/**
+ * The scheme key.
+ *
+ * The page's scheme and the key's `aria-pressed` are one fact, and the key
+ * reads its own next state off that attribute. Built with a hard-coded
+ * `aria-pressed="false"` while `color-scheme: light dark` painted the page from
+ * the OS, the attribute said the opposite of the plate on a dark OS and the
+ * first press asked for the scheme already showing — a dead key. Writing the
+ * scheme explicitly at startup, in both directions, makes that unrepresentable.
+ */
+describe('the scheme key', () => {
+  it('opens on the OS scheme and answers the first press', () => {
+    dom.setMedia(DARK_OS, true);
+    mount();
+    expect(painted()).toBe('dark');
+    expect(schemeKey().getAttribute('aria-pressed')).toBe('true');
+
+    fire(schemeKey(), 'click');
+    expect(painted()).toBe('light');
+    expect(schemeKey().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('follows the OS until the reader chooses, and not after', () => {
+    mount();
+    expect(painted()).toBe('light');
+
+    dom.setMedia(DARK_OS, true);
+    expect(painted()).toBe('dark');
+    expect(schemeKey().getAttribute('aria-pressed')).toBe('true');
+
+    fire(schemeKey(), 'click'); // the reader asks for light
+    expect(painted()).toBe('light');
+
+    // The choice is theirs now; the OS moving again must not undo it.
+    dom.setMedia(DARK_OS, false);
+    dom.setMedia(DARK_OS, true);
+    expect(painted()).toBe('light');
+    expect(schemeKey().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('lets a stored preference outrank the OS', () => {
+    dom.setMedia(DARK_OS, true);
+    localStorage.setItem(SCHEME_KEY, 'light');
+    mount();
+    expect(painted()).toBe('light');
+    expect(schemeKey().getAttribute('aria-pressed')).toBe('false');
+
+    dom.setMedia(DARK_OS, false);
+    dom.setMedia(DARK_OS, true);
+    expect(painted()).toBe('light');
+  });
+});
+
+/**
+ * Arrow keys in the tab strip.
+ *
+ * A second cursor, written from `setActiveTab()`, was right only when the route
+ * changed *because* a tab was activated. Back, Forward, a pasted link and the
+ * unknown-id fallback all move the route while the focus stays where the reader
+ * left it, the two cursors disagreed, and one arrow press teleported the focus
+ * ring across the strip. Derived from the platform's own focus there is one
+ * cursor and no route change can move it.
+ */
+describe('the tab strip', () => {
+  it('walks from the tab the reader is on, not the one the route selected', () => {
+    const handle = mount();
+    const strip = tabs();
+    expect(strip.length).toBeGreaterThan(8);
+
+    strip[0]?.focus();
+    for (let i = 0; i < 5; i++) fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(focused()).toBe(strip[5]);
+
+    // Back, or a pasted link: the route moves without the strip being touched.
+    const elsewhere = registry[2];
+    if (elsewhere) handle.setActiveTab(elsewhere.id);
+    expect(focused()).toBe(strip[5]);
+
+    fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(focused()).toBe(strip[6]);
+  });
+
+  it('falls back to the selected tab when the focus is outside the strip', () => {
+    const handle = mount();
+    const strip = tabs();
+    const elsewhere = registry[2];
+    if (elsewhere) handle.setActiveTab(elsewhere.id);
+    dom.document.body.focus();
+
+    const nav = byClass(dom, 'tabs__strip')[0];
+    fire(nav as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(focused()).toBe(strip[3]);
+  });
+
+  it('wraps at both ends and keeps exactly one tab in the tab order', () => {
+    mount();
+    const strip = tabs();
+    strip[0]?.focus();
+
+    const event = fire(strip[0] as MElement, 'keydown', { key: 'ArrowLeft' });
+    // Without this the strip scrolls under the key as well as moving focus.
+    expect(event.defaultPrevented).toBe(true);
+    expect(focused()).toBe(strip[strip.length - 1]);
+
+    fire(focused() as MElement, 'keydown', { key: 'ArrowRight' });
+    expect(focused()).toBe(strip[0]);
+
+    fire(focused() as MElement, 'keydown', { key: 'End' });
+    expect(focused()).toBe(strip[strip.length - 1]);
+    expect(strip.filter((tab) => tab.tabIndex === 0)).toHaveLength(1);
+  });
+});
+
+/**
+ * A MediaQueryList from before 2019 — an extension's `matchMedia` wrapper, a
+ * polyfill, an older WebView — carries `addListener` and no `addEventListener`.
+ * Subscribing to one threw in the last few statements of `createShell()`, so the
+ * shell never returned and the page rendered a masthead, fifteen inert tabs and
+ * nothing else, with no message anywhere.
+ */
+describe('a hostile matchMedia', () => {
+  interface LegacyQuery {
+    matches: boolean;
+    media: string;
+    addListener(handler: (event: MEvent) => void): void;
+    removeListener(handler: (event: MEvent) => void): void;
+  }
+
+  it('mounts, subscribes and unsubscribes through addListener alone', () => {
+    const win = dom.window as unknown as { matchMedia: unknown };
+    const real = win.matchMedia;
+    const subscribers = new Map<string, Set<(event: MEvent) => void>>();
+    const matching = new Set<string>();
+    win.matchMedia = (query: string): LegacyQuery => {
+      let set = subscribers.get(query);
+      if (!set) subscribers.set(query, (set = new Set()));
+      const listeners = set;
+      return {
+        get matches(): boolean {
+          return matching.has(query);
+        },
+        media: query,
+        addListener: (handler) => listeners.add(handler),
+        removeListener: (handler) => listeners.delete(handler),
+      };
+    };
+
+    try {
+      const handle = mount();
+
+      // The whole bench, not a masthead and a strip of dead tabs.
+      expect(byClass(dom, 'bench')).toHaveLength(1);
+      expect(byClass(dom, 'plate')).toHaveLength(1);
+      expect(tabs()).toHaveLength(registry.length);
+
+      // And the subscription is live through the only API this list offers.
+      matching.add(STACKED);
+      for (const handler of [...(subscribers.get(STACKED) ?? [])]) {
+        handler(makeEvent('change', { matches: true }));
+      }
+      expect(benchOrder()[3]).toBe('transport');
+
+      handle.destroy();
+      expect(subscribers.get(STACKED)?.size).toBe(0);
+      expect(subscribers.get(DARK_OS)?.size).toBe(0);
+    } finally {
+      win.matchMedia = real;
+    }
   });
 });
 

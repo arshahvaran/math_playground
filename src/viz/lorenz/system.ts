@@ -195,9 +195,21 @@ export function separation(a: Vec3, b: Vec3): number {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-/** Time for a separation to double under exponential growth at `lambda`. */
+/**
+ * Time for a separation to double under exponential growth at `lambda`, and
+ * NaN where there is no such time.
+ *
+ * Below the onset of chaos — roughly ρ < 22, the lower 40 % of the fader's
+ * travel — the twins *converge* and the fitted exponent is negative, so ln2/λ
+ * is negative too and describes a moment in the past rather than a duration.
+ * The tab printed it under the plain-language label "time for the gap to
+ * double": −0.832 at ρ = 6, −3.913 at ρ = 1. Returning the app's own "no
+ * reading" sentinel makes a contracting regime unable to produce a duration at
+ * all; the ledger and the hero already render NaN as an em dash and
+ * "not measured yet".
+ */
 export function doublingTime(lambda: number): number {
-  return Math.LN2 / lambda;
+  return lambda > 0 ? Math.LN2 / lambda : NaN;
 }
 
 // ---------------------------------------------------------------------------

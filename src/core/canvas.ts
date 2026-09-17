@@ -81,7 +81,18 @@ interface Layer {
   ctx: CanvasRenderingContext2D;
 }
 
-function createLayer(className: string): Layer {
+/**
+ * `null` when the browser will not give out a 2D context.
+ *
+ * That is not a hypothetical: a canvas-blocking privacy extension, iOS Safari
+ * past its total-canvas-memory ceiling, and a crashed GPU process all answer
+ * `getContext('2d')` with null. Throwing here escaped `createStage()` ->
+ * `activate()` -> the module's top-level `onRoute()`, past a `teardown()` that
+ * had already emptied the bench, and left a white plate with no message on every
+ * tab, unrecoverable without closing the page. A visualization that cannot be
+ * painted is a legible outcome; a dead shell is not.
+ */
+function createLayer(className: string): Layer | null {
   const canvas = document.createElement('canvas');
   canvas.className = className;
   // Inline, so the stage is geometrically correct without theme.css.
@@ -93,12 +104,42 @@ function createLayer(className: string): Layer {
   // `emit()` are the accessible representation, so the bitmap is hidden outright.
   canvas.setAttribute('aria-hidden', 'true');
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error(`2D canvas context unavailable for .${className}`);
+  if (!ctx) return null;
   return { canvas, ctx };
 }
 
-export function createStage(host: HTMLElement, opts?: StageOptions): Stage {
+/**
+ * Subscribe to a media query in whatever shape the environment's MediaQueryList
+ * has. Safari ≤ 13 and several extension-installed `matchMedia` wrappers return
+ * an object with `addListener` and no `addEventListener`, and calling the
+ * missing one unguarded threw out of `createShell()` and left a masthead-only
+ * page with every tab inert. One helper, three call sites, nothing to forget.
+ */
+export function onMediaChange(query: MediaQueryList, cb: () => void): () => void {
+  if (typeof query.addEventListener === 'function') {
+    query.addEventListener('change', cb);
+    return () => query.removeEventListener('change', cb);
+  }
+  const legacy = query as Partial<MediaQueryList>;
+  if (typeof legacy.addListener === 'function') {
+    legacy.addListener(cb);
+    return () => legacy.removeListener?.(cb);
+  }
+  return () => {
+    /* A MediaQueryList with no subscription at all: the value is still readable. */
+  };
+}
+
+export function createStage(host: HTMLElement, opts?: StageOptions): Stage | null {
   const maxDpr = opts?.maxDpr ?? 2;
+
+  // Both layers before anything is touched on the host, so a refusal leaves the
+  // page exactly as it was found.
+  const bgLayer = createLayer('stage__bg');
+  const fgLayer = createLayer('stage__fg');
+  if (!bgLayer || !fgLayer) return null;
+  const bg: Layer = bgLayer;
+  const fg: Layer = fgLayer;
 
   const addedStageClass = !host.classList.contains('stage');
   host.classList.add('stage');
@@ -108,8 +149,6 @@ export function createStage(host: HTMLElement, opts?: StageOptions): Stage {
   const setPosition = hostPosition === 'static' || hostPosition === '';
   if (setPosition) host.style.position = 'relative';
 
-  const bg = createLayer('stage__bg');
-  const fg = createLayer('stage__fg');
   host.append(bg.canvas, fg.canvas);
 
   let width = 0;
@@ -164,16 +203,18 @@ export function createStage(host: HTMLElement, opts?: StageOptions): Stage {
   // changes only devicePixelRatio; this one-shot media query catches that. It
   // is re-armed after each change because the query is literal to the ratio it
   // was made at.
-  let dprQuery: MediaQueryList | null = null;
+  let unwatchDpr: (() => void) | null = null;
   function onDprChange(): void {
     watchDpr();
     schedule();
   }
   function watchDpr(): void {
     if (typeof window.matchMedia !== 'function') return;
-    dprQuery?.removeEventListener('change', onDprChange);
-    dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    dprQuery.addEventListener('change', onDprChange);
+    unwatchDpr?.();
+    unwatchDpr = onMediaChange(
+      window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`),
+      onDprChange,
+    );
   }
   watchDpr();
 
@@ -213,7 +254,8 @@ export function createStage(host: HTMLElement, opts?: StageOptions): Stage {
     destroy() {
       observer?.disconnect();
       window.removeEventListener('resize', schedule);
-      dprQuery?.removeEventListener('change', onDprChange);
+      unwatchDpr?.();
+      unwatchDpr = null;
       if (raf !== 0) cancelAnimationFrame(raf);
       raf = 0;
       listeners.clear();

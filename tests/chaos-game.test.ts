@@ -124,13 +124,25 @@ describe('chaos-game convergence', () => {
 
   it('is under-resolved rather than wrong at a thousand points', () => {
     // A thousand points cannot reach nine thousand boxes, so the finest counts
-    // are short and the slope comes out at 0.786 rather than 1.585. The first
-    // preset says exactly this: every point is already on the attractor, and it
-    // is the estimate that is not there yet.
+    // are short and the slope of the *unguarded* fit comes out at 0.786 rather
+    // than 1.585: not an estimate of the attractor at all, but of how many
+    // points were thrown at it.
     const { dimension, cells } = measure(polygonSystem(3, 0.5), 1_000);
     expect(cells).toBeLessThan(1_000);
     expect(dimension).toBeGreaterThan(0.5);
     expect(dimension).toBeLessThan(similarityDimension(3, 0.5) - 0.5);
+  });
+
+  it('refuses a slope the sample cannot support, rather than publishing the sample size', () => {
+    // The same counters, told how many points are behind them. Every dyadic
+    // level a thousand points can reach is one they have saturated, so the fit
+    // has nothing left to regress over and says so. 0.7857 against 1.5850 — on
+    // a *finished* run, 50 % wrong and permanent — was the alternative.
+    const rng = createRng(SEED);
+    const game = createChaosGame(rng, polygonSystem(3, 0.5), {});
+    game.step(1_000);
+    expect(boxCountingDimension(game.grid)).toBeLessThan(0.9);
+    expect(boxCountingDimension(game.grid, game.plotted)).toBeNaN();
   });
 
   it('has stopped depending on the run length by a million points', () => {
@@ -491,6 +503,34 @@ describe('boxCountingDimension', () => {
     // One cell at every level is one point on the line, not two.
     expect(boxCountingDimension(empty)).toBeCloseTo(0, 12);
   });
+
+  it('drops a level the sample has saturated rather than fitting the sample size', () => {
+    // A thousand points scattered over the exact gasket. Every one of them
+    // lands in its own box at level 8 — 1,000 boxes out of 6,561 the set
+    // occupies — so N(ε) stops counting the attractor and starts counting the
+    // points, the log–log line flattens, and an unguarded fit returns roughly
+    // log(points)/log(scale range): 0.7857 against 1.5850, on a *finished* run.
+    const grid = new Occupancy(BOX_MAX_LEVEL);
+    const cells: Array<[number, number]> = [];
+    for (let cy = 0; cy < grid.size; cy++) {
+      for (let cx = 0; cx + cy < grid.size; cx++) {
+        if ((cx & cy) === 0) cells.push([cx, cy]);
+      }
+    }
+    // A deterministic thousand, spread over the set rather than clustered.
+    const stride = Math.floor(cells.length / 1_000);
+    for (let i = 0; i < 1_000; i++) {
+      const cell = cells[i * stride]!;
+      grid.mark(cell[0], cell[1]);
+    }
+    const sampled = boxCountingDimension(grid, 1_000);
+    const unguarded = boxCountingDimension(grid);
+    expect(unguarded).toBeLessThan(1.2);
+    // With the cap the fit either keeps only levels it can support, or says
+    // nothing. What it must never do is publish the unguarded number.
+    expect(Number.isNaN(sampled) || Math.abs(sampled - Math.log2(3)) < 0.25).toBe(true);
+    expect(sampled).not.toBeCloseTo(unguarded, 6);
+  });
 });
 
 describe('gridSquare', () => {
@@ -689,9 +729,31 @@ describe('chaos-game instance: readouts', () => {
     expect(Math.abs((by['dimension']?.value ?? 0) - similarityDimension(3, 0.5))).toBeLessThan(
       DIM_TOLERANCE,
     );
-    // The ledger's 1% default would call a perfectly good box count unconverged.
-    expect(by['dimension']?.tolerance).toBeCloseTo(DIM_TOLERANCE / similarityDimension(3, 0.5), 12);
+    // The ledger's ceiling is judged against the smaller of the prediction and
+    // the span a box dimension in the plane can occupy, so the range has to be
+    // declared beside the band or the square would buy itself a wider bar.
+    expect(by['dimension']?.band).toEqual({ kind: 'absolute', half: DIM_TOLERANCE });
+    expect(by['dimension']?.tolerance).toBeUndefined();
+    expect(by['dimension']?.range).toEqual([0, 2]);
     expect(b.emitted.at(-1)).toEqual(last);
+  });
+
+  it('produces a dimension for every shape at the bottom of the Dots fader', () => {
+    // A fader whose lower end cannot produce the tab's one headline number has
+    // a dead band in it. The floor is a property of the estimator, not of the
+    // picture: the filled square genuinely occupies all 1,024 boxes at level 5,
+    // so that level survives the saturation cap only from 10,240 points up, and
+    // under it the fit is left with a single scale and no reading at all.
+    const spec = chaosGame.params.find((p) => p.key === 'points');
+    const floor = spec && spec.kind === 'range' ? spec.min : 0;
+    expect(floor).toBeGreaterThan(0);
+    for (const shape of SHAPES) {
+      const v = stubViz({ system: shape.id, points: floor });
+      tick(v, Math.ceil(floor / 1_000));
+      paint(v);
+      expect(ledger(v)['points'], shape.id).toBe(floor);
+      expect(Number.isFinite(ledger(v)['dimension'] ?? NaN), shape.id).toBe(true);
+    }
   });
 
   it('marks one headline in plain words and demotes the internals to the exact table', () => {
@@ -877,7 +939,11 @@ describe('chaos-game instance: painting', () => {
     const v = stubViz();
     tick(v, 20);
     paint(v);
-    expect(v.bg.fills.length).toBe(20_000);
+    // One mark per newly inked *cell*, never one per point: twenty thousand
+    // points land in fewer cells than that, and a point landing where one has
+    // already landed in the same pen costs nothing at all.
+    expect(v.bg.fills.length).toBeGreaterThan(1_000);
+    expect(v.bg.fills.length).toBeLessThan(20_000);
     // §7: a mark under 3 CSS px is legal snapped and at full coverage — the
     // drafting pen is 9.41:1 solid and 2.56:1 smeared across a hairline.
     expect(offSpec(v, [THEME.data2, THEME.data1])).toBe(0);
@@ -937,6 +1003,27 @@ describe('chaos-game instance: painting', () => {
     expect(Math.abs((ledger(v)['dimension'] ?? 0) - similarityDimension(3, 0.5))).toBeLessThan(
       DIM_TOLERANCE,
     );
+  });
+
+  it('charges a fast-forward the cells it changed, not the picture it already has', () => {
+    // A chaos game never moves a point it has plotted, so the accumulated
+    // picture is appended to and never rebuilt. Painting the cursor ring point
+    // by point cost a fillRect per *point* — 24,000 per paint inside one
+    // Fast-forward press — and a burst longer than the ring fell through to a
+    // full rebuild from the occupancy grid: 818,000 fillRect calls at two
+    // million points on the filled square, 4.4 s of frozen tab, every press.
+    const v = stubViz({ points: 2_000_000 });
+    tick(v, 1_000);
+    paint(v);
+    const laid = v.bg.fills.length;
+    expect(laid).toBeGreaterThan(10_000);
+
+    // Half a million more points — fifteen times the cursor ring — onto an
+    // attractor that is already inked.
+    tick(v, 500);
+    paint(v);
+    expect(ledger(v)['points']).toBe(1_500_000);
+    expect(v.bg.fills.length).toBeLessThan(laid / 20);
   });
 
   it('draws the apparatus once, on the background, and writes no text on the plate', () => {

@@ -760,6 +760,26 @@ function keys(v: Stub): string[] {
   return (v.emitted.at(-1) ?? []).map((r) => r.key);
 }
 
+function rows(v: Stub): Record<string, Readout> {
+  return Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+}
+
+/** The half-width a readout's band declares, in the reading's own units. */
+function halfOf(readout: Readout | undefined): number {
+  const band = readout?.band;
+  if (!band) return NaN;
+  switch (band.kind) {
+    case 'absolute':
+      return band.half;
+    case 'sampled':
+      return ((band.sigmas ?? 3) * Math.abs(band.sigma)) / Math.sqrt(band.samples);
+    case 'relative':
+      return band.fraction * Math.abs(readout?.target ?? 0);
+    case 'exact':
+      return 0;
+  }
+}
+
 /** Every trail point painted in the last frame, as plate coordinates. */
 function painted(v: Stub): Array<[number, number]> {
   const out: Array<[number, number]> = [];
@@ -836,7 +856,11 @@ describe('lorenz instance: readouts', () => {
     // The twins merge below the Hopf threshold, and the fit says so.
     expect(by['separation']?.value).toBeLessThan(1e-9);
     expect(by['lyapunov']?.value).toBeLessThan(0);
-    expect(by['doubling']?.value).toBeLessThan(0);
+    // A converging pair has no doubling time. ln2/λ is negative here, and
+    // printing a negative number under the label "time for the gap to double"
+    // is a sign error wearing a plain-language sentence, so the reading does not
+    // exist and the ledger shows an em dash.
+    expect(by['doubling']?.value).toBeNaN();
   });
 
   it('converges the exact identity ⟨x²⟩ = β⟨z⟩ on the plate’s own clock', () => {
@@ -845,6 +869,59 @@ describe('lorenz instance: readouts', () => {
     tick(v, 18_000);
     paint(v);
     expect(Math.abs((ledger(v)['balance'] ?? 0) - 1)).toBeLessThan(1.07 / 150);
+  });
+
+  it('sharpens the identity’s band as the clock runs, instead of holding a fixed per cent', () => {
+    // The error in ⟨x²⟩ = β⟨z⟩ is a boundary term divided by the elapsed time,
+    // so it is the one quantity on this tab that a longer run really does
+    // improve — and the row declared a flat 1% that was the same bar after a
+    // second as after two hours.
+    const v = stubViz();
+    tick(v, 1_200);
+    paint(v);
+    const early = halfOf(rows(v)['balance']);
+    const earlyError = Math.abs((ledger(v)['balance'] ?? 0) - 1);
+    tick(v, 16_800);
+    paint(v);
+    const late = halfOf(rows(v)['balance']);
+    const lateError = Math.abs((ledger(v)['balance'] ?? 0) - 1);
+
+    expect(rows(v)['balance']?.tolerance).toBeUndefined();
+    // Fifteen times the clock, so the band is about fifteen times narrower…
+    expect(late).toBeLessThan(early / 10);
+    // …and the reading stays inside it at both ends, which is the claim.
+    expect(earlyError).toBeLessThan(early);
+    expect(lateError).toBeLessThan(late);
+    // Narrow enough to test something: the ledger refuses a band wider than a
+    // twentieth of the prediction, and this is far inside that.
+    expect(late).toBeLessThan(0.05);
+  });
+
+  it('refuses to hold a four-figure constant to a band its own fit cannot support', () => {
+    // At the top of the Starting-gap fader the twins begin a thousandth apart,
+    // the exponential episode is a handful of samples long, and the fit's own
+    // standard error reaches most of λ₁. The row used to fall back on an
+    // invented flat 15% there and call every answer a match.
+    const wide = stubViz({ twinGap: 1e-3 });
+    tick(wide, 2_760);
+    paint(wide);
+    const lyapunov = rows(wide)['lyapunov'];
+    expect(lyapunov?.tolerance).toBeUndefined();
+    // Either the fit produced no band at all, or the band it produced is wider
+    // than the ledger's ceiling — never a number nobody computed.
+    const half = halfOf(lyapunov);
+    expect(Number.isNaN(half) || half > 0.05 * LAMBDA_1_CLASSIC).toBe(true);
+
+    // And where the fit *is* sharp, the doubling time's band is in the doubling
+    // time's own units rather than λ's — they are different quantities.
+    const tight = stubViz();
+    tick(tight, 2_760);
+    paint(tight);
+    const lambdaHalf = halfOf(rows(tight)['lyapunov']);
+    const doublingHalf = halfOf(rows(tight)['doubling']);
+    expect(lambdaHalf).toBeGreaterThan(0);
+    expect(doublingHalf).toBeCloseTo((DOUBLING_CLASSIC * lambdaHalf) / LAMBDA_1_CLASSIC, 12);
+    expect(doublingHalf / DOUBLING_CLASSIC).toBeCloseTo(lambdaHalf / LAMBDA_1_CLASSIC, 12);
   });
 
   it('draws without mutating the simulation, and resets to an empty run', () => {

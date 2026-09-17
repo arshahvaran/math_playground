@@ -374,6 +374,29 @@ function create(ctx: VizContext): VizInstance {
   const sqX = new Welford();
   const avZ = new Welford();
 
+  /**
+   * The extent the run has actually visited, which is what turns the identity's
+   * boundary term into a number.
+   *
+   * Averaging ż = xy − βz and (x²)˙ = 2σ(xy − x²) over [0, T] and eliminating
+   * ⟨xy⟩ gives ⟨x²⟩ − β⟨z⟩ = (Δz − Δ(x²)/2σ)/T exactly, so the whole error in
+   * the identity is two differences of quantities the trajectory has visited,
+   * divided by the elapsed time. Both are bounded by the range the run has been
+   * seen to occupy, which makes the band a measured quantity that falls as 1/T
+   * rather than the fixed 1 % it replaces — a fixed percentage cannot be
+   * sharpened by running longer, which is the one thing this row's error does.
+   */
+  let zMin = Infinity;
+  let zMax = -Infinity;
+  let sqXMax = 0;
+
+  function noteExtent(at: Vec3): void {
+    if (at.z < zMin) zMin = at.z;
+    if (at.z > zMax) zMax = at.z;
+    const sq = at.x * at.x;
+    if (sq > sqXMax) sqXMax = sq;
+  }
+
   let system: LorenzParams = CLASSIC;
   let box = viewBox(system);
   let gap = DEFAULT_GAP;
@@ -565,19 +588,47 @@ function create(ctx: VizContext): VizInstance {
     // residual: one divergence episode is a one-sample experiment and its
     // precision is a property of how straight the line came out, which is
     // exactly what a live band should follow.
+    //
+    // A fit with no band — no residual degrees of freedom, or no divergence
+    // episode to fit at all — gets no prediction, exactly as a run at
+    // non-classic parameters does. What used to stand in for it was a flat
+    // 15 %, which is not a measurement of anything: at the top of the
+    // Starting-gap fader the fit's own band reaches 89 % of λ₁ and the row was
+    // holding a four-figure constant to a bar nothing could miss.
     const se = lyapunovStandardError(fit.residual, fit.to - fit.from);
-    const band = 3 * se;
-    const exponentTarget = classic
-      ? {
-          target: LAMBDA_1_CLASSIC,
-          tolerance: Number.isFinite(band) ? band / LAMBDA_1_CLASSIC : 0.15,
-        }
-      : {};
+    const half = 3 * se;
+    const exponentTarget =
+      classic && Number.isFinite(half)
+        ? { target: LAMBDA_1_CLASSIC, band: { kind: 'absolute' as const, half } }
+        : {};
 
     // The one exact closed form a run here converges to. Both averages are over
     // the same samples, so the ratio is 1 on the attractor and 1 at a fixed
     // point — the identity does not care which regime ρ has put the system in.
     const balance = (system.beta * avZ.mean) === 0 ? NaN : sqX.mean / (system.beta * avZ.mean);
+
+    /**
+     * Is the trajectory still on an attractor, or has it collapsed to the
+     * origin?
+     *
+     * The identity ⟨x²⟩ = β⟨z⟩ is exact in the limit either way, and the bound
+     * quoted below — |⟨x²⟩ − β⟨z⟩| ≤ C/T — holds in both regimes. But the
+     * ledger divides by the target and judges the *relative* error, and for
+     * ρ ≤ 1 the origin is globally attracting, so ⟨x²⟩ and β⟨z⟩ both decay like
+     * 1/T themselves. Dividing an O(1/T) error by an O(1/T) denominator leaves a
+     * relative error that does not shrink: at the fader's minimum the row read
+     * 0.91682 against a declared 1 % after 6,000 simulated seconds, and stayed
+     * "not there yet" for the life of the tab. The neighbouring Lyapunov and
+     * Doubling rows are already gated on the regime; this one was not.
+     */
+    const onAttractor = system.rho > 1;
+
+    // The identity's whole error, bounded by the evidence in hand: |Δz| can be
+    // no larger than the range of z the run has visited and |Δ(x²)| no larger
+    // than the largest x² it has seen, and the identity divides both by T.
+    // Relative to β⟨z⟩, which is what a ratio against 1 is measured in.
+    const scale = Math.abs(system.beta * avZ.mean);
+    const balanceHalf = (zMax - zMin + sqXMax / (2 * system.sigma)) / (t * scale);
 
     return [
       { key: 'time', label: 'Simulated time', value: t, digits: 5, plain: 'seconds elapsed' },
@@ -604,11 +655,16 @@ function create(ctx: VizContext): VizInstance {
         value: doublingTime(fit.lambda),
         digits: 4,
         plain: 'time for the gap to double',
-        ...(classic
+        ...(classic && Number.isFinite(half)
           ? {
-              // ln 2 / λ, so to first order the relative errors are the same.
+              // ln 2 / λ, so to first order the *relative* errors are equal and
+              // the half-width scales with the doubling time rather than being
+              // λ's own — which is a different quantity in different units.
               target: DOUBLING_CLASSIC,
-              tolerance: Number.isFinite(band) ? band / LAMBDA_1_CLASSIC : 0.15,
+              band: {
+                kind: 'absolute' as const,
+                half: (DOUBLING_CLASSIC * half) / LAMBDA_1_CLASSIC,
+              },
               formula: ['ln 2 / ', { v: 'λ' }, '₁'],
             }
           : {}),
@@ -619,14 +675,18 @@ function create(ctx: VizContext): VizInstance {
         value: balance,
         digits: 5,
         plain: 'a ratio the equations fix at exactly 1',
-        target: 1,
         // The error here is not statistical, it is a boundary term, and it is
-        // bounded outright. Averaging the two derivative identities over [0, T]
-        // gives ⟨x²⟩ − β⟨z⟩ = (Δz − Δ(x²)/2σ)/T exactly, and both differences
-        // are capped by the attractor's own extent (|z| ≤ 48, x² ≤ 380), so the
-        // relative error can never exceed about 1.1/T — 1% by T = 107, and in
-        // practice 0.2% by T = 50, measured over 40 seeds.
-        tolerance: 0.01,
+        // bounded outright: ⟨x²⟩ − β⟨z⟩ = (Δz − Δ(x²)/2σ)/T exactly, and both
+        // differences are capped by the range the run has been seen to occupy.
+        // So the band is that bound, measured from the extents this run has
+        // actually visited and divided by the elapsed time — 2% at T = 50 and
+        // 2e-4 at T = 6,000 on the classic attractor, where the fixed 1% it
+        // replaces was the same bar after a second as after two hours. A band
+        // that cannot be sharpened by running longer is not measuring the one
+        // thing this row's error depends on.
+        ...(onAttractor && Number.isFinite(balanceHalf) && balanceHalf > 0
+          ? { target: 1, band: { kind: 'absolute' as const, half: balanceHalf } }
+          : {}),
         formula: ['⟨', { v: 'x' }, '²⟩ = ', { v: 'β' }, '⟨', { v: 'z' }, '⟩'],
       },
       { key: 'x', label: 'State x', value: state.x, digits: 4, expertOnly: true },
@@ -657,6 +717,7 @@ function create(ctx: VizContext): VizInstance {
 
         sqX.push(state.x * state.x);
         avZ.push(state.z);
+        noteExtent(state);
 
         sinceTrail += STEP;
         if (sinceTrail >= TRAIL_SAMPLE - SAMPLE_EPSILON) {
@@ -776,6 +837,10 @@ function create(ctx: VizContext): VizInstance {
       log.push(0, separation(state, twinState));
       sqX.push(state.x * state.x);
       avZ.push(state.z);
+      zMin = Infinity;
+      zMax = -Infinity;
+      sqXMax = 0;
+      noteExtent(state);
       fit = lyapunovEstimate(log);
       fitAt = log.count;
 

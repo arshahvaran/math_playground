@@ -237,6 +237,7 @@ function create(ctx: VizContext): VizInstance {
   function readouts(): Readout[] {
     const drops = field.drops;
     const crossings = field.crossings;
+    const p = crossingProbability(length, spacing);
     return [
       { key: 'drops', label: 'Drops', value: drops, digits: 6, plain: 'needles dropped' },
       { key: 'crossings', label: 'Crossings', value: crossings, digits: 6, plain: 'crossed a line' },
@@ -246,8 +247,15 @@ function create(ctx: VizContext): VizInstance {
         key: 'fraction',
         label: 'Crossing fraction',
         value: crossings / drops,
-        target: crossingProbability(length, spacing),
+        target: p,
         formula: ['2', { v: 'L' }, '/(', { v: 'π' }, { v: 'd' }, ')'],
+        // One needle is one Bernoulli(P) trial, so the share of crossings has
+        // standard deviation √(P(1−P)) per drop and the ledger divides by the
+        // drops made *so far*. Declaring nothing here is what left both rows on
+        // this tab reading "not enough data to judge": a target with no band is
+        // a prediction nobody is holding the reading to.
+        band: { kind: 'sampled', sigma: Math.sqrt(p * (1 - p)), samples: drops },
+        range: [0, 1],
         expertOnly: true,
       },
       {
@@ -258,6 +266,14 @@ function create(ctx: VizContext): VizInstance {
         target: Math.PI,
         plain: 'our estimate of pi',
         headline: true,
+        // Not the fraction's band: π̂ = 2L/(d·p̂) is not linear in p̂, and the
+        // delta method turns √(P(1−P)/N) into π·√((1−P)/(P·N)) — the standard
+        // error two rows down, which is why this is that reading rather than a
+        // second derivation of it. NaN before the first drop, which the ledger
+        // reads as "no band" and the hero as "not measured yet"; a twentieth of
+        // π wants 9(1−P)/(P·0.05²) = 3,470 drops at the default needle, and the
+        // run goes to 20,000.
+        band: { kind: 'absolute', half: 3 * piStandardError(drops, length, spacing) },
       },
       {
         key: 'se',

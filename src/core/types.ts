@@ -103,6 +103,64 @@ export type ParamValues = Readonly<Record<string, ParamValue>>;
 // ---------------------------------------------------------------------------
 
 /**
+ * How wide a band around `target` still counts as agreement.
+ *
+ * A band is one claim: *on the evidence this run has gathered so far, the
+ * reading and the prediction are not distinguishable*. Two things follow, and
+ * `src/ui/readouts.ts` enforces both rather than leaving them to a
+ * visualization's good behaviour.
+ *
+ * It shrinks. A run that has thrown a hundred darts and one that has thrown a
+ * million are not the same bet, so a band that does not move as the run
+ * proceeds is almost always wrong — and wrong in the direction that certifies
+ * nonsense, because the wide early band is the one that prints the check mark.
+ * `sampled` is the form that cannot make that mistake: it takes the standard
+ * deviation of *one* observation and the count so far, and the division is done
+ * for it.
+ *
+ * And it is narrow enough to rule something out. A band that is a large
+ * fraction of the prediction cannot be falsified by any reading the run could
+ * produce, so the ledger refuses to say "matches" through one, whatever it was
+ * derived from. The ceiling is stated and justified where it is applied.
+ *
+ * The `kind` discriminant is what stops the defect this replaced: a bare number
+ * cannot tell "declared as exactly zero" from "not declared", and the arithmetic
+ * that reads it — `t > 0 ? t : DEFAULT`, `t ?? DEFAULT` — silently substitutes a
+ * percentage nobody computed. Here "exact" and "absent" are different shapes and
+ * the compiler will not let one stand in for the other.
+ */
+export type Band =
+  /**
+   * `sigmas` (3 unless stated) standard errors of the reading: the half-width
+   * is `sigmas · sigma / √samples`.
+   *
+   * `sigma` is the standard deviation of one observation — an analytic
+   * constant, taken at the *target* rather than at the noisy estimate — and
+   * `samples` is the number of observations behind `value` **now**, not the
+   * number the run will finish on. Passing the final count is the bug this
+   * form exists to prevent: it yields a band that is honest only on the last
+   * frame and absurdly generous on every frame before it.
+   */
+  | { kind: 'sampled'; sigma: number; samples: number; sigmas?: number }
+  /**
+   * ± `half`, in the reading's own units.
+   *
+   * For a band that is not σ/√n: the standard error of a log–log fit, a
+   * rounding allowance, the residual of a solved chain. It must still be
+   * computed from the evidence in hand and still shrink as that evidence
+   * accumulates — a constant here is a fixed percentage wearing a hat.
+   */
+  | { kind: 'absolute'; half: number }
+  /** ± `fraction` × |target|. Meaningless where the target is zero, and refused there. */
+  | { kind: 'relative'; fraction: number }
+  /**
+   * No band at all: the reading must equal the prediction. For the identities —
+   * a count against the count that was asked for, shares that must sum to one —
+   * where anything but equality is a defect rather than noise.
+   */
+  | { kind: 'exact' };
+
+/**
  * A single named result. Readouts are the visualization's honest output: they
  * are what screen readers announce, what tests assert on, and what proves the
  * simulation converges to the analytic answer.
@@ -140,14 +198,41 @@ export interface Readout {
   /** Internals — bin counts, index of the mode — that only the expert table shows. */
   expertOnly?: boolean;
   /**
-   * Relative error inside which this reading counts as converged. Default 0.01.
+   * The band inside which this reading counts as agreeing with `target`.
    *
-   * A target of exactly zero has no relative error, so there it is read as an
-   * absolute tolerance instead. Estimators converge at different rates — a mean
-   * over n samples and a π recovered from a crossing fraction are not the same
-   * bet — so the threshold belongs to the readout, not to the ledger.
+   * There is no default and there must not be one. Estimators converge at
+   * different rates — a mean over n samples and a π recovered from a crossing
+   * fraction are not the same bet — so a band the ledger invented would be a
+   * verdict nobody computed. A reading that declares none is reported as a
+   * reading, with no claim attached.
+   */
+  band?: Band;
+  /**
+   * The relative band, as a bare number: |value − target| / |target|, read as
+   * an absolute band where the target is exactly zero.
+   *
+   * The original form of `band`, and the one every tab still uses. It cannot
+   * express a band that shrinks with the run, so it is on its way out; declare
+   * `band` instead, and declare only one of the two. Both at once is a
+   * contradiction rather than a fallback, and the ledger says so instead of
+   * picking one.
+   *
+   * A declared zero means exact and is honoured. `tolerance > 0 ? tolerance :
+   * DEFAULT` could not tell that from "not declared" and shipped, handing a
+   * `3·cv/√gaps` that is legitimately 0 at cv = 0 a 1 % bar it never asked for.
    */
   tolerance?: number;
+  /**
+   * The interval this quantity can occupy, where it is bounded by its own
+   * definition: `[0, 1]` for a share, `[0, rows]` for a landing bin, `[-1, 1]`
+   * for a correlation.
+   *
+   * A band is judged against the smaller of the prediction and this span, so a
+   * quantity that can only be somewhere in [0, 1] can never be certified
+   * through a band of 0.74 — which is not a measurement of anything, it is
+   * three quarters of everything the number was ever allowed to be.
+   */
+  range?: readonly [min: number, max: number];
   /**
    * The closed-form the target comes from, shown in the hero after the word
    * "analytic" (DESIGN §5): `n·p`, `2L/(πd)`, `1/e`. Marked-up prose, so the
@@ -297,7 +382,26 @@ export interface VizInstance {
    */
   step(dt: number): void;
 
-  /** Repaint `layers.background`. Called on init, resize, and parameter change only. */
+  /**
+   * Repaint `layers.background`.
+   *
+   * **It must paint and nothing else.** It is idempotent with respect to
+   * simulation state: calling it twice in a row must leave the readouts exactly
+   * where one call left them, and a visualization must be able to survive it
+   * being called at any moment. The shell calls it on init, on resize, on
+   * parameter change — and when the in-canvas label face arrives, which is a
+   * repaint and not a change of anything.
+   *
+   * A tab that used it as an invalidation hook broke all three: the font
+   * promise's continuation lands one microtask after `activate()`, so on every
+   * single load it deleted the sweep the reduced-motion settle had just
+   * computed, leaving an empty plate and a 40 px em dash under a live region
+   * announcing the number the page had just thrown away. A resize of one pixel
+   * — which a mobile URL bar collapsing produces sixty times a second — did the
+   * same to a finished diagram. Work that must happen when the *geometry*
+   * changes belongs behind a comparison against the geometry it was last done
+   * for, so a repaint that changes nothing costs nothing.
+   */
   drawBackground?(): void;
 
   /** Repaint `layers.foreground`. Called once per frame. Must not mutate simulation state. */

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
+import { testable, verdictOf } from '../src/ui/readouts';
 import {
   COUPLING_STEP,
   MAX_COUPLING,
+  MAX_OSCILLATORS,
   SETTLE_TIME,
   STEPS_PER_SECOND,
   STEP_H,
@@ -699,23 +701,64 @@ describe('kuramoto instance: readouts', () => {
     expect(order?.value ?? 0).toBeGreaterThan(0.05);
   });
 
-  it('sets the tolerance from the bar at this coupling and this crowd', () => {
-    const v = stubViz({ coupling: 4, count: 2_000 });
+  it('sets the bar from this coupling and this crowd, in r’s own units', () => {
+    const v = stubViz({ coupling: 4, count: MAX_OSCILLATORS });
     tick(v, ticksFor(RUN_TIME));
     paint(v);
-    const order = rows(v)['order'];
-    expect(order?.tolerance).toBeCloseTo(
-      (3 * lockedStandardError(4, HALF_WIDTH, 2_000)) / analyticOrder(4, HALF_WIDTH),
-      12,
-    );
+    const order = rows(v)['order'] as Readout;
+    expect(order.tolerance).toBeUndefined();
+    expect(order.band).toEqual({
+      kind: 'absolute',
+      half: 3 * lockedStandardError(4, HALF_WIDTH, MAX_OSCILLATORS),
+    });
+    // r is the length of an average of unit vectors, so it lives in [0, 1] and
+    // the band is judged against that span as well as against the answer.
+    expect(order.range).toEqual([0, 1]);
+    expect(verdictOf(order).state).toBe('agree');
 
     const below = stubViz({ coupling: 1, count: 2_000 });
     tick(below, ticksFor(RUN_TIME));
     paint(below);
-    // A target of exactly zero has no relative error, so the tolerance there is
-    // read as an absolute one: three finite-crowd floors.
-    expect(rows(below)['order']?.target).toBe(0);
-    expect(rows(below)['order']?.tolerance).toBeCloseTo(3 * incoherentFloor(1, HALF_WIDTH, 2_000), 12);
+    // Below the threshold the exact answer is zero, which is no scale at all —
+    // the declared range is the only thing left to judge three finite-crowd
+    // floors against, and a floor that is 8% of everything r can be is not a
+    // test of "zero" however it was derived.
+    const quiet = rows(below)['order'] as Readout;
+    expect(quiet.target).toBe(0);
+    expect(quiet.band).toEqual({ kind: 'absolute', half: 3 * incoherentFloor(1, HALF_WIDTH, 2_000) });
+    expect(testable(quiet)).toBe(false);
+  });
+
+  it('refuses a verdict through a bar that covers most of the range r lives in', () => {
+    // The defect this replaces, at the settings it was found on: the default
+    // coupling with the fireflies fader at its stop. Three bars there are 0.368
+    // either side of 0.577, an acceptance window 74% as wide as everything the
+    // reading is allowed to be — which certifies nothing, whatever it was
+    // derived from.
+    const few = stubViz({ coupling: 3, count: 50 });
+    tick(few, ticksFor(RUN_TIME));
+    paint(few);
+    const thin = rows(few)['order'] as Readout;
+    expect(thin.target).toBeCloseTo(analyticOrder(3, HALF_WIDTH), 12);
+    const window = 2 * 3 * orderUncertainty(3, HALF_WIDTH, 50);
+    expect(window).toBeGreaterThan(0.7);
+    expect(testable(thin)).toBe(false);
+    expect(verdictOf(thin).state).not.toBe('agree');
+  });
+
+  it('brings enough fireflies to the chip that names the number', () => {
+    // The quenched error of a crowd's own draw of speeds falls only with the
+    // size of the crowd, so a preset whose caption quotes 0.707 has to set the
+    // crowd as well as the coupling or the tab can never say that number is the
+    // one it read.
+    const preset = (kuramoto.presets ?? []).find((p) => p.id === 'in-step');
+    expect(preset).toBeDefined();
+    const v = stubViz({ ...(preset?.values ?? {}) });
+    tick(v, ticksFor(RUN_TIME));
+    paint(v);
+    const order = rows(v)['order'] as Readout;
+    expect(order.target).toBeCloseTo(0.7071068, 7);
+    expect(verdictOf(order).state).toBe('agree');
   });
 
   it('gives the simple view plain words and keeps the precise names for the exact table', () => {
@@ -1068,7 +1111,7 @@ describe('kuramoto metadata', () => {
   it('is registered under a permanent id, in the waves group', () => {
     expect(kuramoto.id).toBe('kuramoto');
     expect(kuramoto.group).toBe('waves');
-    expect(kuramoto.budget?.maxEntities).toBe(2_000);
+    expect(kuramoto.budget?.maxEntities).toBe(MAX_OSCILLATORS);
     expect(kuramoto.aspect).toBe(1.6);
   });
 

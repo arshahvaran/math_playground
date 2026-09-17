@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import {
+  LAMBDA_4_SAMPLES,
+  SWEEP_COLUMNS,
   bifurcation,
   cycleText,
   doublingLevel,
@@ -497,19 +499,27 @@ function setParam(v: Harness, key: string, value: ParamValue): boolean {
   return absorbed;
 }
 
-/** Run to the end of the sweep, the way the transport's fast-forward does. */
+/**
+ * Run to the end of the sweep, the way the transport's fast-forward does.
+ *
+ * The count is the sweep's own grid and not the plate's width: the mathematics
+ * is sampled on a fixed grid, so a permalink shows the same numbers on every
+ * screen and a resize repaints rather than recomputing.
+ */
 function sweep(v: Harness): void {
-  sweep2(v, 704);
-}
-
-/** Sweep to a known column count on a re-laid-out plate. */
-function sweep2(v: Harness, columns: number): void {
   for (let i = 0; i < 40; i++) {
     tick(v, 300);
     paint(v);
-    if (ledger(v)['columns'] === columns) return;
+    if (ledger(v)['columns'] === SWEEP_COLUMNS) return;
   }
-  throw new Error(`sweep did not finish: ${ledger(v)['columns']} of ${columns}`);
+  throw new Error(`sweep did not finish: ${ledger(v)['columns']} of ${SWEEP_COLUMNS}`);
+}
+
+/** Map iterations a finished sweep of `samples`-point columns costs. */
+function sweepIterations(samples: number, reachesFour: boolean): number {
+  // Every column costs transient + samples, and a window that reaches r = 4
+  // also runs the long orbit the closed-form exponent is read off.
+  return SWEEP_COLUMNS * (TRANSIENT + samples) + (reachesFour ? TRANSIENT + LAMBDA_4_SAMPLES : 0);
 }
 
 function ledger(v: Harness): Record<string, number> {
@@ -522,6 +532,29 @@ function row(v: Harness, key: string): Readout {
   const found = (v.emitted.at(-1) ?? []).find((r) => r.key === key);
   expect(found, `no readout ${key}`).toBeDefined();
   return found as Readout;
+}
+
+/** The half-width a readout's band declares, in the reading's own units. */
+function halfOf(readout: Readout): number {
+  const band = readout.band;
+  if (!band) return NaN;
+  switch (band.kind) {
+    case 'absolute':
+      return band.half;
+    case 'sampled':
+      return ((band.sigmas ?? 3) * Math.abs(band.sigma)) / Math.sqrt(band.samples);
+    case 'relative':
+      return band.fraction * Math.abs(readout.target ?? 0);
+    case 'exact':
+      return 0;
+  }
+}
+
+/** A tab swept to the end of a named zoom, for comparing two windows' bands. */
+function stubSwept(zoom: string): Harness {
+  const v = stubViz({ zoom });
+  sweep(v);
+  return v;
 }
 
 function preset(id: string): Record<string, ParamValue> {
@@ -547,12 +580,24 @@ describe('bifurcation instance: the ledger', () => {
     tick(v, 100);
     paint(v);
     const keys = (v.emitted.at(-1) ?? []).map((r) => r.key);
-    expect(keys).toEqual(['columns', 'span', 'r', 'period', 'lyapunov', 'feigenbaum', 'iterations']);
+    expect(keys).toEqual([
+      'columns',
+      'span',
+      'r',
+      'period',
+      'lyapunov',
+      'lambda4',
+      'feigenbaum',
+      'iterations',
+    ]);
     // The two lines in the corner window are both in the ledger: r under the
     // cursor, and the period it resolved there, in words.
     const l = ledger(v);
     expect(v.fg.texts.some((t) => t.startsWith('r '))).toBe(true);
-    expect(v.fg.texts).toContain(cycleText(l['period'] ?? -1));
+    // A chaotic column has no period, and the ledger says so with NaN — which
+    // it renders as an em dash. The canvas says the same thing in words.
+    const period = l['period'];
+    expect(v.fg.texts).toContain(cycleText(Number.isFinite(period) ? period! : 0));
     // λ is an expert reading now: the only λ on the plate is the zero line's
     // label, not a number.
     expect(v.fg.texts.filter((t) => t.startsWith('λ'))).toEqual(['λ = 0']);
@@ -591,12 +636,32 @@ describe('bifurcation instance: the ledger', () => {
     const v = stubViz();
     sweep(v);
     const l = ledger(v);
-    expect(l['columns']).toBe(704);
+    expect(l['columns']).toBe(SWEEP_COLUMNS);
     expect(l['span']).toBeCloseTo(1.6, 12);
-    // Every column costs transient + samples iterations of the map.
-    expect(l['iterations']).toBe(704 * (TRANSIENT + 400));
+    expect(l['iterations']).toBe(sweepIterations(400, true));
     // The cursor parks half a column short of the right edge, at that column's centre.
-    expect(l['r']).toBeCloseTo(4 - 1.6 / 704 / 2, 9);
+    expect(l['r']).toBeCloseTo(4 - 1.6 / SWEEP_COLUMNS / 2, 9);
+  });
+
+  it('samples the mathematics on a fixed grid, so a permalink reads the same on every screen', () => {
+    // A column used to be a CSS pixel, so r itself was a function of the
+    // reader's window: the same permalink showed a different Feigenbaum ratio
+    // on a laptop and on a phone, and the number it was shared for was not the
+    // number it displayed.
+    const plates: Array<[number, number]> = [
+      [720, 448],
+      [721, 448],
+      [1280, 800],
+      [375, 340],
+    ];
+    const readings = plates.map(([w, h]) => {
+      const v = stubViz({}, w, h);
+      sweep(v);
+      const l = ledger(v);
+      return { columns: l['columns'], r: l['r'], feigenbaum: l['feigenbaum'], iterations: l['iterations'] };
+    });
+    for (const reading of readings) expect(reading).toEqual(readings[0]);
+    expect(Math.abs((readings[0]?.feigenbaum ?? 0) - FEIGENBAUM_DELTA)).toBeLessThan(0.1);
   });
 
   it('is identical for a seed, and different for another', () => {
@@ -636,13 +701,16 @@ describe('bifurcation instance: the two layers', () => {
     paint(v);
     const first = v.bg.fills.length;
     expect(first).toBeGreaterThan(0);
-    // Every attractor mark is one snapped device-pixel square in the signal pen.
+    // Every attractor mark is snapped to whole CSS pixels and painted at full
+    // coverage: a column's width, and a run of the rows its samples landed on.
     for (const f of v.bg.fills) {
       expect(f.pen).toBe(THEME.data1);
-      expect(f.w).toBe(1);
-      expect(f.h).toBe(1);
+      expect(f.w).toBeGreaterThanOrEqual(1);
+      expect(f.h).toBeGreaterThanOrEqual(1);
       expect(Number.isInteger(f.x)).toBe(true);
       expect(Number.isInteger(f.y)).toBe(true);
+      expect(Number.isInteger(f.w)).toBe(true);
+      expect(Number.isInteger(f.h)).toBe(true);
     }
     // A second frame with no step in between paints no column twice.
     paint(v);
@@ -686,7 +754,7 @@ describe('bifurcation instance: the two layers', () => {
     const settled = windowPlate(v);
     sweep(v);
     paint(v);
-    expect(ledger(v)['period']).toBe(0);
+    expect(ledger(v)['period']).toBeNaN();
     const chaotic = windowPlate(v);
     for (const plate of [settled, chaotic]) {
       expect(plate.x).toBe(empty.x);
@@ -705,21 +773,51 @@ describe('bifurcation instance: the two layers', () => {
     expect(setParam(v, 'detail', 500)).toBe(false);
     expect(ledger(v)['columns']).toBe(0);
     sweep(v);
-    expect(ledger(v)['iterations']).toBe(704 * (TRANSIENT + 500));
+    // The cascade window stops at 3.57, so no long orbit at r = 4 is run.
+    expect(ledger(v)['iterations']).toBe(sweepIterations(500, false));
     expect(setParam(v, 'seed', 7)).toBe(false);
     expect(ledger(v)['columns']).toBe(0);
   });
 
-  it('rewinds the sweep on a resize, because every column moved', () => {
+  it('repaints a finished sweep on a resize instead of throwing it away', () => {
+    // A one-pixel change of plate height used to rewind the whole diagram and
+    // revert the headline to "not measured yet" for tens of seconds — and
+    // `--viz-max-h` is in `dvh`, so a phone's URL bar collapsing during a
+    // scroll is exactly that change, sixty times a second.
     const v = stubViz();
     sweep(v);
+    const before = ledger(v);
+    expect(before['columns']).toBe(SWEEP_COLUMNS);
+
+    v.ctx.height = 449;
+    v.bg.fills.length = 0;
+    v.instance.drawBackground?.();
+    // The whole diagram comes back off the stored sweep, inside the repaint the
+    // shell asked for, and the ledger does not notice that it happened.
+    expect(v.bg.fills.length).toBeGreaterThan(SWEEP_COLUMNS);
+    paint(v);
+    expect(ledger(v)).toEqual(before);
+
+    // A wider plate is the same sweep drawn wider: the same columns, the same
+    // readings, no recomputation.
     v.ctx.width = 900;
     v.ctx.height = 500;
     v.instance.drawBackground?.();
     paint(v);
-    expect(ledger(v)['columns']).toBe(0);
-    sweep2(v, 884);
-    expect(ledger(v)['columns']).toBe(884);
+    expect(ledger(v)).toEqual(before);
+  });
+
+  it('survives a repaint that changes nothing, which is what the label face is', () => {
+    // The in-canvas label face arrives as a promise continuation, one microtask
+    // after the tab is activated, and the shell repaints for it. On a paused or
+    // reduced-motion page that repaint was the only thing standing between a
+    // finished sweep and an empty plate.
+    const v = stubViz();
+    sweep(v);
+    const before = ledger(v);
+    v.instance.drawBackground?.();
+    paint(v);
+    expect(ledger(v)).toEqual(before);
   });
 });
 
@@ -728,53 +826,84 @@ describe('bifurcation instance: convergence to the analytic values', () => {
     const v = stubViz(preset('cascade'));
     sweep(v);
     const feigenbaum = row(v, 'feigenbaum');
-    const tolerance = feigenbaum.tolerance ?? 0;
-    // The window is 0.17 wide over 704 columns, so h = 2.4e-4 and the two
-    // onsets bracketing each interval are located to about two columns each:
-    // 2·h·(1/0.095 + 1/0.020) = 2.9% of the ratio. The claim is only worth
-    // making because that is small. Measured: 4.6235, 0.98% from δ.
-    expect(tolerance).toBeGreaterThan(0);
-    expect(tolerance).toBeLessThan(0.05);
-    expect(Math.abs(feigenbaum.value - FEIGENBAUM_DELTA) / FEIGENBAUM_DELTA).toBeLessThan(tolerance);
+    const half = halfOf(feigenbaum);
+    // The window is 0.17 wide over the sweep's 1,024 columns, so h = 1.7e-4 and
+    // the two onsets bracketing each interval are located to about two columns
+    // each: 1.9% of the ratio. The claim is only worth making because that is
+    // small. Measured: 4.6210, 1.03% from δ.
+    expect(half).toBeGreaterThan(0);
+    expect(half / FEIGENBAUM_DELTA).toBeLessThan(0.05);
+    expect(feigenbaum.tolerance).toBeUndefined();
+    expect(Math.abs(feigenbaum.value - FEIGENBAUM_DELTA)).toBeLessThan(half);
   });
 
   it('measures δ on the whole map too, more loosely, from the columns it has', () => {
     const v = stubViz(preset('whole-map'));
     sweep(v);
     const feigenbaum = row(v, 'feigenbaum');
-    const tolerance = feigenbaum.tolerance ?? 0;
-    // Nine times the window over the same 704 columns, so h is nine times
-    // larger and the deeper triples are refused; what survives is the first
-    // one — the onsets at 3, 1 + √6 and 3.5441, whose own ratio is 4.7514 —
-    // known to 5.8%. Measured 4.7143, 0.97% from δ: agreement, but a reading
-    // known only to 5.8% where the zoom above knows it to 2.9%, which is the
-    // lesson the Cascade preset exists to make.
-    expect(tolerance).toBeLessThan(0.1);
-    expect(Math.abs(feigenbaum.value - FEIGENBAUM_DELTA) / FEIGENBAUM_DELTA).toBeLessThan(tolerance);
+    const half = halfOf(feigenbaum);
+    // Nine times the window over the same 1,024 columns, so h is nine times
+    // larger and the deeper triples are the loose ones; what wins is the first
+    // — the onsets at 3, 1 + √6 and 3.5441, whose own ratio is 4.7514 — known
+    // to 4.0%. Measured 4.7213, 1.1% from δ: agreement, but a reading known to
+    // 4.0% where the zoom above knows it to 1.9%, which is the lesson the
+    // Cascade preset exists to make.
+    expect(half / FEIGENBAUM_DELTA).toBeGreaterThan(halfOf(row(stubSwept('cascade'), 'feigenbaum')) / FEIGENBAUM_DELTA);
+    expect(half / FEIGENBAUM_DELTA).toBeLessThan(0.05);
+    expect(Math.abs(feigenbaum.value - FEIGENBAUM_DELTA)).toBeLessThan(half);
   });
 
-  it('publishes no ratio for a window with no cascade in it', () => {
-    // Three shrinking intervals can be assembled out of unrelated periodic
-    // windows up in the chaos. The uncertainty that carries — hundreds of
-    // percent — is what disqualifies them, and the ledger shows no reading
-    // rather than a number.
-    for (const zoom of ['island', 'deep-chaos']) {
-      const v = stubViz({ zoom, detail: 500 });
+  it('gives every zoom a reading of its own, with a prediction it actually reaches', () => {
+    // Three of the five windows have no cascade in them — the first split has
+    // one doubling, the island of order and deep chaos have none — and δ needs
+    // three consecutive ones. Publishing it everywhere left those three, one of
+    // them a shipped preset, with a permanent em dash under "not measured yet"
+    // on a *finished* sweep. Each window now names the one quantity inside it
+    // that has a closed form, and measures that.
+    const expected: Record<string, string> = {
+      whole: 'feigenbaum',
+      'first-split': 'split',
+      cascade: 'feigenbaum',
+      island: 'window3',
+      'deep-chaos': 'lambda4',
+    };
+    for (const [zoom, key] of Object.entries(expected)) {
+      const v = stubViz({ zoom });
       sweep(v);
-      expect(Number.isNaN(row(v, 'feigenbaum').value), zoom).toBe(true);
+      const readouts = v.emitted.at(-1) ?? [];
+      const headline = readouts.filter((r) => r.headline === true);
+      expect(headline.map((r) => r.key), zoom).toEqual([key]);
+      const head = headline[0]!;
+      expect(Number.isFinite(head.value), `${zoom}: no reading`).toBe(true);
+      expect(head.target, `${zoom}: no prediction`).toBeDefined();
+      const half = halfOf(head);
+      const span = head.range ? head.range[1] - head.range[0] : Infinity;
+      const scale = Math.min(Math.abs(head.target ?? 0), span);
+      // Inside the ledger's ceiling, so the band can test something…
+      expect(half / scale, `${zoom}: band too wide to test anything`).toBeLessThanOrEqual(0.05);
+      // …and the reading is inside the band, so the finished sweep agrees.
+      expect(Math.abs(head.value - (head.target ?? 0)), `${zoom}: outside its own band`).toBeLessThanOrEqual(half);
     }
   });
 
-  it('reaches ln 2 at r = 4 on the deep-chaos window, and says so', () => {
+  it('reaches ln 2 at r = 4, off an orbit long enough to test it', () => {
     const v = stubViz({ zoom: 'deep-chaos', detail: 1000 });
     sweep(v);
-    const lyapunov = row(v, 'lyapunov');
-    expect(lyapunov.target).toBe(Math.LN2);
-    // 1,000 samples of a term with standard deviation π/√12, so SE = 0.0287
-    // and 0.115 is 4σ.
-    const se = Math.PI / Math.sqrt(12) / Math.sqrt(1_000);
-    expect(Math.abs(lyapunov.value - Math.LN2)).toBeLessThan(4 * se);
-    expect(ledger(v)['period']).toBe(0);
+    const lambda4 = row(v, 'lambda4');
+    expect(lambda4.target).toBe(Math.LN2);
+    // The exponent is read off 20,000 iterates of its own rather than off the
+    // points the column happens to plot: a term of spread π/√12 gives SE
+    // 0.0064, so three of them are 2.8% of ln 2 — inside the ceiling, where
+    // the same average over 1,000 plotted points would be 12% and could not
+    // test a constant known exactly.
+    const se = (Math.PI / Math.sqrt(12)) / Math.sqrt(LAMBDA_4_SAMPLES);
+    expect(halfOf(lambda4)).toBeCloseTo(3 * se, 12);
+    expect(Math.abs(lambda4.value - Math.LN2)).toBeLessThan(3 * se);
+    // The cursor's own λ is the curve's value and carries no prediction.
+    expect(row(v, 'lyapunov').target).toBeUndefined();
+    // "No cycle up to 64 repeats" is not a period of zero: the reading does not
+    // exist, and NaN is what the ledger renders as "not measured yet".
+    expect(ledger(v)['period']).toBeNaN();
   });
 
   it('finds the period-3 window where 1 + √8 says it is', () => {
@@ -807,7 +936,7 @@ describe('bifurcation instance: convergence to the analytic values', () => {
 
   it('shows the first doubling at r = 3 as λ touching zero', () => {
     const v = stubViz(preset('first-split'));
-    sweep2(v, 704);
+    sweep(v);
     // The window is 2.9 to 3.1, so the doubling sits at its centre. Sample the
     // ledger as the cursor crosses: below r = 3 the period is 1, above it is 2.
     const w = stubViz(preset('first-split'));

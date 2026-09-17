@@ -32,6 +32,28 @@ import {
  */
 const MAX_POINTS = 2_000_000;
 
+/**
+ * The `points` fader's floor: the fewest dots at which every shape on the menu
+ * can still be measured.
+ *
+ * It is a property of the estimator, not of the picture. `boxCountingDimension`
+ * keeps a dyadic level only while its occupied boxes hold ten points each on
+ * average, because below that N(ε) has stopped counting the attractor and
+ * started counting the sample. The filled square is the binding case: it
+ * genuinely occupies all 1,024 boxes at level 5, so the level survives only from
+ * 10,240 points up, and under that the fit is left with a single level and
+ * returns NaN — a headline that is an em dash on a *finished* run, which is the
+ * same dead band the DLA fader had in its bottom fifth.
+ *
+ * Measured across all four targeted shapes at three seeds, 20,000 points is
+ * where every one of them produces a reading: the square exactly 2, the
+ * Sierpiński triangle within 0.027 of log 3 / log 2, the pentagon within 0.032,
+ * and the restricted square within 0.067 — the last still outside `DIM_TOLERANCE`
+ * and correctly reported as not there yet, which is a verdict rather than a
+ * missing number. The old floor of 1,000 was where 0.7857 came from.
+ */
+const MIN_POINTS = 20_000;
+
 const DEFAULT_POINTS = 200_000;
 const DEFAULT_SEED = 42;
 
@@ -146,7 +168,7 @@ const params: readonly ParamSpec[] = [
     kind: 'range',
     key: 'points',
     label: 'Dots',
-    min: 1_000,
+    min: MIN_POINTS,
     max: MAX_POINTS,
     step: 1_000,
     default: DEFAULT_POINTS,
@@ -221,7 +243,7 @@ function text(values: ParamValues, key: string, fallback: string): string {
 
 /** Points this run will plot, clamped the way the plotter clamps its own target. */
 function pointTarget(values: ParamValues): number {
-  return Math.max(1, Math.min(MAX_POINTS, Math.floor(num(values, 'points', DEFAULT_POINTS))));
+  return Math.max(MIN_POINTS, Math.min(MAX_POINTS, Math.floor(num(values, 'points', DEFAULT_POINTS))));
 }
 
 /** The system the shape selects, with everything the readouts need. */
@@ -333,18 +355,38 @@ function create(ctx: VizContext): VizInstance {
    */
   const pen = new Uint32Array(Math.max(1, (game.grid.size * game.grid.size) >>> 5));
 
+  /**
+   * Which cells the background layer already carries, and which still owe it a
+   * mark. Two more bitsets over the same cells, 128 KB each.
+   *
+   * A chaos game is cumulative: a point, once plotted, never moves. So the
+   * background is an *append-only* record and the only work a frame owes it is
+   * the cells whose ink changed since the last one — a cell newly occupied, or
+   * one the other pen has taken over. `step()` maintains `dirty` as it plots and
+   * `draw()` drains it, which is what makes the cost of a frame the cells that
+   * changed rather than the cells that exist.
+   *
+   * It replaces two paths that both scaled with the whole picture. Painting the
+   * recent ring point by point cost one `fillRect` per *point* — 24,000 of them
+   * per paint inside a Fast-forward press, 240,000 per press, and most of them
+   * re-inking a cell that already held that colour. And a burst larger than the
+   * ring (a Fast-forward, or the reduced-motion settle, which runs up to 4,800
+   * ticks between two frames) fell through to a full rebuild from the occupancy
+   * grid: 818,000 `fillRect` calls at two million points on the filled square,
+   * which froze the tab for 4.4 s. Neither is work the mathematics asks for.
+   */
+  const dirty = new Uint32Array(pen.length);
+  const inked = new Uint32Array(pen.length);
+  /** Cells in `dirty`, so an unchanged frame does not scan the bitset at all. */
+  let dirtyCount = 0;
+
   // The one live parameter, absorbed without disturbing the points already down.
   let target = pointTarget(ctx.params);
 
   // Fractional points owed by the rate accumulator between ticks.
   let pending = 0;
 
-  // Render bookkeeping. The background layer is this tab's accumulating datum —
-  // a chaos game never moves a point it has plotted — so `draw()` owns it, and
-  // this is how much of it is already painted. None of it is simulation state:
-  // `draw()` advances nothing, and painting the same point twice paints the
-  // same pixel.
-  let painted = 0;
+  /** True until the whole picture has been laid down once: a reset, or a resize. */
   let repaintAll = true;
 
   /** Finest-level cell of an attractor point, or −1 when it falls outside the grid square. */
@@ -357,15 +399,31 @@ function create(ctx: VizContext): VizInstance {
     return (cy << game.grid.level) + cx;
   }
 
-  /** Record which pen owns each of the points plotted since `from`. Last writer wins. */
-  function recordPens(from: number): void {
+  /**
+   * Record which pen owns each of the points plotted since `from`, and queue
+   * the cells whose ink that changed. Last writer wins.
+   *
+   * This is render bookkeeping and not simulation state — it advances nothing
+   * and reads only what `game.step()` has already decided — but it has to run
+   * beside the plotting, because the cursor ring is the only place a point's pen
+   * is recorded before it is overwritten.
+   */
+  function recordInk(from: number): void {
     game.forEachRecent(from, (x, y, vertex) => {
       const index = cellOf(x, y);
       if (index < 0) return;
       const w = index >>> 5;
       const bit = 1 << (index & 31);
-      if ((vertex & 1) === 1) pen[w] = (pen[w] ?? 0) | bit;
+      const next = vertex & 1;
+      const held = ((pen[w] ?? 0) >>> (index & 31)) & 1;
+      if (next === 1) pen[w] = (pen[w] ?? 0) | bit;
       else pen[w] = (pen[w] ?? 0) & ~bit;
+      // Already on the layer, in this pen: nothing to repaint. On a saturated
+      // attractor that is almost every point, which is what collapses a
+      // fast-forward from a rebuild of the picture to a handful of marks.
+      if (((inked[w] ?? 0) & bit) !== 0 && held === next) return;
+      if (((dirty[w] ?? 0) & bit) === 0) dirtyCount++;
+      dirty[w] = (dirty[w] ?? 0) | bit;
     });
   }
 
@@ -389,7 +447,7 @@ function create(ctx: VizContext): VizInstance {
         const chunk = Math.min(owed, RECENT);
         const before = game.plotted;
         game.step(chunk);
-        recordPens(before);
+        recordInk(before);
         owed -= chunk;
       }
     },
@@ -404,17 +462,11 @@ function create(ctx: VizContext): VizInstance {
       const fg = ctx.layers.foreground;
       const { width, height, theme } = ctx;
 
-      // New points onto the background, which is cumulative. `painted` is a
-      // render cursor, not simulation state: nothing here advances the game.
-      // Two conditions need the whole picture back rather than an increment:
-      // a reset, and a fast-forward that plotted more points between two
-      // frames than the cursor ring holds.
-      if (repaintAll || painted < game.oldestRecent) {
-        paintBackground();
-      } else if (painted < game.plotted) {
-        paintRange(ctx.layers.background, painted);
-        painted = game.plotted;
-      }
+      // New ink onto the background, which is cumulative and never rebuilt
+      // while the run continues. Nothing here advances the game; the only state
+      // it touches is the record of what is already on the layer.
+      if (repaintAll) paintBackground();
+      else paintDirty();
 
       fg.clearRect(0, 0, width, height);
 
@@ -486,8 +538,10 @@ function create(ctx: VizContext): VizInstance {
       });
       target = pointTarget(ctx.params);
       pen.fill(0);
+      dirty.fill(0);
+      inked.fill(0);
+      dirtyCount = 0;
       pending = 0;
-      painted = 0;
       repaintAll = true;
       ctx.layers.foreground.clearRect(0, 0, ctx.width, ctx.height);
     },
@@ -542,59 +596,137 @@ function create(ctx: VizContext): VizInstance {
         bg.arc(x, y, radius, 0, TAU);
       }
       bg.fill();
+    } else {
+      // The two affine systems — the fern and the dragon — have no polygon to
+      // aim at, so this branch used to paint nothing at all and the background
+      // was left exactly as `clearRect` found it. Changing the Shape menu while
+      // paused therefore blanked the whole plate: a shape change is structural,
+      // the shell resets and repaints the background, and `draw()` then cleared
+      // the foreground over an empty background with zero points plotted. While
+      // the engine runs the next frame hides it; paused — which is the state a
+      // reader is in when they are comparing shapes — the plate simply went
+      // white. Every system now has something to paint, so `paintBackground()`
+      // has no silent empty branch: the frame of the region the attractor lives
+      // in, which is furniture and takes the container pen.
+      const x0 = view.originX + view.scale * game.bounds.minX;
+      const x1 = view.originX + view.scale * game.bounds.maxX;
+      const y0 = view.originY - view.scale * game.bounds.maxY;
+      const y1 = view.originY - view.scale * game.bounds.minY;
+      const snap = theme.lineWidth % 2 === 1 ? 0.5 : 0;
+      bg.strokeStyle = theme.gridSoft;
+      bg.lineWidth = theme.lineWidth;
+      bg.strokeRect(
+        Math.round(x0) + snap,
+        Math.round(y0) + snap,
+        Math.round(x1 - x0) - 2 * snap,
+        Math.round(y1 - y0) - 2 * snap,
+      );
     }
 
     // The attractor goes on over the apparatus, exactly where the live points
     // land — otherwise a resize would reorder the picture.
-    const size = game.grid.size;
-    const s = (view.scale * game.square.span) / size;
-    const x0 = view.originX + view.scale * game.square.x0;
-    const y0 = view.originY - view.scale * game.square.y0;
-    // A cell smaller than a pixel is drawn as one; a plate finer than the grid
-    // grows the mark to the cell so the picture has no gaps in it.
-    const d = Math.max(1, Math.ceil(s));
-    const off = (d - 1) / 2;
+    const cell = cellGeometry();
     // One pass per pen, so the fill style is set twice rather than once per
     // cell.
     const passes = COLOUR_BY_VERTEX ? 2 : 1;
     for (let p = 0; p < passes; p++) {
       bg.fillStyle = p === 1 ? theme.data1 : theme.data2;
       game.grid.forEachCell((cx, cy, index) => {
+        // The layer now carries this cell whichever pen owns it, so the first
+        // pass is also where the record of what is painted is rebuilt.
+        if (p === 0) inked[index >>> 5] = (inked[index >>> 5] ?? 0) | (1 << (index & 31));
         if (COLOUR_BY_VERTEX) {
           const bit = ((pen[index >>> 5] ?? 0) >>> (index & 31)) & 1;
           if (bit !== p) return;
         }
-        bg.fillRect(
-          Math.floor(x0 + (cx + 0.5) * s - off),
-          Math.floor(y0 - (cy + 0.5) * s - off),
-          d,
-          d,
-        );
+        paintCell(bg, cell, cx, cy);
       });
     }
 
-    painted = game.plotted;
+    dirty.fill(0);
+    dirtyCount = 0;
     repaintAll = false;
   }
 
-  /** Paint the points plotted since chronological index `from`, batched by pen. */
-  function paintRange(bg: CanvasRenderingContext2D, from: number): void {
+  /**
+   * Where the occupancy grid sits on the plate, in CSS px.
+   *
+   * A cell smaller than a pixel is drawn as one; a plate finer than the grid
+   * grows the mark to the cell so the picture has no gaps in it.
+   */
+  interface CellGeometry {
+    x0: number;
+    y0: number;
+    s: number;
+    d: number;
+    off: number;
+  }
+
+  function cellGeometry(): CellGeometry {
+    const s = (view.scale * game.square.span) / game.grid.size;
+    const d = Math.max(1, Math.ceil(s));
+    return {
+      x0: view.originX + view.scale * game.square.x0,
+      y0: view.originY - view.scale * game.square.y0,
+      s,
+      d,
+      off: (d - 1) / 2,
+    };
+  }
+
+  /**
+   * One cell, snapped to whole CSS pixels and painted at full strength: §7 lets
+   * a sub-3 px mark through on exactly that condition, and an anti-aliased mark
+   * would smear the drafting pen from 9.41:1 to 2.56.
+   */
+  function paintCell(bg: CanvasRenderingContext2D, g: CellGeometry, cx: number, cy: number): void {
+    bg.fillRect(
+      Math.floor(g.x0 + (cx + 0.5) * g.s - g.off),
+      Math.floor(g.y0 - (cy + 0.5) * g.s - g.off),
+      g.d,
+      g.d,
+    );
+  }
+
+  /**
+   * Put the cells inked since the last frame onto the background layer.
+   *
+   * The cost is the number of cells whose colour changed, which on a settled
+   * attractor is near zero however many points arrived — the whole point of
+   * keeping the picture as an append-only record rather than rebuilding it.
+   */
+  function paintDirty(): void {
+    if (dirtyCount === 0) return;
+    const bg = ctx.layers.background;
+    const cell = cellGeometry();
+    const level = game.grid.level;
+    const mask = game.grid.size - 1;
     const passes = COLOUR_BY_VERTEX ? 2 : 1;
     for (let p = 0; p < passes; p++) {
       bg.fillStyle = p === 1 ? ctx.theme.data1 : ctx.theme.data2;
-      game.forEachRecent(from, (x, y, vertex) => {
-        if (COLOUR_BY_VERTEX && (vertex & 1) !== p) return;
-        // Snapped to whole CSS pixels and painted at full strength: §7 lets a
-        // sub-3 px mark through on exactly that condition, and an
-        // anti-aliased point would smear the drafting pen from 9.41:1 to 2.56.
-        bg.fillRect(
-          Math.floor(view.originX + view.scale * x),
-          Math.floor(view.originY - view.scale * y),
-          1,
-          1,
-        );
-      });
+      for (let w = 0; w < dirty.length; w++) {
+        let bits = dirty[w] ?? 0;
+        if (bits === 0) continue;
+        const pens = pen[w] ?? 0;
+        const origin = w << 5;
+        while (bits !== 0) {
+          // Lowest set bit first: Math.clz32 of the isolated bit gives its index.
+          const lowest = bits & -bits;
+          const b = 31 - Math.clz32(lowest);
+          bits ^= lowest;
+          if (COLOUR_BY_VERTEX && ((pens >>> b) & 1) !== p) continue;
+          const index = origin + b;
+          paintCell(bg, cell, index & mask, index >>> level);
+        }
+      }
     }
+    for (let w = 0; w < dirty.length; w++) {
+      const bits = dirty[w] ?? 0;
+      if (bits === 0) continue;
+      inked[w] = (inked[w] ?? 0) | bits;
+      dirty[w] = 0;
+    }
+    dirtyCount = 0;
   }
 
   function formula(): Prose {
@@ -609,7 +741,7 @@ function create(ctx: VizContext): VizInstance {
    * expert table and the tests read, and nothing a newcomer is asked to parse.
    */
   function readouts(): Readout[] {
-    const measured = boxCountingDimension(game.grid);
+    const measured = boxCountingDimension(game.grid, game.plotted);
     const dimension: Readout = {
       key: 'dimension',
       label: 'Box dimension',
@@ -618,14 +750,26 @@ function create(ctx: VizContext): VizInstance {
       plain: 'how crinkly the shape is',
       headline: true,
       hint: 'a filled square scores 2, a line 1',
+      // A box dimension of a set in the plane lives in [0, 2] by definition, and
+      // the ledger judges a band against the smaller of the prediction and this
+      // span — so the filled square's 2 cannot buy a wider bar than the
+      // triangle's 1.585.
+      range: [0, 2],
     };
-    if (active.targeted) {
+    // A target only where the fit had scales to work with. `measured` is NaN
+    // when every dyadic level left is one the sample has saturated, and a
+    // prediction attached to a reading that does not exist is a claim about
+    // nothing.
+    if (active.targeted && Number.isFinite(measured)) {
       dimension.target = active.dimension;
       dimension.formula = formula();
-      // Not the ledger's 1% default: 1% of 1.585 is 0.016, which no box count
-      // over five dyadic scales reaches, and a finished and perfectly correct
-      // run would read "not yet converged" forever.
-      dimension.tolerance = DIM_TOLERANCE / Math.abs(active.dimension);
+      // Absolute, because box counting has no standard error to quote: the
+      // estimate is a regression on five deterministic counters, not a mean over
+      // trials, and what it carries instead is the bounded discretisation bias
+      // documented at DIM_TOLERANCE. It does not shrink with the run, and the
+      // `points` floor is what makes that honest — below it the fit has no
+      // scales left and emits no reading at all.
+      dimension.band = { kind: 'absolute', half: DIM_TOLERANCE };
     }
     const out: Readout[] = [
       { key: 'points', label: 'Points plotted', value: game.plotted, digits: 7, plain: 'dots placed' },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
+import { verdictOf } from '../src/ui/readouts';
 import {
   compounding,
   layoutPlot,
@@ -614,6 +615,34 @@ describe('compounding readouts', () => {
     expect(by['typical']?.target).toBe(MEDIAN_FACTOR);
     expect(by['average']?.target).toBe(MEAN_FACTOR);
     expect(b.emitted.at(-1)).toEqual(last);
+  });
+
+  it('makes no claim about the crowd before the first round is played', () => {
+    // Nobody is under the stake before the first flip and nothing predicts that
+    // they would be, so the row would be holding 0 to 0 — and a declared zero
+    // means *exact*, which is a claim about a run that has not started. The
+    // percentage also carries the span it is a percentage of, so the band is
+    // judged against a hundred points and not against whichever scale is
+    // kinder.
+    const v = stubViz();
+    paint(v);
+    const start = v.emitted.at(-1)?.find((r) => r.key === 'below') as Readout;
+    expect(ledger(v)['round']).toBe(0);
+    expect(start.value).toBe(0);
+    expect(start.range).toEqual([0, 100]);
+    expect(start.target).toBeUndefined();
+    expect(start.tolerance).toBeUndefined();
+    expect(start.band).toBeUndefined();
+    expect(verdictOf(start).state).toBe('none');
+
+    // One round in it is a measurement again, against the round it has reached.
+    tick(v, 120);
+    paint(v);
+    const playing = v.emitted.at(-1)?.find((r) => r.key === 'below') as Readout;
+    const round = ledger(v)['round'] ?? 0;
+    expect(round).toBeGreaterThan(0);
+    expect(playing.target).toBeCloseTo(100 * shareBelowStake(round), 10);
+    expect(playing.range).toEqual([0, 100]);
   });
 
   it('compares the share against the round it has reached, not the round it is aiming at', () => {

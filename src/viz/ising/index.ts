@@ -342,11 +342,6 @@ function create(ctx: VizContext): VizInstance {
     // T = 4, measured as 0.0520 / 0.0257 / 0.0128 at L = 32 / 64 / 128 — so a
     // "prediction" the reading must miss would be worse than no prediction.
     const compare = comparable(temperature, size);
-    // Two independent errors, added rather than combined in quadrature because
-    // one of them is a systematic bound and not a spread: the finite-size
-    // rounding the lattice is entitled to, and three standard errors of the
-    // time average from the spread of its block means.
-    const tolerance = compare ? (roundingAllowance(temperature, size) + 3 * statistical) / exact : 0;
 
     return [
       {
@@ -356,10 +351,25 @@ function create(ctx: VizContext): VizInstance {
         digits: 4,
         plain: 'how much of the sheet points one way',
         headline: true,
+        // A magnetisation per spin is |M| ≤ 1 by construction, and the ledger
+        // judges a band against the smaller of that span and the prediction.
+        range: [0, 1],
         ...(compare
           ? {
               target: exact,
-              tolerance,
+              // Two independent errors, added rather than combined in
+              // quadrature because one of them is a systematic bound and not a
+              // spread: the finite-size rounding the lattice is entitled to,
+              // and three standard errors of the time average from the spread
+              // of its block means. Absolute, in |M|'s own units — the band and
+              // the target are now declared in the same place, so a temperature
+              // with no prediction cannot leave a stray `0` behind it, which
+              // under the rule that reads 0 as "exactly" would be a claim of
+              // machine precision.
+              band: {
+                kind: 'absolute',
+                half: roundingAllowance(temperature, size) + 3 * statistical,
+              },
               // §5: the hero prints "analytic" and the closed form the target
               // came from. T is the temperature — italic, like every variable.
               formula: ['(1 − sinh(2/', { v: 'T' }, ')⁻⁴)', '^(1/8)'],

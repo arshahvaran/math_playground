@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
+import { agrees, testable, verdictOf } from '../src/ui/readouts';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import {
   DART_RATE,
@@ -181,8 +182,11 @@ describe('piStandardError', () => {
 
   it('shrinks as 1/√n — a hundred times the darts for one decimal place', () => {
     expect(piStandardError(1e3) / piStandardError(1e5)).toBeCloseTo(10, 12);
-    expect(piStandardError(0)).toBe(Infinity);
-    expect(piStandardError(-5)).toBe(Infinity);
+    // NaN, not Infinity: a standard error over no darts is a reading that does
+    // not exist, and NaN is the sentinel the ledger already renders as "not
+    // measured yet".
+    expect(piStandardError(0)).toBeNaN();
+    expect(piStandardError(-5)).toBeNaN();
   });
 });
 
@@ -612,14 +616,82 @@ describe('montecarlo-pi instance: readouts', () => {
     }
   });
 
-  it('sets the π tolerance from the standard error at the count the run will reach', () => {
+  it('takes the band from the darts thrown, not from the darts the fader asked for', () => {
+    // One dart is a Bernoulli(pi/4) trial scaled by four, so it carries exactly
+    // PI_SE_COEFFICIENT of standard deviation and the ledger's sigma/SQRT(n) is
+    // piStandardError(n) itself - the reference line the plot draws.
     const v = stubViz({ darts: 1_000_000 });
     tick(v, 10);
     paint(v);
     const pi = v.emitted.at(-1)?.find((r) => r.key === 'pi');
-    // Three standard errors at a million darts, relative to π: 0.00157. The
-    // ledger's 1% default would be nineteen of them.
-    expect(pi?.tolerance).toBeCloseTo((3 * piStandardError(1_000_000)) / Math.PI, 12);
+    const darts = ledger(v)['darts'] ?? 0;
+    expect(darts).toBeGreaterThan(0);
+    expect(darts).toBeLessThan(1_000_000);
+    expect(pi?.band).toEqual({ kind: 'sampled', sigma: PI_SE_COEFFICIENT, samples: darts });
+    expect(pi?.tolerance).toBeUndefined();
+    // Three standard errors at the darts in hand, which is the band the plot
+    // has been drawing all along. Read at the count the run was going to reach
+    // it would have been 0.00157 from the first dart onwards.
+    expect((3 * PI_SE_COEFFICIENT) / Math.sqrt(darts)).toBeCloseTo(3 * piStandardError(darts), 12);
+    expect((3 * piStandardError(1_000_000)) / Math.PI).toBeLessThan(0.002);
+  });
+
+  it('will not certify a hundred darts, and will certify a thousand', () => {
+    // The finding, in one line: a band fixed at the run's final count was 16%
+    // of pi at the hundred-dart stop of the fader, and 16% of pi certified a
+    // printed 3.36000 under "matches the prediction of 3.14159". A twentieth of
+    // pi needs about 980 darts and nothing below that can produce a verdict.
+    const few = stubViz({ darts: 100 });
+    tick(few, ticksToReach(100));
+    paint(few);
+    const short = few.emitted.at(-1)?.find((r) => r.key === 'pi');
+    expect(ledger(few)['darts']).toBe(100);
+    expect(testable(short!)).toBe(false);
+    expect(verdictOf(short!).state).not.toBe('agree');
+    // Not a claim about this seed's luck: no reading at all can be certified
+    // through a band that wide, including one that is exactly right.
+    expect(agrees({ ...short!, value: Math.PI })).toBe(false);
+
+    const enough = stubViz({ darts: 10_000 });
+    tick(enough, ticksToReach(10_000));
+    paint(enough);
+    const long = enough.emitted.at(-1)?.find((r) => r.key === 'pi');
+    expect(ledger(enough)['darts']).toBe(10_000);
+    expect(testable(long!)).toBe(true);
+    expect(verdictOf(long!).state).toBe('agree');
+  });
+
+  it('publishes no reading that is a number only in the loosest sense', () => {
+    // An estimate over no darts and a standard error over no darts are both
+    // readings that do not exist yet. NaN is what the hero and the table
+    // already render as an em dash; Infinity is a 40px claim that the answer is
+    // unbounded, and it reached this list on the frame after every reset and
+    // every parameter change.
+    const v = stubViz();
+    const frames = [
+      () => paint(v),
+      () => {
+        tick(v, 60);
+        paint(v);
+      },
+      () => {
+        setParam(v, 'seed', 7);
+      },
+      () => {
+        v.instance.reset();
+        paint(v);
+      },
+    ];
+    for (const frame of frames) {
+      frame();
+      for (const r of v.emitted.at(-1) ?? []) {
+        expect(Number.isFinite(r.value) || Number.isNaN(r.value), `${r.key} = ${r.value}`).toBe(true);
+        const band = r.band;
+        if (band?.kind === 'absolute') {
+          expect(Number.isFinite(band.half) || Number.isNaN(band.half), r.key).toBe(true);
+        }
+      }
+    }
   });
 
   it('draws without mutating the simulation, and resets to an empty field', () => {

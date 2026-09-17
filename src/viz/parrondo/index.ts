@@ -383,34 +383,40 @@ function cleanDrift(drift: number): number {
 }
 
 /**
- * The relative tolerance that puts an absolute bar of `bar` on a reading.
+ * One rule's gain, measured and predicted, both per hundred rounds.
  *
- * `agrees()` compares |value − target| / |target| against the tolerance, except
- * for a target of exactly zero where it reads the tolerance as absolute, so
- * `bar / |target|` and `bar` are the same statement written for the two cases.
- * Both matter here: game A's drift is exactly zero at zero tilt.
+ * `samples` is players × rounds *played so far*, and the sd of one of those
+ * observations is exactly `GAIN_SCALE`: a round moves one purse by one coin, up
+ * or down, and the reading is a hundred times the average of those steps. (The
+ * mod-3 rule makes consecutive rounds negatively correlated, so one coin is an
+ * upper bound rather than an approximation — measured, the two rules that read
+ * the money spread by 0.74 and 0.93 coins a round against game A's 1.00.)
+ *
+ * The range is what makes the band sign-sensitive, and that matters more here
+ * than anywhere else in the app: the whole result is that each game *loses* on
+ * its own, so an acceptance window that also contains a winning game inverts the
+ * tab. Judged against a span of ±GAIN_SCALE the band is at most a twentieth of
+ * the prediction wherever the prediction is inside the span, which cannot reach
+ * zero from a negative one — where a bar built from the *final* round count
+ * spanned it comfortably, printing "agrees with the prediction" on a finished
+ * run 52.7 % away and on a Game A reading of −1.527 against −1.000.
  */
-function toleranceFor(target: number, bar: number): number {
-  return target === 0 ? bar : bar / Math.abs(target);
-}
-
-/** One rule's gain, measured and predicted, both per hundred rounds. */
 function gainReadout(
   key: string,
   label: string,
   plain: string,
   perRound: number,
   drift: number,
-  bar: number,
+  samples: number,
 ): Readout {
-  const target = GAIN_SCALE * cleanDrift(drift);
   return {
     key,
     label,
     value: GAIN_SCALE * perRound,
     digits: 4,
-    target,
-    tolerance: toleranceFor(target, bar),
+    target: GAIN_SCALE * cleanDrift(drift),
+    band: { kind: 'sampled', sigma: GAIN_SCALE, samples, sigmas: READOUT_SIGMAS },
+    range: [-GAIN_SCALE, GAIN_SCALE],
     plain,
   };
 }
@@ -456,18 +462,12 @@ function create(ctx: VizContext): VizInstance {
    */
   function readouts(): Readout[] {
     const players = table.players;
-    // Each round moves a purse by exactly ±1, so the spread of one round is one
-    // coin and the average over `players` purses and `MAX_ROUNDS` rounds has a
-    // standard error of 1/√(players · rounds). Measured at the round count the
-    // run is going to reach, not the count so far, so a reading starts off and
-    // arrives at agreement as the rounds are played.
-    const bar = (READOUT_SIGMAS * GAIN_SCALE) / Math.sqrt(players * MAX_ROUNDS);
-    // A share over the same `players · rounds` observations. Were they
-    // independent its standard error would be at most ½/√(players · rounds);
-    // consecutive rounds of one player are not independent — the money walks —
-    // so the bar is three of those doubled, which is 0.0027 against a share of
-    // 0.38.
-    const shareBar = READOUT_SIGMAS / Math.sqrt(players * MAX_ROUNDS);
+    // Observations behind every reading below: one per player per round played.
+    // The count the run is going to *reach* is not evidence — a bar derived from
+    // it is honest on the last frame and absurdly generous on every frame before
+    // it, which is how a reading 52.7 % out came to be certified — so what is
+    // declared is the count in hand and the ledger does the division.
+    const samples = players * table.round;
 
     return [
       { key: 'rounds', label: 'Rounds', value: table.round, digits: 5, plain: 'rounds played' },
@@ -477,7 +477,7 @@ function create(ctx: VizContext): VizInstance {
         'coins per 100 rounds, first game only',
         table.averagePerRound(A_ONLY),
         solutions[A_ONLY]!.drift,
-        bar,
+        samples,
       ),
       gainReadout(
         'gainB',
@@ -485,7 +485,7 @@ function create(ctx: VizContext): VizInstance {
         'coins per 100 rounds, second game only',
         table.averagePerRound(B_ONLY),
         solutions[B_ONLY]!.drift,
-        bar,
+        samples,
       ),
       {
         ...gainReadout(
@@ -494,7 +494,7 @@ function create(ctx: VizContext): VizInstance {
           'coins per 100 rounds, taking turns',
           table.averagePerRound(TAKING_TURNS),
           solutions[TAKING_TURNS]!.drift,
-          bar,
+          samples,
         ),
         headline: true,
         hint: 'each game on its own loses money',
@@ -510,7 +510,13 @@ function create(ctx: VizContext): VizInstance {
         value: table.shareOnBad(B_ONLY),
         digits: 4,
         target: solutions[B_ONLY]!.shares[0]!,
-        tolerance: toleranceFor(solutions[B_ONLY]!.shares[0]!, shareBar),
+        // A share over the same players × rounds observations. Were they
+        // independent the sd of one would be at most ½; consecutive rounds of
+        // one player are not independent — the money walks — so it is declared
+        // at 1, twice the independent bound, which is 0.0027 against a share of
+        // 0.38 at the default table.
+        band: { kind: 'sampled', sigma: 1, samples, sigmas: READOUT_SIGMAS },
+        range: [0, 1],
         expertOnly: true,
       },
       {
@@ -519,7 +525,8 @@ function create(ctx: VizContext): VizInstance {
         value: table.shareOnBad(TAKING_TURNS),
         digits: 4,
         target: solutions[TAKING_TURNS]!.shares[0]!,
-        tolerance: toleranceFor(solutions[TAKING_TURNS]!.shares[0]!, shareBar),
+        band: { kind: 'sampled', sigma: 1, samples, sigmas: READOUT_SIGMAS },
+        range: [0, 1],
         expertOnly: true,
       },
       { key: 'players', label: 'Players per rule', value: players, digits: 5, expertOnly: true },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, Rng, VizContext } from '../src/core/types';
+import { bandOf, testable, verdictOf } from '../src/ui/readouts';
 import {
   chartScale,
   chartX,
@@ -36,7 +37,7 @@ const TICK = 1000 / 120;
 
 /** The module's own ceilings, restated here so a change to one fails a test. */
 const MAX_PEOPLE = 200;
-const MAX_ROUNDS = 2_000;
+const MAX_ROUNDS = 10_000;
 const PAINTED_SAMPLES = 360;
 
 /** The label face the shell hands every visualization, from theme.css. */
@@ -836,15 +837,63 @@ describe('prisoners instance: readouts', () => {
     for (const preset of prisoners.presets ?? []) expect(text(preset.caption), preset.id).not.toMatch(BANNED);
   });
 
-  it('asks for three standard errors, not the ledger’s one percent', () => {
+  it('declares a band from the rounds played, and refuses a verdict on eleven of them', () => {
+    // The bar was three standard errors of a proportion over the rounds the run
+    // was going to *reach*, so at the fader's twenty-round stop it was as wide
+    // as the answer itself and the hero printed "0.5000" under "matches the
+    // prediction of 0.3093". Three standard errors over the rounds actually
+    // played is 0.31 wide at twenty rounds — the whole of the prediction it
+    // would be testing — and the ledger refuses to say "matches" through that.
     const v = stubViz();
-    tick(v, 10);
+    tick(v, 120);
     paint(v);
-    const share = (v.emitted.at(-1) ?? []).find((r) => r.key === 'share');
-    // Relative SE of a proportion is √((1−p)/(p·R)); at p = 0.31183 over 300
-    // rounds that is 0.0797, so the row asks for 0.239.
-    expect(share?.tolerance).toBeCloseTo(3 * Math.sqrt((1 - P100) / (P100 * 300)), 12);
-    expect(share?.tolerance).toBeGreaterThan(0.2);
+    const early = (v.emitted.at(-1) ?? []).find((r) => r.key === 'share');
+    const rounds = ledger(v)['rounds'] ?? 0;
+    expect(rounds).toBeGreaterThan(0);
+    expect(rounds).toBeLessThan(50);
+    expect(early?.tolerance).toBeUndefined();
+    expect(early?.band).toEqual({
+      kind: 'sampled',
+      sigma: Math.sqrt(P100 * (1 - P100)),
+      samples: rounds,
+    });
+    expect(early?.range).toEqual([0, 1]);
+    expect(testable(early as Readout)).toBe(false);
+    expect(verdictOf(early as Readout).state).not.toBe('agree');
+    expect(verdictOf(early as Readout).text).not.toContain('0.3');
+  });
+
+  it('earns the verdict over a run long enough to support it', () => {
+    // Three standard errors inside a twentieth of 0.3118 needs 7,944 rounds,
+    // which is why the ceiling is where it is and why the long-run chip goes
+    // there. This is the assertion that the tab can still agree with its own
+    // prediction once it has the evidence for it.
+    const v = stubViz({ rounds: MAX_ROUNDS });
+    runOut(v, MAX_ROUNDS);
+    const share = (v.emitted.at(-1) ?? []).find((r) => r.key === 'share') as Readout;
+    expect(share.band).toMatchObject({ samples: MAX_ROUNDS });
+    expect(bandOf(share)).toBeCloseTo((3 * Math.sqrt(P100 * (1 - P100))) / Math.sqrt(MAX_ROUNDS), 12);
+    expect(testable(share)).toBe(true);
+    expect(verdictOf(share).state).toBe('agree');
+  });
+
+  it('states the guessers’ odds rather than pretending to measure them', () => {
+    // 2⁻¹⁰⁰ is 7.9e-31, and three standard errors of a proportion that size
+    // came out around 10³⁰: a band that certifies every reading the row could
+    // ever take, including a hundred per cent error. A prediction no finite run
+    // can falsify is published as the stated fact it is, not as a verdict.
+    const v = stubViz();
+    tick(v, 400);
+    paint(v);
+    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    expect(by['guessShare']?.target).toBeUndefined();
+    expect(by['guessShare']?.band).toBeUndefined();
+    expect(by['guessShare']?.tolerance).toBeUndefined();
+    expect(by['guessShare']?.value).toBe(0);
+    // The odds themselves are still on the page, as a reading with nothing to
+    // agree or disagree with.
+    expect(by['guessOdds']?.value).toBe(0.5 ** 100);
+    expect(by['guessOdds']?.target).toBeUndefined();
   });
 
   it('draws without mutating the run, and resets to an empty one', () => {
@@ -873,13 +922,13 @@ describe('prisoners instance: the run', () => {
     expect(ledger(v)).toEqual(done);
   });
 
-  it('lands on the prediction over a full run of two thousand rounds', () => {
+  it('lands on the prediction over a full run of ten thousand rounds', () => {
     const v = stubViz({ rounds: MAX_ROUNDS });
     runOut(v, MAX_ROUNDS);
     const l = ledger(v);
-    // SE of a proportion over 2,000 rounds is √(p(1−p)/2000) = 0.01036, so
-    // 0.0415 is 4σ.
-    expect(Math.abs(l['share']! - P100)).toBeLessThan(0.0415);
+    // SE of a proportion over 10,000 rounds is √(p(1−p)/10000) = 0.00463, so
+    // 0.0186 is 4σ.
+    expect(Math.abs(l['share']! - P100)).toBeLessThan(0.0186);
     // A hundred prisoners guessing have never once all been lucky, and will not be.
     expect(l['guessWins']).toBe(0);
   });
@@ -1043,7 +1092,7 @@ describe('prisoners instance: the plate', () => {
   it('holds one permutation on the plate while the counters race past it', () => {
     const v = stubViz({ people: 100, rounds: MAX_ROUNDS });
     const shown: number[] = [];
-    // Two seconds of simulation at 133 rounds a second, one frame per tick.
+    // Two seconds of simulation at 667 rounds a second, one frame per tick.
     for (let i = 0; i < 240; i++) {
       v.instance.step(TICK);
       paint(v);
@@ -1052,7 +1101,8 @@ describe('prisoners instance: the plate', () => {
     const distinct = new Set(shown).size;
     expect(ledger(v)['rounds']).toBeGreaterThan(250);
     // The picture changes four times a second at most, so two seconds of frames
-    // show at most nine permutations — against the 260 the counters got through.
+    // show at most nine permutations — against the 1,300 the counters got
+    // through.
     expect(distinct).toBeLessThanOrEqual(9);
     expect(distinct).toBeGreaterThan(1);
   });

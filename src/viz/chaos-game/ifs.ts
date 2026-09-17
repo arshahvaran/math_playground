@@ -437,6 +437,12 @@ export const BOX_MIN_LEVEL = 4;
 export const BOX_MAX_LEVEL = 8;
 
 /**
+ * Points per occupied box a level must average before its count is a
+ * measurement of the attractor rather than of the sample size.
+ */
+export const BOX_MIN_POINTS_PER_BOX = 10;
+
+/**
  * A pyramid of occupancy bitsets over the grid square: level j divides it into
  * 2ʲ × 2ʲ cells, and `count(j)` is N(ε) at ε = 2⁻ʲ.
  *
@@ -545,14 +551,27 @@ export class Occupancy {
  * left is the discretisation bias of an unaligned grid — a bounded oscillation
  * in log N that the five-point regression damps to a few hundredths.
  *
- * NaN before two levels have anything in them.
+ * `points` is how many have actually been plotted, and it lowers the ceiling
+ * when the sample cannot support it. A level whose occupied-box count is a
+ * sizeable fraction of the sample has stopped measuring the attractor and
+ * started measuring the sample: 1,000 points can occupy at most 1,000 of level
+ * 8's 65,536 boxes, N(ε) saturates, the slope flattens, and the fit returns
+ * roughly log(points)/log(scale range) instead of D — 0.7857 against 1.585 on a
+ * *finished* run at the fader's minimum, 50 % wrong and permanent. The rule is
+ * the standard one: keep a level only while its boxes hold ten points each on
+ * average. The doc comment above predicted exactly this and the code never
+ * adapted to it.
+ *
+ * NaN before two levels survive that cap.
  */
 export function boxCountingDimension(
   grid: Occupancy,
+  points = Infinity,
   minLevel = BOX_MIN_LEVEL,
   maxLevel = BOX_MAX_LEVEL,
 ): number {
-  const hi = Math.min(maxLevel, grid.level);
+  let hi = Math.min(maxLevel, grid.level);
+  while (hi > minLevel && grid.count(hi) * BOX_MIN_POINTS_PER_BOX > points) hi--;
   let n = 0;
   let sx = 0;
   let sy = 0;

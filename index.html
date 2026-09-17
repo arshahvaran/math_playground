@@ -27,17 +27,63 @@
          visualization title, 125% on the wordmark — in place of the uppercase
          eyebrows every dashboard reaches for. Narrow the requested range and
          every label silently snaps to 100% with no error anywhere. The weights
-         asked for are 420/460/560/620/700, all inside 400..800. -->
+         asked for are 420/460/560/620/700, all inside 400..800.
+
+         THE STYLESHEET MUST NOT BE RENDER-BLOCKING. A cross-origin stylesheet
+         above the module script blocks that script from executing at all, so a
+         network that DROPs the request instead of refusing it — the Great
+         Firewall, a corporate egress firewall, a captive portal that swallows
+         TLS — leaves a page that never boots: no exception, no console message,
+         no frame ever composited, and every defence inside main.ts is
+         downstream of a line that already prevented it from running. Measured:
+         blackholed, the app produced 0 DOM nodes at 30 s; merely *delayed* by
+         3 s, first paint moved 3 s with it. `media="print"` makes the request
+         non-blocking, and the onload swap applies it the moment it arrives. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,87..125,400..800;1,100,400&family=Martian+Mono:wdth,wght@87.5..100,300..500&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,87..125,400..800;1,100,400&family=Martian+Mono:wdth,wght@87.5..100,300..500&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
   </head>
   <body>
-    <div id="app"></div>
-    <noscript>Math Playground renders its visualizations with JavaScript, which is currently disabled.</noscript>
+    <!-- The fallback is inside #app, not in <noscript>, and main.ts removes it
+         only once createShell() has returned. <noscript> renders when scripting
+         is DISABLED, which is the one failure a modern visitor is least likely
+         to have; a blocked or 404ed or unparsable bundle leaves scripting very
+         much enabled and the message unrendered, and the page was then
+         completely empty — no text, no stylesheet, no background colour, since
+         theme.css is imported by the module that did not load. Living inside the
+         element the app owns makes "nothing on screen" unreachable: either the
+         bundle ran and replaced this, or this is what you see. The style is
+         inline because the stylesheet may be exactly what is missing. -->
+    <div id="app">
+      <p
+        class="boot-fallback"
+        style="
+          margin: 0;
+          padding: 2rem;
+          font: 16px/1.5 system-ui, sans-serif;
+          color: #15181b;
+          background: #e8ecef;
+          min-height: 100vh;
+        "
+      >
+        Math Playground could not start. It renders its visualizations with JavaScript, which is
+        either disabled here or was blocked from loading.
+        <a href="https://github.com/arshahvaran/math_playground" style="color: #15181b"
+          >Source and a description of what it does</a
+        >.
+      </p>
+    </div>
     <!-- The stylesheet is imported by main.ts, so Vite hashes and inlines it
          with the bundle; there is no second render-blocking request here. -->
     <script type="module" src="/src/main.ts"></script>

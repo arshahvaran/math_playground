@@ -32,6 +32,18 @@ function harness() {
       queued = new Map();
       for (const cb of due.values()) cb(now);
     },
+    /**
+     * Charge wall-clock time to work being done, without firing a frame — what
+     * a `step()` that actually computes something costs the main thread. It is
+     * the difference between a loop that is merely long and one that cannot
+     * outrun its own delta.
+     */
+    spend(ms: number): void {
+      now += ms;
+    },
+    get now(): number {
+      return now;
+    },
     get pending(): number {
       return queued.size;
     },
@@ -241,5 +253,147 @@ describe('createEngine', () => {
       engine.stepOnce();
       engine.fastForward(10);
     }).not.toThrow();
+  });
+
+  it('runs a whole, finite number of ticks whatever it is asked for', () => {
+    harness();
+    const inst = stub();
+    const engine = createEngine(() => inst);
+
+    // `done < ticks` is never false for a NaN or an Infinity, and this loop has
+    // no frame boundary to escape through: a bad count would hang the tab
+    // rather than cost it a frame. Validated where the number enters.
+    engine.fastForward(Number.POSITIVE_INFINITY);
+    engine.fastForward(Number.NaN);
+    engine.fastForward(-50);
+    expect(inst.steps).toBe(0);
+
+    engine.fastForward(10.7);
+    expect(inst.steps).toBe(10);
+  });
+});
+
+/**
+ * How much work one frame is allowed to do.
+ *
+ * `MAX_FRAME_MS` bounds the clock the loop reads, and then `elapsed * speed`
+ * multiplies it straight back out — so the clamp that stops a backgrounded tab
+ * from spiralling does nothing whatever about the 8× the transport offers. At
+ * 8× a clamped 250 ms frame asked for 2,000 ms of simulation: 240 ticks, the
+ * size of a whole Fast-forward burst, in a frame that also has to paint. It is
+ * a stable bad state rather than a spiral — the clamp binds again next frame
+ * and keeps binding — and it is why the Ising sheet at 128² yielded the main
+ * thread once every 389 ms.
+ *
+ * The numbers below are the budget `MAX_TICKS_PER_FRAME` was derived from.
+ * Raising it in the source means re-deriving them here.
+ */
+describe('work per frame', () => {
+  /** Two 60 Hz frames of 8× simulation, in ticks. */
+  const MAX_TICKS_PER_FRAME = 32;
+  const VSYNC_MS = 1000 / 60;
+
+  it('clamps the ticks a frame runs, not only the clock it reads', () => {
+    const h = harness();
+    const inst = stub();
+    const engine = createEngine(() => inst);
+
+    engine.setSpeed(8);
+    engine.start();
+    h.advance(5000); // back from a backgrounded tab
+
+    expect(inst.steps).toBe(MAX_TICKS_PER_FRAME);
+    expect(inst.draws).toBe(1);
+  });
+
+  it('leaves an honest 8× frame alone', () => {
+    const h = harness();
+    const inst = stub();
+    const engine = createEngine(() => inst);
+
+    engine.setSpeed(8);
+    engine.start();
+    h.advance(VSYNC_MS);
+
+    // 16.7 ms × 8 is 16 ticks: the cap is above the whole working range, so it
+    // costs a reader on a healthy display nothing at all.
+    expect(inst.steps).toBe(Math.floor((VSYNC_MS * 8) / FIXED_DT));
+    expect(inst.steps).toBeLessThan(MAX_TICKS_PER_FRAME);
+  });
+
+  it('holds the cap at every speed the transport offers, however late the frame', () => {
+    for (const speed of [1, 2, 4, 8]) {
+      for (const delay of [VSYNC_MS, 100, 250, 5000, 60_000]) {
+        const h = harness();
+        const inst = stub();
+        const engine = createEngine(() => inst);
+        engine.setSpeed(speed);
+        engine.start();
+        h.advance(delay);
+        const steps = inst.steps;
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        expect(steps, `speed ${speed}, ${delay} ms frame`).toBeLessThanOrEqual(MAX_TICKS_PER_FRAME);
+      }
+    }
+  });
+
+  it('drops the simulation time it refused rather than owing it to the next frame', () => {
+    const h = harness();
+    const inst = stub();
+    const engine = createEngine(() => inst);
+
+    engine.setSpeed(8);
+    engine.start();
+    h.advance(5000);
+    const afterStall = inst.steps;
+
+    h.advance(VSYNC_MS);
+
+    // An ordinary 8× frame — 16 ticks, plus at most the banked sub-tick, which
+    // is the fixed timestep working. Subtracting the ticks it ran instead of
+    // dropping the rest would hand this frame the 2,000 ms the stall asked for
+    // and put it straight back on the cap, and every frame after it too.
+    const after = inst.steps - afterStall;
+    expect(after).toBeLessThan(MAX_TICKS_PER_FRAME);
+    expect(after).toBeLessThanOrEqual(Math.ceil((VSYNC_MS * 8) / FIXED_DT) + 1);
+  });
+
+  it('yields the main thread every frame when 8× meets work that costs time', () => {
+    const h = harness();
+    /** One tick of the Ising sheet at 128², where the 389 ms was measured. */
+    const COST_MS = 1;
+    const inst: Stub = {
+      steps: 0,
+      draws: 0,
+      step() {
+        this.steps++;
+        h.spend(COST_MS);
+      },
+      draw() {
+        this.draws++;
+      },
+      reset() {},
+      destroy() {},
+    };
+    const engine = createEngine(() => inst);
+
+    engine.setSpeed(8);
+    engine.start();
+    h.advance(250); // the one late frame that used to be enough to lock the loop
+
+    let worstGap = 0;
+    const frames = 30;
+    for (let i = 0; i < frames; i++) {
+      const before = h.now;
+      h.advance(VSYNC_MS); // one vsync of idle, then the frame and the work it does
+      worstGap = Math.max(worstGap, h.now - before);
+    }
+
+    // One vsync of idle plus at most 32 ticks of work is 48.7 ms. Unclamped the
+    // loop settles at 240 ticks — 240 ms of work for every 16.7 ms of idle —
+    // and this figure was 257 ms, which is a tab that does not answer a click.
+    expect(worstGap).toBeLessThan(60);
+    expect(inst.draws).toBe(frames + 1);
   });
 });

@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
-import { arrivalRateFor, chartScale, chartX, chartY, layoutPlate, waitingTime } from '../src/viz/waiting-time/index';
+import {
+  arrivalRateFor,
+  caughtGapStandardError,
+  chartScale,
+  chartX,
+  chartY,
+  layoutPlate,
+  waitingTime,
+} from '../src/viz/waiting-time/index';
+import { agrees, testable, verdictOf } from '../src/ui/readouts';
 import {
   Crowd,
   MEAN_GAP,
@@ -831,23 +840,90 @@ describe('waiting-time instance: readouts', () => {
     v.instance.destroy();
   });
 
-  it('derives every tolerance from the theory, not from the reading', () => {
+  /** The half-width a row declares, by the arithmetic the ledger does. */
+  function halfOf(row: Readout | undefined): number {
+    const band = row?.band;
+    if (band === undefined) return NaN;
+    if (band.kind === 'absolute') return band.half;
+    if (band.kind === 'sampled') return (3 * band.sigma) / Math.sqrt(band.samples);
+    return NaN;
+  }
+
+  it('derives every band from the theory at the counts in hand, not from the reading', () => {
     const v = stubViz();
     tick(v, 120);
     paint(v);
     const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
     const gaps = gapsFor(DEFAULT_PASSENGERS);
-    expect(by['wait']?.tolerance).toBeCloseTo(
-      (3 * waitStandardError(1, DEFAULT_PASSENGERS, gaps)) / MEAN_GAP,
+    const passengers = by['passengers']?.value ?? 0;
+    // Part way through the run: the passengers are still arriving, and the
+    // whole defect was a band that had already been given credit for all of
+    // them.
+    expect(passengers).toBeGreaterThan(0);
+    expect(passengers).toBeLessThan(DEFAULT_PASSENGERS);
+    expect(by['wait']?.band).toEqual({
+      kind: 'absolute',
+      half: 3 * waitStandardError(1, passengers, gaps),
+    });
+    // The timetable is drawn in one pass at reset, so its three rows have every
+    // gap they will ever have on the first frame - a measurement that was
+    // finished before the clock started, not a band that failed to shrink.
+    expect(halfOf(by['predicted'])).toBeCloseTo(3 * waitStandardError(1, Infinity, gaps), 12);
+    expect(by['gapAverage']?.band).toEqual({ kind: 'sampled', sigma: gapStddev(1), samples: gaps });
+    expect(halfOf(by['gapSpread'])).toBeCloseTo(3 * gapStddev(1) * Math.sqrt(8 / (4 * gaps)), 12);
+    // The gap a passenger lands in is not the wait doubled as far as noise
+    // goes: a wait is a uniform point inside the gap it caught, so the two
+    // differ in the passenger term. Borrowing the wait's relative band
+    // overstated this one by SQRT(2) on that term - the direction that buys
+    // verdicts nobody measured.
+    expect(halfOf(by['experienced'])).toBeCloseTo(
+      3 * caughtGapStandardError(1, passengers, gaps),
       12,
     );
-    // The timetable's own answer cannot be sharpened by more passengers, so its
-    // bar is the passenger term sent to zero.
-    expect(by['predicted']?.tolerance).toBeCloseTo(
-      (3 * waitStandardError(1, Infinity, gaps)) / MEAN_GAP,
-      12,
-    );
-    expect(by['gapAverage']?.tolerance).toBeCloseTo(3 / Math.sqrt(gaps), 12);
+    expect(halfOf(by['experienced'])).toBeLessThan(2 * halfOf(by['wait']));
+    for (const r of v.emitted.at(-1) ?? []) expect(r.tolerance, r.key).toBeUndefined();
+  });
+
+  it('refuses the headline at the fewest passengers the fader offers, and gives it at the most', () => {
+    // The finding: at the left stop the band was three standard errors at the
+    // count the run would *finish* on, 30% of a ten-minute wait, and the hero
+    // printed "11.76 min matches the prediction of 10 min". At cv = 1 a run
+    // needs about 18,000 passengers before three standard errors are a
+    // twentieth of that wait.
+    const few = stubViz({ passengers: 500 });
+    tick(few, 2_400);
+    paint(few);
+    const short = few.emitted.at(-1)?.find((r) => r.key === 'wait');
+    expect(ledger(few)['passengers']).toBe(500);
+    expect(testable(short!)).toBe(false);
+    // Not a claim about this seed: no reading at all can be certified through a
+    // band that wide, including one that is exactly right.
+    expect(agrees({ ...short!, value: expectedWait(1) })).toBe(false);
+
+    const many = stubViz({ passengers: DEFAULT_PASSENGERS });
+    tick(many, Math.ceil((DEFAULT_PASSENGERS / arrivalRateFor(DEFAULT_PASSENGERS)) * 120) + 4);
+    paint(many);
+    const long = many.emitted.at(-1)?.find((r) => r.key === 'wait');
+    expect(ledger(many)['passengers']).toBe(DEFAULT_PASSENGERS);
+    expect(testable(long!)).toBe(true);
+    expect(verdictOf(long!).state).toBe('agree');
+  });
+
+  it('calls a perfect timetable exact rather than settling', () => {
+    // At cv = 0 every gap is exactly ten minutes, so the spread really is zero,
+    // the average gap really is ten and what the timetable predicts really is
+    // five. A relative band on a target of zero says nothing at all, and a bare
+    // tolerance of zero could not be told from no tolerance at all - which is
+    // how this row came to be judged against a 1% bar it never asked for.
+    const v = stubViz({ spread: 0 });
+    tick(v, 240);
+    paint(v);
+    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    for (const key of ['gapAverage', 'gapSpread', 'predicted']) {
+      expect(halfOf(by[key]), key).toBe(0);
+      expect(by[key]?.value, key).toBe(by[key]?.target);
+      expect(verdictOf(by[key]!).state, key).toBe('agree');
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/rng';
+import { agrees, testable, verdictOf } from '../src/ui/readouts';
 import type { ParamValue, Prose, Readout, VizContext } from '../src/core/types';
 import { buffon, layoutField } from '../src/viz/buffon/index';
 import {
@@ -187,9 +188,13 @@ describe('piStandardError', () => {
     expect(se / piStandardError(4 * DROPS, LENGTH, SPACING)).toBeCloseTo(2, 12);
   });
 
-  it('is infinite with no drops or a zero-length needle', () => {
-    expect(piStandardError(0, LENGTH, SPACING)).toBe(Infinity);
-    expect(piStandardError(1_000, 0, SPACING)).toBe(Infinity);
+  it('has no value at all with no drops or a zero-length needle', () => {
+    // NaN rather than Infinity: this is published as a Readout, and NaN is
+    // what the ledger renders as an em dash and "not measured yet". A reset
+    // zeroes the drop count one frame before draw() emits, so the zero case is
+    // reached after every parameter change, not only in a test.
+    expect(piStandardError(0, LENGTH, SPACING)).toBeNaN();
+    expect(piStandardError(1_000, 0, SPACING)).toBeNaN();
   });
 });
 
@@ -516,6 +521,91 @@ describe('buffon instance: readouts', () => {
     }
     expect(last.find((r) => r.key === 'drops')?.plain).toBe('needles dropped');
     expect(last.find((r) => r.key === 'crossings')?.plain).toBe('crossed a line');
+  });
+
+  it('declares a band on both predictions, taken from the needles already down', () => {
+    // Both rows shipped a target and no band at all, which is a prediction
+    // nobody is holding the reading to: the ledger printed "not enough data to
+    // judge" under a perfectly good estimate of pi, for ever.
+    const v = stubViz();
+    tick(v, 2_000);
+    paint(v);
+    const by = Object.fromEntries((v.emitted.at(-1) ?? []).map((r) => [r.key, r]));
+    const drops = by['drops']?.value ?? 0;
+    expect(drops).toBe(2_000);
+
+    // One needle is one Bernoulli(P) trial, so the fraction carries
+    // SQRT(P(1-P)) per drop and the ledger divides by the drops made.
+    expect(by['fraction']?.band).toEqual({
+      kind: 'sampled',
+      sigma: Math.sqrt(P * (1 - P)),
+      samples: drops,
+    });
+    expect(by['fraction']?.range).toEqual([0, 1]);
+
+    // pi is not linear in that fraction, so it is not that band: the delta
+    // method turns it into pi*SQRT((1-P)/(P*N)), which is the standard error
+    // the table prints two rows down.
+    const band = by['pi']?.band;
+    expect(band?.kind).toBe('absolute');
+    expect(band?.kind === 'absolute' ? band.half : NaN).toBeCloseTo(3 * piStandardError(drops, LENGTH, SPACING), 12);
+    expect(band?.kind === 'absolute' ? band.half : NaN).toBeCloseTo(3 * (by['se']?.value ?? NaN), 12);
+    for (const r of v.emitted.at(-1) ?? []) expect(r.tolerance, r.key).toBeUndefined();
+  });
+
+  it('withholds the verdict until the drops can test it, and then gives it', () => {
+    const early = stubViz();
+    tick(early, 100);
+    paint(early);
+    const short = early.emitted.at(-1)?.find((r) => r.key === 'pi');
+    expect(ledger(early)['drops']).toBe(100);
+    // 3*pi*SQRT((1-P)/(P*100)) = 0.92, nearly a third of pi: a band no reading
+    // this experiment could produce would fall outside.
+    expect(testable(short!)).toBe(false);
+    expect(agrees({ ...short!, value: Math.PI })).toBe(false);
+
+    // A twentieth of pi wants 9(1-P)/(P*0.05^2) = 3,470 drops at the default
+    // needle, and the run goes to 20,000.
+    const later = stubViz();
+    tick(later, 4_000);
+    paint(later);
+    const long = later.emitted.at(-1)?.find((r) => r.key === 'pi');
+    expect(ledger(later)['drops']).toBe(4_000);
+    expect(testable(long!)).toBe(true);
+    expect(verdictOf(long!).state).toBe('agree');
+  });
+
+  it('publishes no reading that is a number only in the loosest sense', () => {
+    // A crossing fraction over no drops, an estimate before the first crossing
+    // and a standard error over no drops are readings that do not exist yet.
+    // NaN is what the hero and the table already render as an em dash;
+    // Infinity is a 40px claim that the answer is unbounded, and it reached
+    // this list on the frame after every reset and every parameter change.
+    const v = stubViz();
+    const frames: Array<() => void> = [
+      () => paint(v),
+      () => {
+        tick(v, 60);
+        paint(v);
+      },
+      () => setParam(v, 'ratio', 0.1),
+      () => setParam(v, 'spacing', 160),
+      () => setParam(v, 'seed', 7),
+      () => {
+        v.instance.reset();
+        paint(v);
+      },
+    ];
+    for (const frame of frames) {
+      frame();
+      for (const r of v.emitted.at(-1) ?? []) {
+        expect(Number.isFinite(r.value) || Number.isNaN(r.value), `${r.key} = ${r.value}`).toBe(true);
+        const band = r.band;
+        if (band?.kind === 'absolute') {
+          expect(Number.isFinite(band.half) || Number.isNaN(band.half), r.key).toBe(true);
+        }
+      }
+    }
   });
 
   it('draws without mutating the simulation, and resets to an empty field', () => {
