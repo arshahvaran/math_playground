@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { byLabel, fire, installDom, makeEvent, type Harness, type MElement } from './dom-harness';
 import {
+  DEFAULT_SPEED,
   SPEEDS,
   STEP_TICKS,
   createPressGuard,
@@ -144,6 +145,33 @@ describe('speeds', () => {
   it('offers 1x and is ordered', () => {
     expect(SPEEDS).toContain(1);
     expect([...SPEEDS]).toEqual([...SPEEDS].sort((a, b) => a - b));
+  });
+
+  /**
+   * The set is pinned, value by value, because the failure it guards against is
+   * silent. The picker used to run 0.5× to 8×, and the owner's report of every
+   * tab was that it moved far too fast to follow anything: the whole range is
+   * that one halved, slot for slot, so the ceiling is 4× and the slot that ran
+   * at 2× now runs at 1×. Nothing on screen says which range is in force — a
+   * later edit that puts 8 back, or that relabels rather than slows, looks
+   * exactly like this one in a diff and reads as "faster" only to someone
+   * watching the tab. So the numbers are asserted here rather than derived, and
+   * a change to them has to be a change to this test as well.
+   */
+  it('runs the halved set, 0.25× to 4×, with 1× the middle slot and the default', () => {
+    expect([...SPEEDS]).toEqual([0.25, 0.5, 1, 2, 4]);
+    expect(DEFAULT_SPEED).toBe(1);
+    // The middle of five, so the range is symmetric about the default: two
+    // halvings below it and two doublings above.
+    expect(SPEEDS.indexOf(DEFAULT_SPEED)).toBe(2);
+    expect(SPEEDS).toHaveLength(5);
+    expect(Math.max(...SPEEDS)).toBe(4);
+    expect(Math.min(...SPEEDS)).toBe(0.25);
+  });
+
+  /** Each rate is its neighbour doubled, which is what keeps the factors exact. */
+  it('steps by factors of two', () => {
+    expect(SPEEDS.map((rate) => rate * 2).slice(0, -1)).toEqual([...SPEEDS].slice(1));
   });
 });
 
@@ -446,8 +474,15 @@ describe('the speed control', () => {
     return options().find((o) => o.getAttribute('aria-checked') === 'true')?.textContent;
   }
 
+  /** The option by the rate on its face, so no test pins a rate to a slot number. */
+  function optionFor(multiplier: number): MElement {
+    const option = options().find((o) => o.textContent === `${multiplier}×`);
+    expect(option, `${multiplier}×`).toBeDefined();
+    return option as MElement;
+  }
+
   it('shows every rate at once, with the one in force marked', () => {
-    expect(options().map((o) => o.textContent)).toEqual(SPEEDS.map((m) => `${m}×`));
+    expect(options().map((o) => o.textContent)).toEqual(['0.25×', '0.5×', '1×', '2×', '4×']);
     expect((dom as Harness).findAll((el) => el.tagName === 'select')).toEqual([]);
     expect(checked()).toBe('1×');
     // Roving tabindex: tabbing in lands on the rate that is actually running.
@@ -455,19 +490,33 @@ describe('the speed control', () => {
     expect(options().find((o) => o.tabIndex === 0)?.textContent).toBe('1×');
   });
 
+  /**
+   * The label is the multiplier, not a name for it. Halving the range would be
+   * worth nothing if the slot marked 1× still handed the engine the old 2× —
+   * the tab would run at the rate it always did and the readouts, which a
+   * reader times against the clock, would be quoting a rate nobody is running.
+   */
+  it('hands the engine exactly the rate written on the option pressed', () => {
+    for (const multiplier of SPEEDS) fire(optionFor(multiplier), 'click');
+    expect(speeds).toEqual([...SPEEDS]);
+    // And the accessible name says the same number as the visible one.
+    expect(options().map((o) => o.getAttribute('aria-label'))).toEqual(
+      SPEEDS.map((m) => `${m} times speed`),
+    );
+  });
+
   it('reports a rate once when it changes, and never for the one already set', () => {
-    const [half, one, two] = options();
-    fire(two as MElement, 'click');
+    fire(optionFor(2), 'click');
     expect(speeds).toEqual([2]);
     expect(checked()).toBe('2×');
 
     // Pressing the option already in force is a no-op, as it is in every radio
     // group: the engine must not be handed a rate it is already running at.
-    fire(two as MElement, 'click');
+    fire(optionFor(2), 'click');
     expect(speeds).toEqual([2]);
 
-    fire(half as MElement, 'click');
-    fire(one as MElement, 'click');
+    fire(optionFor(0.5), 'click');
+    fire(optionFor(1), 'click');
     expect(speeds).toEqual([2, 0.5, 1]);
   });
 
@@ -495,8 +544,11 @@ describe('the speed control', () => {
     // something true rather than nothing.
     handle?.setSpeed(5);
     expect(checked()).toBe('4×');
+    // 8 is the ceiling this picker used to offer; it now pins to the new one.
+    handle?.setSpeed(8);
+    expect(checked()).toBe('4×');
     handle?.setSpeed(0.1);
-    expect(checked()).toBe('0.5×');
+    expect(checked()).toBe('0.25×');
     handle?.setSpeed(1);
     expect(checked()).toBe('1×');
     // setSpeed is the shell telling the control what the engine is doing, so it
@@ -506,9 +558,11 @@ describe('the speed control', () => {
 
   it('moves the tile by index rather than by laying out five columns', () => {
     const group = (dom as Harness).find((el) => el.getAttribute('role') === 'radiogroup');
-    expect(group?.style.getPropertyValue('--seg-n')).toBe(String(SPEEDS.length));
-    expect(group?.style.getPropertyValue('--seg-i')).toBe(String(SPEEDS.indexOf(1)));
-    fire(options()[4] as MElement, 'click');
+    expect(group?.style.getPropertyValue('--seg-n')).toBe('5');
+    // The tile opens over the middle slot, which is where the default rate sits.
+    expect(group?.style.getPropertyValue('--seg-i')).toBe('2');
+    expect(SPEEDS.indexOf(DEFAULT_SPEED)).toBe(2);
+    fire(optionFor(4), 'click');
     expect(group?.style.getPropertyValue('--seg-i')).toBe('4');
   });
 });

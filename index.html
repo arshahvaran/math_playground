@@ -15,7 +15,12 @@
          step with whichever one is showing. -->
     <meta name="theme-color" content="#e8ecef" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#15181b" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" href="/math_playground/icon.svg" type="image/svg+xml" />
+    <!-- Relative, never root-absolute: the dev server prepends the base to a
+         leading slash, and /math_playground/math_playground/icon.svg is
+         answered by the SPA fallback with this very file, so the tab showed no
+         icon. `%BASE_URL%` is expanded and then prepended too. The page is only
+         ever served from the base, so a bare name resolves right in both. -->
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
 
     <!-- Archivo for words, Martian Mono for measurements. The axis ranges are
          trimmed to what theme.css actually asks for; display=swap keeps text

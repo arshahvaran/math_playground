@@ -64,6 +64,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  // A stubbed clock left in place would decide the next test's scheduler.
+  vi.unstubAllGlobals();
   // The harness's `window` is one object across installs, so a stub left on it
   // would silently decide the next test's environment.
   const history = dom?.window.history as unknown as Record<string, unknown> | undefined;
@@ -169,6 +171,92 @@ describe('first paint', () => {
     // which are painted on the background layer and nowhere else.
     await Promise.resolve();
     expect(layer('stage__bg').calls.length).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe('the scheme key and the plate', () => {
+  /**
+   * Scheme-dependent pens, the way theme.css supplies them. Every colour token
+   * answers with the scheme's own sentinel, so whichever pen a tab reaches for
+   * last, its value says which scheme it was read in.
+   */
+  function stubSchemePens(harness: Harness): void {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    globals['getComputedStyle'] = () => ({
+      position: '',
+      getPropertyValue: (name: string): string => {
+        if (name === '--canvas-label-font') return '12px system-ui, sans-serif';
+        if (name === '--canvas-line-width') return '1';
+        if (name === '--canvas-particle-radius') return '2';
+        if (!name.startsWith('--')) return '';
+        return harness.document.documentElement.getAttribute('data-theme') === 'dark'
+          ? DARK_PEN
+          : LIGHT_PEN;
+      },
+    });
+  }
+
+  const LIGHT_PEN = 'rgb(17, 17, 17)';
+  const DARK_PEN = 'rgb(238, 238, 238)';
+
+  /** Every pen currently loaded on the background layer. */
+  function backgroundPens(): string[] {
+    const bg = layer('stage__bg') as unknown as Record<string, unknown>;
+    return [bg['strokeStyle'], bg['fillStyle']].filter(
+      (pen): pen is string => typeof pen === 'string',
+    );
+  }
+
+  it('repaints the apparatus in the new scheme instead of leaving it invisible', async () => {
+    // The owner's report, in one test: he toggled to dark and the Galton pegs
+    // went. A `<canvas>` keeps the pens it was painted with, the apparatus all
+    // lives on the background layer, and that layer repaints only on init,
+    // resize and parameter change — so the pens stayed light over a bed that
+    // had gone to #0e1214. A page *loaded* dark was always right, which is why
+    // the tokens looked innocent and the defect looked like a colour choice.
+    await boot('#/galton', stubSchemePens);
+    expect(backgroundPens().every((pen) => pen === LIGHT_PEN)).toBe(true);
+
+    const before = backgroundPaints();
+    fire(byLabel(dom, 'Dark scheme') as MElement, 'click');
+
+    expect(dom.document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(backgroundPaints()).toBeGreaterThan(before);
+    expect(backgroundPens()).not.toHaveLength(0);
+    expect(backgroundPens().every((pen) => pen === DARK_PEN)).toBe(true);
+  });
+
+  it('follows the OS, not only the masthead key, and on more than one tab', async () => {
+    // The reader who has never pressed the key is still following the OS, and
+    // that is a different code path through the shell. Arcsine rather than
+    // Galton because the complaint was made about four tabs, and the axes here
+    // are painted by the same once-only background pass.
+    await boot('#/arcsine', stubSchemePens);
+    expect(backgroundPens().every((pen) => pen === LIGHT_PEN)).toBe(true);
+
+    const before = backgroundPaints();
+    dom.setMedia('(prefers-color-scheme: dark)', true);
+
+    expect(dom.document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(backgroundPaints()).toBeGreaterThan(before);
+    expect(backgroundPens()).not.toHaveLength(0);
+    expect(backgroundPens().every((pen) => pen === DARK_PEN)).toBe(true);
+  });
+
+  it('does not restart a finished run over a change of ink', async () => {
+    // A resize goes through advance(), because the geometry really did change
+    // and what was computed for the old plate may be worthless. A scheme change
+    // is not that: nothing about the simulation moved, and restarting would
+    // throw away a measurement the reader was reading.
+    await boot('#/galton?rows=12&balls=400');
+    fastForward(8);
+    const landed = ballsLanded();
+    expect(landed).toBeGreaterThan(0);
+
+    fire(byLabel(dom, 'Dark scheme') as MElement, 'click');
+    vi.advanceTimersByTime(600);
+
+    expect(ballsLanded()).toBe(landed);
   });
 });
 
@@ -366,6 +454,20 @@ function settleFully(): void {
   vi.advanceTimersByTime(3000);
 }
 
+/**
+ * A clock that advances one millisecond per reading, replacing the machine's.
+ *
+ * `settleSlice()` reads the clock four times around each batch and decides
+ * whether to yield from the difference, so under the real clock what it decides
+ * is a property of how busy the machine is. One millisecond a reading is enough
+ * for the 24 ms slice to expire after a fixed number of batches, which puts the
+ * yield in the same place on a loaded CI box as on an idle laptop.
+ */
+function stepClock(): void {
+  let reading = 0;
+  vi.stubGlobal('performance', { now: () => (reading += 1) });
+}
+
 /** The page's one live region. */
 function summary(): string {
   return byClass(dom, 'readouts__summary')[0]?.textContent ?? '';
@@ -383,6 +485,16 @@ describe('the reduced-motion settle', () => {
     // opening sentence is the observable — it is held until the measurement it
     // describes exists — so finding it unspoken here means slices were still
     // owed when activate() returned, instead of 400 ms of frozen page.
+    //
+    // The clock is the test's, not the machine's. Read against real
+    // `performance.now()` this asserted on how fast the box happened to be: the
+    // settle scheduler decides when to yield by measuring itself, so on a
+    // loaded machine one batch could outrun the 400 ms budget and the settle
+    // finished inside activate() with nothing owed — a genuine failure of the
+    // thing being asserted, arriving at random. A clock that advances a
+    // millisecond per reading makes the slice boundary land in the same place
+    // every run, on every machine.
+    stepClock();
     await bootReduced('#/dla');
     expect(summary()).toBe('');
 

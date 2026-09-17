@@ -25,7 +25,7 @@ import { createFacts, type FactsHandle } from './ui/facts';
 import { createReadouts, headlineOf, sentenceOf, type ReadoutsHandle } from './ui/readouts';
 import { createShell } from './ui/shell';
 import { createStory, type StoryHandle } from './ui/story';
-import { createTransport, type TransportHandle } from './ui/transport';
+import { createTransport, DEFAULT_SPEED, type TransportHandle } from './ui/transport';
 import { findViz, registry } from './viz/registry';
 
 /**
@@ -57,7 +57,9 @@ const FAST_FORWARD_TICKS = 240;
  *
  * A press is a bulk skip and paints a frame, not a film — but a visualization
  * that renders incrementally has to be handed the chance to. 24 ticks is one
- * frame of simulated time at 8×, and it keeps the chaos game's un-painted
+ * 60 Hz frame of simulated time at 24× — comfortably past the 4× ceiling the
+ * transport offers, which is the point: it bounds the backlog whatever the
+ * picker is set to. It keeps the chaos game's un-painted
  * backlog inside the 32,768-point ring its incremental path needs. `settle()`
  * deliberately does not pass it: nobody is watching a cold start, and a paint
  * per 24 ticks over a 36,000-tick settle would be 1,500 of them.
@@ -108,6 +110,13 @@ const FAST_FORWARD_PAINT_TICKS = 24;
  * slices that were still to come.
  */
 const SETTLE_PROBE_TICKS = 1;
+/**
+ * The rungs an unmeasurable settle batch climbs, rather than jumping to
+ * `SETTLE_MAX_BATCH_TICKS` on the strength of a clock that resolved nothing.
+ * 64 → 512 → 4,096 → the cap.
+ */
+const SETTLE_FREE_BATCH_START = 64;
+const SETTLE_FREE_BATCH_GROWTH = 8;
 const SETTLE_MAX_BATCH_TICKS = 4_800;
 const SETTLE_MAX_TICKS = 36_000;
 const SETTLE_BUDGET_MS = 400;
@@ -164,9 +173,14 @@ const router = createRouter();
  * could hide the throw from the console.
  */
 const bootFallback = [...root.children].find((el) => el.classList.contains('boot-fallback'));
-const shell = createShell(root, registry, (id) => {
-  router.navigate(id);
-});
+const shell = createShell(
+  root,
+  registry,
+  (id) => {
+    router.navigate(id);
+  },
+  repaintForScheme,
+);
 bootFallback?.remove();
 const regions = shell.regions;
 const engine = createEngine(() => instance);
@@ -453,6 +467,50 @@ function matchingPresetId(): string | null {
  * because the last experiment had finished, which simply starts again. The one
  * stopped state left alone is the one the reader asked for.
  */
+/**
+ * Repaint the plate in the scheme that is now on the page.
+ *
+ * The canvas pens are a snapshot of the CSS theme, and a bitmap keeps whatever
+ * it was painted with. CSS restyles the plate's *bed* on a scheme change, but
+ * the two bitmaps on it are ours, and every piece of apparatus a tab draws —
+ * Galton's pegs, Buffon's floorboards, the Monte Carlo square and circle, the
+ * arcsine axes, DLA's launch circle, the orbits centre of mass — lives on the
+ * background layer, which by design repaints only on init, resize and parameter
+ * change. So a reader who pressed the scheme key kept the light pens on a dark
+ * bed and watched the apparatus disappear, while a page *loaded* in the dark
+ * scheme was perfectly correct. That asymmetry is why the tokens looked
+ * innocent: both schemes' values were right all along, and nothing re-read them.
+ *
+ * The shell calls this, rather than the shell being watched for it: `applyScheme()`
+ * is the one place the scheme is decided — the masthead key and the OS both go
+ * through it — so there is no second source to keep in step, and no
+ * `MutationObserver` on an attribute that only this app ever writes.
+ *
+ * A repaint, not `advance()`: unlike a resize, nothing about the simulation has
+ * changed, and restarting a finished run would throw its result away over a
+ * change of ink.
+ *
+ * Both layers, unconditionally — not just the background, and not `draw()` only
+ * when the loop is stopped. Scheme-coloured furniture is not all on the
+ * background: DLA's launch circle and this tab's axes, centre of mass and key
+ * are painted on the foreground every frame. Leaving those to the next frame
+ * made the toggle non-atomic, and "the next frame" is not a promise the shell
+ * can make — `requestAnimationFrame` does not run in a background tab, and is
+ * throttled in several others, so the plate could sit half-converted for as
+ * long as nobody was looking at it and then be correct the moment they were.
+ * `draw()` is required not to mutate the simulation, so an extra one is free of
+ * consequence, and this is a keypress, not a frame.
+ */
+function repaintForScheme(): void {
+  const inst = instance;
+  const ctx = vizCtx;
+  // Called once during createShell(), before there is a route to repaint.
+  if (!inst || !ctx) return;
+  ctx.theme = readCanvasTheme(regions.stage);
+  inst.drawBackground?.();
+  inst.draw();
+}
+
 function advance(): void {
   const inst = instance;
   if (!inst) return;
@@ -553,9 +611,10 @@ function teardown(): void {
   stopWatching();
   engine.stop();
   // The multiplier is engine state and the picker is per-route DOM, rebuilt at
-  // 1×. Without this a tab left at 8× hands the next visualization eight times
-  // the rate its own transport says it is running at.
-  engine.setSpeed(1);
+  // `DEFAULT_SPEED`. Without this a tab left at 4× hands the next visualization
+  // four times the rate its own transport says it is running at. Imported
+  // rather than written as 1 so the two cannot drift apart.
+  engine.setSpeed(DEFAULT_SPEED);
   instance?.destroy();
   instance = null;
   unResize?.();
@@ -713,6 +772,7 @@ function activate(viz: Viz, route: Route): void {
     advance();
   });
 
+
   // The plate and the ledger before anything asynchronous: a webfont request
   // that is blackholed rather than refused is a promise that never settles, so
   // painting behind one leaves both canvases blank and the ledger empty for the
@@ -807,6 +867,7 @@ function settle(): void {
   settleTicks = 0;
   settleSpentMs = 0;
   settlePerTick = -1;
+  settleFreeBatch = 0;
   // Baseline: the slices are measured against the state the run is in now, not
   // against whatever the previous settle left in the snapshot.
   emissionMoved();
@@ -819,6 +880,8 @@ let settleTicks = 0;
 let settleSpentMs = 0;
 /** ms per tick: −1 before the probe has run, 0 for a batch that measured as free. */
 let settlePerTick = -1;
+/** The rung the free-batch escalation has reached; 0 before it has started. */
+let settleFreeBatch = 0;
 
 function cancelSettle(): void {
   settleTimer = clearTimer(settleTimer);
@@ -874,13 +937,33 @@ function endSettle(): void {
 
 /**
  * What the last batch cost per tick is the only honest estimate of what the next
- * one will, so the next batch is whatever fits in the slice that is left. A
- * batch that measured as free — a cheap tab on a clock too coarse to see it —
- * takes the cap rather than dividing by zero.
+ * one will, so the next batch is whatever fits in the slice that is left.
+ *
+ * A batch that measured as free needs care, and used to get none: the one-tick
+ * probe costs less than `performance.now()` can resolve on most tabs, so
+ * `settlePerTick` came back 0 and the very next batch took the 4,800 cap — an
+ * un-yielded run of 4,800 ticks chosen on the strength of a measurement that
+ * said nothing. On a tab where that cost more than the 400 ms budget, the whole
+ * settle happened inside it and the loop exited having never once handed the
+ * thread back, which is the exact failure this scheduler exists to prevent. It
+ * showed up as a test that passed on an idle machine and failed on a busy one.
+ *
+ * So an unmeasurable batch escalates instead of leaping: 64, 512, 4,096, cap.
+ * Each rung is re-measured, and the first one the clock can actually see hands
+ * over to the estimate above. Three rungs is enough to reach the cap on a tab
+ * genuinely that cheap, and no single rung can spend a budget it has no evidence
+ * it can afford.
  */
 function batchFor(leftMs: number): number {
   if (settlePerTick < 0) return SETTLE_PROBE_TICKS;
-  if (settlePerTick === 0) return SETTLE_MAX_BATCH_TICKS;
+  if (settlePerTick === 0) {
+    settleFreeBatch =
+      settleFreeBatch === 0
+        ? SETTLE_FREE_BATCH_START
+        : Math.min(SETTLE_MAX_BATCH_TICKS, settleFreeBatch * SETTLE_FREE_BATCH_GROWTH);
+    return settleFreeBatch;
+  }
+  settleFreeBatch = 0;
   return Math.max(1, Math.min(SETTLE_MAX_BATCH_TICKS, Math.floor(leftMs / settlePerTick)));
 }
 

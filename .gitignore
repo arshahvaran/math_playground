@@ -5,6 +5,9 @@ dist/
 .DS_Store
 Thumbs.db
 coverage/
+# Screenshots written by a verification run, like dist/ and coverage/: generated,
+# reproducible, and not worth a megabyte an inspection in the history.
+.verify-shots/
 *.log
 .env
 .env.*

@@ -231,6 +231,24 @@
   --accent-ink: light-dark(#ffffff, #17110d);
   --accent-text: light-dark(#b8300f, #ef5b33); /* 5.10 · 5.52 · 4.61 · 6.06 */
 
+  /* ---- The site mark: the plate-and-peg figure beside the wordmark, and the
+     one place vermilion is spent on something that is neither current nor
+     moving. A brand lockup is exempt from the rubrication rule above for the
+     same reason SC 1.4.11 exempts a logotype — it names the thing, it does not
+     report a state — and the words beside it stay --ink.
+
+     The bed is a dark tile in BOTH schemes, because that is the mark the owner
+     already has on his tab and in his other repositories. In light it is the
+     page ink at 15.00:1 and needs nothing around it; in dark it drops to the
+     sunk ground, where it is 1.08:1 against the page and would be a hole, so it
+     takes a --line ring in the dark scheme alone. Because the tile is dark
+     either way, its contents are one value each rather than a pair:
+
+       pegs (--tick)     4.29 on the light bed · 5.59 on the dark one
+       stream, curve     3.71 · 5.69   (--accent, which does lift in dark) */
+  --mark-bed: light-dark(#15181b, #0c0f11);
+  --mark-ring: light-dark(transparent, #333a3e);
+
   /* Agreement with theory, drawn in the drafting pen. A reading that matches
      its reference is printed in the reference's ink. There is no warn colour:
      deviation is the resting state of a converging estimate, not a fault, so it
@@ -459,15 +477,29 @@
      of its own — which is what makes the two a scale instead of two unrelated
      numbers, and what keeps the second clamp() out of the file.
 
-     It was --t-18: 18 px of wordmark under a 42 px title at 1,440 px, so the
-     name of the site was 43 % of the name of one of its tabs and read as a
-     breadcrumb. 0.78 puts it at 32.8 / 30 / 23.4 px at 1,440 / 1,024 / 375 px —
-     second only to the title in the Archivo scale, ahead of every other word on
-     the page, and still clearly subordinate to the subject of the screen. The
-     40 px hero numeral is larger than both and is meant to be: it is the one
+     It was --t-18: 18 px of wordmark under a 42 px title, then 0.78 of the
+     title, and the owner has now asked for it bigger twice. The ratio is 1: the
+     name of the site and the name of the tab are set at the SAME size, 42 px at
+     1,440 px and 30 px at 375 px, and the two are told apart by width and
+     weight instead — the wordmark is Archivo 800 at wdth 125 %, the title 700
+     at 96 %. It does not go above 1. A site name larger than the subject of the
+     screen is a masthead shouting over its own content, and it is the mark
+     beside it, not the type size, that does the identifying now.
+
+     THE min() IS A FIT CONSTRAINT, NOT A SECOND SCALE. Below about 395 px the
+     lockup — mark, gap and fifteen letters at wdth 125 % — wants more than the
+     row it is in, and the words wrap under the mark. 7.6vw is the size at which
+     they still fit a 320 px screen inside its two 16 px gutters, with the whole
+     lockup measured rather than guessed (11.4 × the font size, of which 10.1 is
+     the text). Above that width the title-derived size is the smaller of the
+     two and the cap never binds. vw and not rem on purpose: the thing being
+     fitted is the SCREEN, and a reader at 200 % text gets the cap, the wrap
+     the masthead was built for, and no sideways document.
+
+     The 40 px hero numeral is larger than both and is meant to be: it is the one
      number the whole page exists to show, and it is Martian Mono, so it never
      competes with either of these for the same reading. */
-  --wordmark-size: calc(var(--title-size) * 0.78);
+  --wordmark-size: min(calc(var(--title-size) * 1.0), 7.6vw);
 
   --wght-body: 420;
   --wght-ui: 460;
@@ -735,16 +767,27 @@ canvas {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--s-4);
+  /* Asymmetric on purpose: 16 px between the lockup and the toggle while they
+     share a line, 8 px between the two LINES once the row gives up. A wrapped
+     masthead is already the widest chrome on a phone, and a full 16 px band of
+     nothing under the site name is the most expensive way to say so. */
+  gap: var(--s-2) var(--s-4);
   min-height: var(--header-h);
   padding: var(--s-4) var(--gutter) 0;
 }
 
-/* No `white-space: nowrap`: "Math Playground" is two words and the break
+/* The wordmark is a LOCKUP: the site mark, a gap, and the two words. Both the
+   mark and the gap are sized in `em`, so the whole thing is driven by the one
+   font-size above it and there is no second number to keep in step.
+
+   No `white-space: nowrap`: "Math Playground" is two words and the break
    between them is the one the reader can afford. The width axis stays at 125 %
    — it is the wordmark's identity — and the display tracking comes with the
-   size, because 125 % width at 33 px sets loose without it. */
+   size, because 125 % width at 42 px sets loose without it. */
 .masthead__wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34em;
   min-width: 0;
   font-family: var(--font-display);
   font-size: var(--wordmark-size);
@@ -756,6 +799,45 @@ canvas {
   text-decoration: none;
 }
 
+/* 0.92em against a cap height of ~0.72em: a little more than the caps, which is
+   what stops a square mark reading as smaller than the letters beside it. It
+   never shrinks — `flex: none` — so a long name takes the wrap rather than
+   squeezing the figure. The underline on hover belongs to the words, so the
+   mark is excluded from it below. */
+.masthead__mark {
+  flex: none;
+  width: 0.92em;
+  height: 0.92em;
+}
+
+.masthead__mark-bed {
+  fill: var(--mark-bed);
+  stroke: var(--mark-ring);
+}
+
+.masthead__mark-peg {
+  fill: var(--tick);
+}
+
+.masthead__mark-floor {
+  fill: none;
+  stroke: var(--tick);
+  stroke-linecap: round;
+}
+
+/* Two rules and not one with a presentation attribute for the difference: a
+   `fill` attribute on the element loses to any CSS declaration at all, so a
+   filled mark inside a stroked group has to say so here. */
+.masthead__mark-ink {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.masthead__mark-ball {
+  fill: var(--accent);
+}
+
 /* The scheme toggle. Two states, aria-pressed, one glyph that fills as the
    scheme darkens. It is a .key.key--icon and takes all of its geometry from
    there; this rule exists so the masthead can find it. */
@@ -764,8 +846,11 @@ canvas {
   margin-inline-start: auto;
 }
 
+/* The underline is on the WORDS, not on the lockup: a text-decoration set on
+   the flex container is drawn across the mark's box and the gap as well, which
+   turns a hover state into a strike through the logo. */
 @media (hover: hover) and (pointer: fine) {
-  .masthead__wordmark:hover {
+  .masthead__wordmark:hover .masthead__name {
     text-decoration: underline;
     text-decoration-thickness: 2px;
     text-underline-offset: 4px;
@@ -2971,12 +3056,14 @@ input.window:disabled {
   }
 
   /* In the deck the cluster cannot wrap, so the speed control loses its
-     full-width basis and becomes one more item on the scrolling row. Thirteen
-     rem is five 2.6rem slots, which holds "0.5×" at the default text size and
-     scrolls rather than shrinking past it. */
+     full-width basis and becomes one more item on the scrolling row. Fourteen
+     rem is five 2.8rem slots, which holds "0.25×" — the widest label since the
+     rates were halved — at the default text size, and scrolls rather than
+     shrinking past it. At 13rem the slot was 40.4 px against 39.7 px of ink,
+     which fits only until a text-only zoom or a fallback mono face. */
   .segmented.transport__speed {
     flex: none;
-    width: 13rem;
+    width: 14rem;
     margin-inline-start: var(--s-1);
   }
 
@@ -3155,6 +3242,12 @@ input.window:disabled {
     --line: CanvasText;
     --stroke: CanvasText;
     --tick: CanvasText;
+    /* The site mark's tile is a literal dark value in both schemes, and a dark
+       tile in a LIGHT high-contrast theme would swallow its own CanvasText
+       pegs. Here it is the system's ground with a system ring, and the figure
+       inside it keeps the system's own ink and highlight. */
+    --mark-bed: Canvas;
+    --mark-ring: CanvasText;
     --ink: CanvasText;
     --ink-muted: CanvasText;
     --ink-soft: CanvasText;
@@ -3372,6 +3465,11 @@ input.window:disabled {
     --window-ink-muted: #000000;
     --mat: transparent;
     --line: #000000;
+    /* The site mark's tile is a solid dark slab nearly half an inch square at
+       the wordmark's size. On paper it is drawn as an outline: the same figure,
+       without the ink. */
+    --mark-bed: #ffffff;
+    --mark-ring: #000000;
     --viz-max-h: 4in;
   }
 

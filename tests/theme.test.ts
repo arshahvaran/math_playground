@@ -271,7 +271,8 @@ describe('the figure head', () => {
  * Board text and compare it to the Math Playground, you can see that it's very
  * very very small." Measured at 1,440 px: 18 px of wordmark under a 42 px
  * title, so the name of the site was 43 % of the name of one of its tabs and
- * read as a breadcrumb.
+ * read as a breadcrumb. A first pass took it to 0.78 of the title and the owner
+ * asked again — "the font size is still small" — so it is now 1.
  *
  * The fix is a RATIO rather than a second size, which is what makes the two a
  * scale instead of two unrelated numbers — and what keeps the file's one
@@ -280,19 +281,49 @@ describe('the figure head', () => {
 describe('the type scale', () => {
   const wordmark = token('--wordmark-size');
   const ratio = Number(/\*\s*(\d*\.?\d+)\s*\)/.exec(wordmark)?.[1] ?? NaN);
+  /** The viewport-width cap inside the min(): the fit constraint, in vw. */
+  const capVw = Number(/,\s*(\d*\.?\d+)vw\s*\)/.exec(wordmark)?.[1] ?? NaN);
 
   it('sizes the wordmark from the title, so the two move together', () => {
     expect(wordmark).toMatch(/calc\(\s*var\(--title-size\)\s*\*/);
     expect(decl(rule(RULES, '.masthead__wordmark'), 'font-size')).toBe('var(--wordmark-size)');
   });
 
-  it('puts the wordmark second in the scale, well clear of every other label', () => {
-    // Comparable to the title, and unambiguously below it: the subject of the
-    // screen still wins. 0.78 is 32.8 px against 42 at 1,440 px.
-    expect(ratio).toBeGreaterThan(0.6);
-    expect(ratio).toBeLessThan(1);
+  it('sets the site name and the tab name at the same size, and never larger', () => {
+    // Parity, asked for twice: 42 px against 42 at 1,440 px, 30 against 30 at
+    // 375. The two are told apart by width and weight — 800 at wdth 125 %
+    // against 700 at 96 % — and by the mark, not by the size.
+    expect(ratio).toBeGreaterThanOrEqual(1);
+    // Above 1 the masthead is shouting over the subject of the screen.
+    expect(ratio).toBeLessThanOrEqual(1);
     // And far above the next thing down, which is the 20 px section title.
     expect(ratio * px('2.625rem')).toBeGreaterThan(px(token('--t-20')) * 1.4);
+  });
+
+  /**
+   * The cap inside the min() is the only thing keeping the lockup on one line
+   * at 320 px, and it is arithmetic across three declarations written far
+   * apart: the cap itself, the mark's width and the gap beside it. Enlarging
+   * any of the three without re-checking wraps "Playground" under the mark on
+   * the narrowest phone in use, which is exactly the shape the owner has now
+   * complained about twice.
+   */
+  it('keeps the whole lockup inside a 320 px screen', () => {
+    // Measured in Chrome with Archivo loaded: "Math Playground" at 800 / wdth
+    // 125 % / −0.021em sets 331.2 px at a font-size of 32.76.
+    const TEXT_EM = 331.2 / 32.76;
+    const em = (value: string): number => Number(/(\d*\.?\d+)em/.exec(value)?.[1] ?? NaN);
+    const mark = em(decl(rule(RULES, '.masthead__mark'), 'width'));
+    const gap = em(decl(rule(RULES, '.masthead__wordmark'), 'gap'));
+    const size = (capVw / 100) * 320;
+    const gutter = px(decl(rule(narrow, ':root'), '--gutter'));
+    expect(size * (TEXT_EM + mark + gap)).toBeLessThanOrEqual(320 - 2 * gutter);
+  });
+
+  it('lets the title win again the moment the screen can afford it', () => {
+    // The cap is a fit constraint, not a second scale: by 420 px it must
+    // already be the larger of the two, so every width above it is pure parity.
+    expect((capVw / 100) * 420).toBeGreaterThan(px('1.875rem'));
   });
 
   it('still holds clamp() to a single appearance', () => {
@@ -366,6 +397,61 @@ describe('the canvas pens', () => {
     const media = blocks(RULES, '@media (prefers-color-scheme: dark)').join('\n');
     expect(media).toMatch(/:root:not\(\[data-theme="light"\]\)\s+\.plate/);
     expect(media).toMatch(/--canvas:\s*#0e1214/);
+  });
+
+  /**
+   * The apparatus has to be visible against the bed it is drawn on, in BOTH
+   * schemes. "When I turn to the dark mode, the colour of the black dots should
+   * be a bit different, so when I convert to dark mode I can still see the
+   * black dots. And then the same for Buffon's needle, the grid lines."
+   *
+   * One rule in four places: --grid is the experiment's own geometry — Galton's
+   * pegs, Buffon's floorboards, Monte Carlo's square and circle, the arcsine
+   * chart's axis — and --grid-soft is the furniture around it. A dark bed with
+   * a near-black --grid on it is four invisible tabs and no error anywhere,
+   * because both values are perfectly legal CSS. This is the assertion that
+   * makes it a failure instead.
+   */
+  describe('read against the bed they are drawn on', () => {
+    const channel = (c: number): number =>
+      c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4;
+
+    /** WCAG 2.x relative luminance of a `#rrggbb`. */
+    function luminance(hex: string): number {
+      const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+      return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+    }
+
+    function contrast(a: string, b: string): number {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+    }
+
+    /** The light bed is the unconditional `.plate` block; dark is the override. */
+    const beds = {
+      light: rule(RULES, '.plate'),
+      dark: rule(RULES, ':root[data-theme="dark"] .plate'),
+    };
+
+    for (const [scheme, body] of Object.entries(beds)) {
+      const bed = decl(body, '--canvas');
+
+      it(`draws the experiment's own geometry well clear of the ${scheme} bed`, () => {
+        // Well above the 3:1 a graphical object owes its background: --grid IS
+        // the thing being looked at, not a boundary near it.
+        expect(contrast(decl(body, '--grid'), bed)).toBeGreaterThan(7);
+      });
+
+      it(`keeps the ${scheme} furniture recessive but present`, () => {
+        // 3:1 exactly — these carry load (an axis, a floor line, a launch
+        // circle) and are allowed to be quiet, never absent.
+        expect(contrast(decl(body, '--grid-soft'), bed)).toBeGreaterThanOrEqual(3);
+        // And quieter than the geometry, or the hierarchy is inverted.
+        expect(contrast(decl(body, '--grid-soft'), bed)).toBeLessThan(
+          contrast(decl(body, '--grid'), bed),
+        );
+      });
+    }
   });
 
   it('forces the light bed back for print, where the dark one is 96 % coverage', () => {

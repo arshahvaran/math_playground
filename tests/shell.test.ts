@@ -152,6 +152,48 @@ describe('the chrome', () => {
     ]);
   });
 
+  /**
+   * The site mark.
+   *
+   * "I can see that you have that favicon — I can see it on the tab in my
+   * browser. So probably use that icon to the left side of the Math
+   * Playground." It is inline rather than an <img> so it can be drawn from the
+   * scheme's own tokens, it is the FIRST child of the link so it is painted to
+   * the left of the words in a left-to-right document, and it adds nothing to
+   * the accessible name — the two words beside it already are that name.
+   */
+  it('draws the site mark inside the wordmark, left of the words and unnamed', () => {
+    mount();
+    const wordmark = byClass(dom, 'masthead__wordmark')[0];
+    const first = wordmark?.children[0];
+    expect(first?.tagName).toBe('svg');
+    expect(first?.className).toBe('masthead__mark');
+    expect(first?.getAttribute('aria-hidden')).toBe('true');
+    // Not a control and not a link of its own: no name, no role, no tab stop.
+    expect(first?.getAttribute('role')).toBeNull();
+    expect(first?.getAttribute('aria-label')).toBeNull();
+    expect(first?.getAttribute('focusable')).toBe('false');
+    expect(first?.textContent).toBe('');
+    expect(wordmark?.children[1]?.className).toBe('masthead__name');
+    expect(wordmark?.children[1]?.textContent).toBe('Math Playground');
+  });
+
+  /**
+   * The mark is part of the home link, not a second target beside it — a logo
+   * that navigates where the words already navigate is two controls for one
+   * destination. Pressing it is therefore the same no-op-when-already-here
+   * selection every other path into a route goes through.
+   */
+  it('makes the mark part of the same link, with the same selection', () => {
+    mount();
+    const wordmark = byClass(dom, 'masthead__wordmark')[0];
+    expect(byClass(dom, 'masthead__mark')[0]?.parentNode).toBe(wordmark);
+    const second = registry[1];
+    if (second) shell?.setActiveTab(second.id);
+    fire(wordmark as MElement, 'click', { button: 0 });
+    expect(selected).toEqual([registry[0]?.id]);
+  });
+
   it('navigates by the tab strip alone', () => {
     mount();
     expect(byLabel(dom, 'Previous visualization')).toBeUndefined();
@@ -255,6 +297,53 @@ describe('the scheme key', () => {
     dom.setMedia(DARK_OS, true);
     expect(painted()).toBe('light');
     expect(schemeKey().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('tells the plate every time the scheme moves, whoever moved it', () => {
+    // The plate is a bitmap, and CSS does not reach into one. Galton's pegs,
+    // Buffon's floorboards, the Monte Carlo square and circle and the arcsine
+    // axes are all painted with pens copied out of the theme at mount, so a
+    // scheme change that nobody reports leaves the light pens on a dark bed and
+    // the apparatus disappears. This is the report.
+    const repaints = vi.fn();
+    selected = [];
+    shell = createShell(
+      dom.app as unknown as HTMLElement,
+      registry,
+      (id) => selected.push(id),
+      repaints,
+    );
+
+    // The scheme the page opens in is not a change: there is no plate yet, and
+    // the first route reads the theme for itself.
+    expect(repaints).not.toHaveBeenCalled();
+
+    fire(schemeKey(), 'click');
+    expect(painted()).toBe('dark');
+    expect(repaints).toHaveBeenCalledTimes(1);
+
+    fire(schemeKey(), 'click');
+    expect(painted()).toBe('light');
+    expect(repaints).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports an OS scheme change too, not only a press', () => {
+    // The reader who has never touched the key is still following the OS, and
+    // that path goes through the same applyScheme(). A report wired to the
+    // click handler alone would miss it.
+    const repaints = vi.fn();
+    selected = [];
+    shell = createShell(
+      dom.app as unknown as HTMLElement,
+      registry,
+      (id) => selected.push(id),
+      repaints,
+    );
+    repaints.mockClear();
+
+    dom.setMedia(DARK_OS, true);
+    expect(painted()).toBe('dark');
+    expect(repaints).toHaveBeenCalledTimes(1);
   });
 
   it('lets a stored preference outrank the OS', () => {

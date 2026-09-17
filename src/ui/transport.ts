@@ -53,8 +53,32 @@ export interface TransportHandle {
   destroy(): void;
 }
 
-/** Speed multipliers, in the order they appear in the picker. */
-export const SPEEDS: readonly number[] = [0.5, 1, 2, 4, 8];
+/**
+ * Speed multipliers, in the order they appear in the picker.
+ *
+ * The set is the old one — 0.5 through 8 — halved slot for slot, and each
+ * option's multiplier is the number on its own face. The owner's report is that
+ * every rate on offer ran far too fast to follow, so the range moves down
+ * rather than being relabelled: the slot that used to run at 2× now runs at 1×,
+ * and the ceiling is 4× rather than 8×. Relabelling instead would have been the
+ * cheaper edit and the wrong one — the readouts are read against the wall
+ * clock, and a picker whose "1×" is not one times the simulation's own rate
+ * makes every number on the page unverifiable.
+ *
+ * Powers of two about the default, 2⁻² … 2², so the range is symmetric in the
+ * exponent and the five factors are exact in binary — the engine multiplies a
+ * frame's elapsed milliseconds by one of these and accumulates the product, and
+ * a factor like 0.3 would bank a rounding error every frame.
+ */
+export const SPEEDS: readonly number[] = [0.25, 0.5, 1, 2, 4];
+
+/**
+ * The rate the picker opens at: the middle slot, two halvings above the floor
+ * and two doublings below the ceiling. The engine starts here too, and
+ * `teardown()` in main.ts returns it here between tabs, so a picker rebuilt for
+ * the next visualization and the engine it drives agree without being told.
+ */
+export const DEFAULT_SPEED = 1;
 
 /** Holding Fast-forward keeps skipping — one burst per press would be a stutter. */
 const HOLD_REPEAT_MS = 100;
@@ -383,7 +407,7 @@ interface Segmented {
  * A `<select>` was the wrong instrument for this: it hides four of the five
  * choices behind a press, it renders as the operating system's own menu rather
  * than as part of the bench, and there is nothing to discover in it — the whole
- * set is five characters wide and fits on the row. A radio group shows all five,
+ * set is five short labels and fits on the row. A radio group shows all five,
  * says which one is in force without being opened, and gets its keyboard model
  * from the platform pattern rather than from a listbox nobody can see.
  *
@@ -395,7 +419,7 @@ interface Segmented {
  */
 function createSegmented(onChange: (multiplier: number) => void): Segmented {
   const options: HTMLButtonElement[] = [];
-  let index = SPEEDS.indexOf(1);
+  let index = SPEEDS.indexOf(DEFAULT_SPEED);
   if (index < 0) index = 0;
 
   const tile = h('span', { class: 'segmented__tile', 'aria-hidden': 'true' });

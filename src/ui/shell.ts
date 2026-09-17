@@ -136,6 +136,62 @@ function glyph(...paths: readonly Attrs[]): SVGSVGElement {
   );
 }
 
+/**
+ * The site mark: a plotter bed holding a peg lattice, the vermilion stream
+ * entering it and the bell curve it leaves behind. The same figure as
+ * `public/icon.svg`, which is what a reader already sees on the browser tab —
+ * the geometry is duplicated because a favicon is fetched as a document and
+ * cannot read a custom property, while this copy is drawn from the scheme's own
+ * tokens and so inverts with the page.
+ *
+ * It is `aria-hidden`: the two words beside it already name the site, and a
+ * second accessible name on the same link is one the reader has to disambiguate
+ * for nothing.
+ *
+ * Simplified from the favicon it was taken from. That one carried three balls
+ * and a four-hump scallop at 55 % opacity, which at 32 px is nine dots and a
+ * smear; this is five pegs, one stream and one bell, and every mark in it is
+ * opaque.
+ */
+function siteMark(): SVGSVGElement {
+  const peg = (cx: number, cy: number): SVGCircleElement =>
+    svg('circle', { class: 'masthead__mark-peg', cx, cy, r: 1.5 });
+
+  return svg(
+    'svg',
+    { class: 'masthead__mark', viewBox: '0 0 32 32', 'aria-hidden': 'true', focusable: 'false' },
+    // Inset by half the ring's width, so the ring is drawn inside the viewBox
+    // rather than sliced in half by its edge.
+    svg('rect', {
+      class: 'masthead__mark-bed',
+      x: 0.5,
+      y: 0.5,
+      width: 31,
+      height: 31,
+      rx: 6.5,
+    }),
+    peg(8, 11.5),
+    peg(16, 11.5),
+    peg(24, 11.5),
+    peg(12, 17.5),
+    peg(20, 17.5),
+    // The floor the pile lands on. Without it the bell is a curve floating
+    // between two pegs and a dot, and at 32 px that composition reads as a
+    // face — two eyes, a nose and a mouth. A baseline under it makes it a
+    // chart again, and it is the Galton board's own floor besides.
+    svg('path', { class: 'masthead__mark-floor', d: 'M4.5 28h23', 'stroke-width': 1.4 }),
+    // The stream entering on the centre line, the ball one bounce off it, and
+    // the distribution the two of them add up to.
+    svg('path', { class: 'masthead__mark-ink', d: 'M16 4v4.5', 'stroke-width': 2.4 }),
+    svg('circle', { class: 'masthead__mark-ball', cx: 13.5, cy: 14.6, r: 1.5 }),
+    svg('path', {
+      class: 'masthead__mark-ink',
+      d: 'M5 28C10 28 11 21 16 21s6 7 11 7',
+      'stroke-width': 1.8,
+    }),
+  );
+}
+
 /** localStorage throws outright in some privacy modes; a missing preference is not an error. */
 function readStore(key: string): string | null {
   try {
@@ -186,6 +242,12 @@ export function createShell(
   root: HTMLElement,
   vizList: readonly Viz[],
   onSelect: (id: string) => void,
+  /**
+   * The scheme on the page has changed. Optional because the shell is complete
+   * without it — the page restyles itself either way; what needs telling is
+   * whoever is holding a canvas, whose pens CSS cannot reach.
+   */
+  onSchemeChange?: () => void,
 ): ShellHandle {
   const cleanups: Array<() => void> = [];
 
@@ -225,10 +287,15 @@ export function createShell(
     ),
   );
 
+  // The mark and the words are one link, not two elements side by side: the
+  // lockup is what a reader aims at, and a logo beside a link that goes to the
+  // same place is two targets for one destination. The words keep their own
+  // element so the hover underline can belong to them alone.
   const wordmark = h(
     'a',
     { class: 'masthead__wordmark', href: `#/${defaultId}` },
-    'Math Playground',
+    siteMark(),
+    h('span', { class: 'masthead__name' }, 'Math Playground'),
   );
 
   const masthead = h('header', { class: 'masthead' }, wordmark, themeToggle);
@@ -417,10 +484,22 @@ export function createShell(
    * The scheme the page opens in follows the reader's OS, and the masthead
    * toggle wins over it in both directions. Both values are written explicitly
    * so there is one source of truth for the attribute.
+   *
+   * Every scheme change in the app passes through here, which is why this is
+   * where the canvas is told. A `<canvas>` keeps the pens it was painted with,
+   * so CSS reaching the plate is not the same as the apparatus on it following.
+   *
+   * A *change*, though, and the scheme the page opens in is not one: there is
+   * no plate yet when this first runs, and the first route reads the theme for
+   * itself. Reporting it would also fire the callback from inside
+   * `createShell()`, before the caller's own module bindings exist.
    */
+  let schemeSettled = false;
+
   function applyScheme(dark: boolean): void {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     themeToggle.setAttribute('aria-pressed', String(dark));
+    if (schemeSettled) onSchemeChange?.();
   }
 
   /**
@@ -442,6 +521,7 @@ export function createShell(
   const storedScheme = readStore(SCHEME_KEY);
   const chosen = storedScheme === 'dark' || storedScheme === 'light';
   applyScheme(chosen ? storedScheme === 'dark' : (darkQuery?.matches ?? false));
+  schemeSettled = true;
 
   if (!chosen && darkQuery) {
     // Until the reader picks a scheme, the OS is still in charge and the page

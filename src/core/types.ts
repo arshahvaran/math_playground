@@ -366,6 +366,12 @@ export interface VizContext {
   rng: Rng;
   /** Updated in place by the shell before `onParamChange()` / `reset()`. */
   params: ParamValues;
+  /**
+   * Read the pens off this object inside `draw()` / `drawBackground()`; do not
+   * capture them at `create()`. The shell replaces this in place when the
+   * colour scheme changes and then calls `drawBackground()`, so a tab that
+   * closed over the old pens keeps painting the previous scheme's ink.
+   */
   theme: CanvasTheme;
   /** Publish results. Call at most once per frame; the shell throttles rendering. */
   emit(readouts: readonly Readout[]): void;

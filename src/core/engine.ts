@@ -18,20 +18,28 @@ const MAX_FRAME_MS = 250;
  * Longest *simulation* run we will do in one frame, in ticks.
  *
  * `MAX_FRAME_MS` bounds the clock and then `elapsed * speed` multiplies it
- * straight back out, so at the 8× the transport offers a clamped 250 ms frame
- * asked for 2,000 ms of simulation — 240 steps, the same burst size as a
- * Fast-forward press, in a frame that is supposed to paint. That is a stable bad
- * state rather than a spiral: if 240 ticks cost more than 250 ms of wall clock
- * the clamp binds again on the next frame and keeps binding, and the tab sits at
- * about 1.5 fps until the run ends. Measured on the Ising sheet at 128², 8× plus
- * a held Fast-forward yielded the main thread once every 389 ms.
+ * straight back out, so at the 8× the transport offered when this was written a
+ * clamped 250 ms frame asked for 2,000 ms of simulation — 240 steps, the same
+ * burst size as a Fast-forward press, in a frame that is supposed to paint. That
+ * is a stable bad state rather than a spiral: if 240 ticks cost more than 250 ms
+ * of wall clock the clamp binds again on the next frame and keeps binding, and
+ * the tab sits at about 1.5 fps until the run ends. Measured on the Ising sheet
+ * at 128², 8× plus a held Fast-forward yielded the main thread once every
+ * 389 ms.
  *
  * Clamping the work as well as the clock fixes it for every visualization at
  * once, current and future, where per-tab tuning would not: losing simulated
  * time is already the accepted trade for a frame nobody watched, and this
- * applies it in the unit that actually costs money. 32 is two frames of 8× at
- * 60 Hz, so an honest 8× never touches it, and it also keeps the chaos game's
- * points-per-paint under the ring its incremental path needs.
+ * applies it in the unit that actually costs money.
+ *
+ * The ceiling has since come down to 4× (`SPEEDS` in ui/transport.ts), which
+ * only widens the margin: a clamped 250 ms frame now asks for 120 ticks, and an
+ * honest 4× 60 Hz frame is 8, so 32 sits four frames clear where it was two.
+ * The cap is deliberately not derived from `SPEEDS` — it is a bound on work per
+ * frame, and it has to hold for a `setSpeed()` the picker never offered — but it
+ * is checked against every rate the picker does offer in engine.test.ts. It also
+ * keeps the chaos game's points-per-paint under the ring its incremental path
+ * needs.
  */
 const MAX_TICKS_PER_FRAME = 32;
 
