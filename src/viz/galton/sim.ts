@@ -51,10 +51,10 @@ import type { Rng } from '../../core/types';
  *    lattice, not merely a different arc through the same pins.
  *
  * The strike angle is then whatever those imply, which over twelve rows spans
- * 7° to 38° of shoulder with a standard deviation of 7°, and two balls taking
+ * 7° to 38° of shoulder with a standard deviation of 8°, and two balls taking
  * the same route through the same pins trace visibly different arcs. Between
  * contacts the flight is a parabola with only a small lateral correction on
- * it — three per cent of gravity at the median, ten at the ninetieth
+ * it — two to three per cent of gravity at the median, ten at the ninetieth
  * percentile — so the arc is flown rather than steered.
  *
  * A drawn collision is also **checked before it is used**: `planFlight` flies
