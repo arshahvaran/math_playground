@@ -217,9 +217,12 @@ describe('galton sim: bookkeeping', () => {
         expect(b.y).toBeGreaterThanOrEqual(-1);
         expect(b.y).toBeLessThan(rows);
         // The peg it left and the peg it is flying to. Contact happens a
-        // contact radius from a peg's centre, so that is the margin.
+        // contact radius from a peg's centre, so that is the margin. The peg
+        // it left is two rows up when the ball is sailing over a pin, which is
+        // why the sim publishes the row rather than leaving it to be assumed.
+        const f = b.fromRow;
         const to = popcount32(b.path & ((1 << b.row) - 1)) - b.row / 2;
-        const from = b.row === 0 ? 0 : popcount32(b.path & ((1 << (b.row - 1)) - 1)) - (b.row - 1) / 2;
+        const from = f < 0 ? 0 : popcount32(b.path & ((1 << f) - 1)) - f / 2;
         expect(b.x).toBeGreaterThanOrEqual(Math.min(from, to) - C - 1e-9);
         expect(b.x).toBeLessThanOrEqual(Math.max(from, to) + C + 1e-9);
         checked++;
@@ -285,6 +288,8 @@ interface Sample {
   vx: number;
   vy: number;
   row: number;
+  /** The peg row this flight left: `row − 1`, or `row − 2` over a sailed-over pin. */
+  fromRow: number;
   done: boolean;
   settled: boolean;
   path: number;
@@ -307,7 +312,8 @@ function trace(sim: GaltonSim, balls: number, dt: number): Sample[][] {
     if (++steps > 200_000) throw new Error('no rest');
     sim.forEachActive((b, i) => {
       out[i]!.push({
-        t, x: b.x, y: b.y * ASPECT, vx: b.vx, vy: b.vy, row: b.row, done: b.done, settled: b.settled,
+        t, x: b.x, y: b.y * ASPECT, vx: b.vx, vy: b.vy, row: b.row, fromRow: b.fromRow,
+        done: b.done, settled: b.settled,
         path: b.path, bin: b.bin, stack: b.stack, strike: b.strike, impact: b.impact,
       });
     });
@@ -375,14 +381,21 @@ describe('galton sim: motion', () => {
     const balls = 100;
     const sim = make(3, { rows, p: 0.5, balls, dropRate: 1e6 });
     const runs = trace(sim, balls, 1);
+    // Arrival speeds are grouped by how far the flight fell, because a ball
+    // that sailed over a pin has had two rows to accelerate and arrives faster.
+    // Averaging the two together would hide both the plateau and the reason a
+    // skip looks different on the plate.
     const arrival = Array.from({ length: rows }, () => [] as number[]);
+    const overPin: number[] = [];
     const strike = Array.from({ length: rows }, () => [] as number[]);
     for (const run of runs) {
       for (let i = 1; i < run.length; i++) {
         const prev = run[i - 1]!;
         const cur = run[i]!;
         if (cur.row !== prev.row && prev.row < rows) {
-          arrival[prev.row]!.push(Math.hypot(prev.vx, prev.vy));
+          const speed = Math.hypot(prev.vx, prev.vy);
+          if (prev.row - prev.fromRow >= 2) overPin.push(speed);
+          else arrival[prev.row]!.push(speed);
           strike[prev.row]!.push(cur.t);
         }
       }
@@ -390,23 +403,34 @@ describe('galton sim: motion', () => {
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
     const v = arrival.map(mean);
     const t = strike.map(mean);
-    // Measured on the default board: 17.5, 20.6, 21.6, 21.9 pitch/s, then 22.0 ± 0.1.
+    // Measured on the default board, one-row arrivals only: 17.4, 20.7, 21.9,
+    // 23.0 pitch/s, then 23.5 ± 0.6. The plateau is broader than the ± 0.1 of a
+    // board where every ball fell one row at a time, because a ball that has
+    // sailed over a pin arrives at 30 and leaves fast enough to still be quick
+    // a row or two later. It is still flat: nothing accumulates down the plate.
     expect(v[1]!).toBeGreaterThan(v[0]! * 1.1);
     expect(v[2]!).toBeGreaterThan(v[1]!);
     expect(v[3]!).toBeGreaterThan(v[2]!);
-    for (let r = 4; r < rows; r++) expect(Math.abs(v[r]! / v[3]! - 1)).toBeLessThan(0.03);
+    for (let r = 4; r < rows; r++) expect(Math.abs(v[r]! / v[3]! - 1)).toBeLessThan(0.06);
+    // Two rows of falling instead of one, so the ball arrives half again as
+    // fast: v² = 2gh with h doubled is √2, and the pin it left gave it a start.
+    expect(overPin.length).toBeGreaterThan(50);
+    expect(mean(overPin)).toBeGreaterThan(1.2 * v[rows - 1]!);
     // The row-to-row transit is not a fixed duration: the entry drop is the
-    // shortest, and a ball reaches the twelfth row about 1.6 s after release.
+    // shortest, and a ball reaches the twelfth row about 1.4 s after release —
+    // quicker than the 1.6 s of a board that stopped at every row, because a
+    // ball that sails over a pin spends no time bouncing on it.
     expect(t[1]! - t[0]!).toBeGreaterThan(t[0]!);
-    expect(t[rows - 1]!).toBeGreaterThan(1_500);
-    expect(t[rows - 1]!).toBeLessThan(1_750);
+    expect(t[rows - 1]!).toBeGreaterThan(1_300);
+    expect(t[rows - 1]!).toBeLessThan(1_600);
   });
 
-  it('rebounds off every peg upward and toward the side the route chose', () => {
+  it('rebounds off every peg it meets upward and toward the side the route chose', () => {
     const balls = 100;
     const sim = make(5, { rows, p: 0.5, balls, dropRate: 1e6 });
     const runs = trace(sim, balls, 1);
     let bounces = 0;
+    let sailedOver = 0;
     for (const run of runs) {
       for (let i = 1; i < run.length; i++) {
         const prev = run[i - 1]!;
@@ -416,9 +440,15 @@ describe('galton sim: motion', () => {
         expect(Math.sign(cur.vx), `ball path ${cur.path.toString(2)} row ${prev.row}`).toBe(s);
         expect(cur.vy).toBeLessThan(0);
         bounces++;
+        // A flight of two rows passed a pin without touching it. The decision
+        // that pin would have made was made anyway — it is in the route, drawn
+        // at release — so the pins met plus the pins passed is still one per
+        // row for every ball, which is what keeps the bins exactly binomial.
+        sailedOver += cur.row - cur.fromRow - 1;
       }
     }
-    expect(bounces).toBe(balls * rows);
+    expect(bounces + sailedOver).toBe(balls * rows);
+    expect(sailedOver).toBeGreaterThan(0);
   });
 
   it('bounces higher off a peg it arrives at faster', () => {
@@ -579,18 +609,30 @@ describe('galton sim: every bounce is its own bounce', () => {
     const runs = trace(sim, balls, 0.5);
     const strikes = strikesPerBall(runs, rows);
 
-    // No ball is missing a strike, and every one is on the shoulder.
+    // Every strike a ball made is on the shoulder, and it made one at every
+    // row it did not sail over — `strikesPerBall` leaves those rows empty, so
+    // the count is the rows met rather than the rows there are.
+    let met = 0;
     for (const perRow of strikes) {
       expect(perRow.length).toBe(rows);
-      for (const theta of perRow) {
-        expect(theta).toBeGreaterThanOrEqual(STRIKE_MIN - 1e-9);
-        expect(theta).toBeLessThanOrEqual(STRIKE_MAX + 1e-9);
+      const made = [...perRow.keys()].filter((r) => perRow[r] !== undefined);
+      expect(made.length).toBeGreaterThan(rows / 2);
+      met += made.length;
+      for (const r of made) {
+        expect(perRow[r]!).toBeGreaterThanOrEqual(STRIKE_MIN - 1e-9);
+        expect(perRow[r]!).toBeLessThanOrEqual(STRIKE_MAX + 1e-9);
       }
     }
+    expect(met).toBeLessThan(balls * rows);
 
     // No two balls follow an identical arc: the sequence of impact parameters
-    // is the arc's fingerprint, and all four hundred of them are distinct.
-    const fingerprints = new Set(strikes.map((perRow) => perRow.map((t) => t.toFixed(9)).join(' ')));
+    // is the arc's fingerprint — with the pins it passed marked, since which
+    // pins a ball met is part of its arc — and all four hundred are distinct.
+    const fingerprints = new Set(
+      strikes.map((perRow) =>
+        Array.from({ length: rows }, (_, r) => perRow[r]?.toFixed(9) ?? '-').join(' '),
+      ),
+    );
     expect(fingerprints.size).toBe(balls);
 
     // And the spread within one route is wide, not a rounding error. Measured
@@ -752,6 +794,103 @@ describe('galton sim: every bounce is its own bounce', () => {
     sim.forEachBall((b) => {
       if (b.settled) expect(b.impact).toBe(0);
     });
+  });
+});
+
+/**
+ * The complaint this answers: "when the ball hits one of those gray dots, and
+ * then it goes for the next one, it directly hits the other one without any
+ * other path that it can go."
+ *
+ * It was true. Every flight ended on the pin in the very next row, so the only
+ * thing that could differ between two balls was the shape of the hop, never
+ * which pins it touched. A real board is not like that: a ball comes off a pin
+ * flat, clears the next one and comes down a whole pitch across.
+ *
+ * What must not change while that becomes possible is the arithmetic. The
+ * route is `rows` Bernoulli draws made at release, the landing bin is its
+ * popcount, and a pin that is passed rather than struck has still made its
+ * decision — so the bins stay exactly Binomial(rows, p). These tests hold both
+ * ends of that: the motion varies, the statistics do not.
+ */
+describe('galton sim: a ball that sails over a pin', () => {
+  const rows = 12;
+
+  /** Every flight of every ball, as the rows it left and arrived at. */
+  function flights(seed: number, n: number, board?: BoardPhysics): { from: number; to: number; path: number }[] {
+    const sim = make(seed, { rows, p: 0.5, balls: n, dropRate: 1e6 });
+    if (board) sim.setBoard(board);
+    const out: { from: number; to: number; path: number }[] = [];
+    const at = new Map<number, number>();
+    while (sim.landed < n) {
+      sim.step(1);
+      sim.forEachActive((b, i) => {
+        if (b.row >= rows || at.get(i) === b.row) return;
+        at.set(i, b.row);
+        out.push({ from: b.fromRow, to: b.row, path: b.path });
+      });
+    }
+    return out;
+  }
+
+  it('covers one row, or two over a pin it passed, and never more', () => {
+    const spans = new Map<number, number>();
+    for (const f of flights(31, 120)) spans.set(f.to - f.from, (spans.get(f.to - f.from) ?? 0) + 1);
+    expect([...spans.keys()].sort((a, b) => a - b)).toEqual([1, 2]);
+    // The entry drop and every ordinary hop are the ones of span 1.
+    expect(spans.get(2)!).toBeGreaterThan(50);
+  });
+
+  it('only sails when the route goes the same way twice, which is what puts the pin beside its path', () => {
+    for (const f of flights(31, 120)) {
+      if (f.to - f.from < 2) continue;
+      const a = (f.path >>> f.from) & 1;
+      const b = (f.path >>> (f.from + 1)) & 1;
+      expect(a, `path ${f.path.toString(2)} rows ${f.from}..${f.to}`).toBe(b);
+    }
+  });
+
+  it('is common enough to be seen and rare enough that the board still bounces', () => {
+    // Every contact is a coin the route has to allow and the plate has to have
+    // room for, so this is a band, not a number. Measured on the default plate
+    // at twelve rows: about one flight in eight.
+    const fs = flights(31, 120);
+    const sailed = fs.filter((f) => f.to - f.from >= 2).length;
+    expect(sailed / fs.length).toBeGreaterThan(0.05);
+    expect(sailed / fs.length).toBeLessThan(0.3);
+  });
+
+  it('gives up on it where a plate has no room, rather than flying through a pin', () => {
+    // Sixteen rows on the narrowest phone: a pin plus a ball is a third of the
+    // pitch, and the corridor over a pin is not there to be flown. The board
+    // does not insist — it takes the ordinary hop, and `never enters a peg`
+    // above is what holds it to that.
+    const tight = flights(31, 40, boardFor(320, 480, rows, 5_000));
+    const roomy = flights(31, 40, boardFor(900, 700, rows, 5_000));
+    const share = (fs: typeof tight) => fs.filter((f) => f.to - f.from >= 2).length / fs.length;
+    expect(share(tight)).toBeLessThan(share(roomy));
+  });
+
+  it('leaves the bins exactly binomial: a pin passed still made its decision', () => {
+    // The whole guarantee in one line. The routes are drawn at release and the
+    // flight only shows them, so this is the same distribution the board had
+    // when every ball touched every row.
+    const balls = 20_000;
+    const sim = make(4, { rows, p: 0.5, balls, dropRate: 1e6 });
+    while (sim.landed < balls) sim.step(16);
+    const n = sim.bins.reduce((a, b) => a + b, 0);
+    expect(n).toBe(balls);
+    let mean = 0;
+    for (let k = 0; k <= rows; k++) mean += (k * (sim.bins[k] ?? 0)) / n;
+    // Binomial(12, ½): mean 6, sd of the mean √(12·¼/20000) = 0.012.
+    expect(mean).toBeCloseTo(6, 1);
+  });
+
+  it('decides it from the ball’s own stream, so the same seed sails over the same pins', () => {
+    const a = flights(31, 60);
+    const b = flights(31, 60);
+    expect(b).toEqual(a);
+    expect(flights(32, 60)).not.toEqual(a);
   });
 });
 

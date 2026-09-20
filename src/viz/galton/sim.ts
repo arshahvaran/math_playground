@@ -9,10 +9,10 @@ import type { Rng } from '../../core/types';
  * packed into a bitmask, so the landing bin is popcount(route) and the bin
  * counts are exactly Binomial(rows, p) by construction — identical for a seed
  * at every drop rate, step size and plate size. The *motion* is then real
- * ballistics along that route: free flight under gravity between pegs, a
- * restitution bounce off the curved surface of each peg the route names, and
- * a damped bounce on the pile. The route decides which side of a peg the ball
- * strikes; the physics decides how it gets there and what it does next.
+ * ballistics along that route: free flight under gravity, a restitution bounce
+ * off the curved surface of a pin, and a damped bounce on the pile. The route
+ * decides which side of a pin the ball passes; the physics decides how it gets
+ * there and what it does next.
  *
  * Why not a genuine collision model: a ball that grazes a peg tends to keep
  * its direction, so real collisions bias the bins — every physical Galton
@@ -24,11 +24,12 @@ import type { Rng } from '../../core/types';
  * A board on which every ball that goes right off a peg leaves it along the
  * same arc does not look like a board; it looks like a mechanism. On a real
  * one the ball meets the pin at a different point every time and leaves with a
- * different speed, so no two arcs between the same pair of pins are the same.
+ * different speed, so no two arcs between the same pair of pins are the same —
+ * and it does not even meet the same pins, because a flat, lively bounce
+ * clears the next pin altogether and comes down a pitch across.
  *
- * The collision is what carries that here, and it is **drawn, not solved**.
- * Two numbers come out of the ball's own bounce stream before every flight is
- * planned:
+ * All three are here, and all three are **drawn, not solved**. Three numbers
+ * come out of the ball's own bounce stream at every contact:
  *
  * 1. **The restitution this peg will give back**, somewhere between
  *    `PEG_RESTITUTION_MIN` and `PEG_RESTITUTION_MAX`. It is the dominant term,
@@ -36,24 +37,33 @@ import type { Rng } from '../../core/types';
  *    bounce has to leave much closer to the crown than a dead one to cover the
  *    same half pitch, so the impact parameter that results moves by tens of
  *    degrees across the band. It is also what makes the hop visibly taller or
- *    flatter — measured over twelve rows, hops run from 0.04 to 0.39 of a peg
- *    pitch, where the old board produced one height per row.
+ *    flatter — measured over twelve rows, hops run from nothing at all to 0.53
+ *    of a peg pitch about a median of 0.21, where the old board produced one
+ *    height per row.
  * 2. **Where on the next peg the ball is meant to land**, across the whole
  *    shoulder rather than at one nominal angle. A real board never presents
  *    the same target twice.
+ * 3. **Whether to sail over the next pin entirely** and land two rows down —
+ *    see `SKIP_CHANCE`, which also says when the route allows it and why the
+ *    plate often does not. About one flight in eight covers two rows on a
+ *    twelve-row plate, and that is the one thing on this board a reader can
+ *    see without being told: a ball takes a different *path* through the
+ *    lattice, not merely a different arc through the same pins.
  *
- * The strike angle is then whatever those two imply, which over twelve rows
- * spans 8° to 43° of shoulder with a standard deviation of 8°, and two balls
- * taking the same route through the same pegs trace visibly different arcs.
- * Between contacts the flight is a parabola with only a small lateral
- * correction on it — a fiftieth of gravity at the median, a twentieth at the
- * ninetieth percentile — so the arc is flown rather than steered.
+ * The strike angle is then whatever those imply, which over twelve rows spans
+ * 7° to 38° of shoulder with a standard deviation of 7°, and two balls taking
+ * the same route through the same pins trace visibly different arcs. Between
+ * contacts the flight is a parabola with only a small lateral correction on
+ * it — three per cent of gravity at the median, ten at the ninetieth
+ * percentile — so the arc is flown rather than steered.
  *
  * A drawn collision is also **checked before it is used**: `planFlight` flies
- * it against the pegs it has to get past and, where the draw would put the
- * ball through one, pulls it back toward a plain bounce and replans. That is
- * what lets the draws be wide without the lattice going soft on a narrow phone,
- * where a peg plus a ball is a third of the peg pitch.
+ * it through the lattice with `clears` and, where the draw would put the ball
+ * into a pin, pulls it back toward a plain bounce and replans; a flight over a
+ * pin that cannot be made to work is abandoned for the ordinary hop. That is
+ * what lets the draws be wide without the lattice going soft on a narrow
+ * phone, where a peg plus a ball is a third of the peg pitch and there is no
+ * room to sail over anything at all.
  *
  * ## Determinism
  *
@@ -297,6 +307,44 @@ const STRIKE_BISECTIONS = 16;
 const RETRY_PULL = [1, 0.55, 0.3, 0.12, 0] as const;
 
 /**
+ * How often a contact that could sail over the next pin is offered the chance.
+ *
+ * On a real board a ball does not visit every row. It comes off a pin flat and
+ * fast, clears the next one entirely, and lands a whole pitch across and two
+ * rows down — and the board stops looking like a machine handing each ball
+ * from pin to pin, which was the complaint this exists to answer.
+ *
+ * Whether a contact *can* is not this number's business. The route says where
+ * the ball has to be two rows down, and that is a full pitch across only when
+ * it goes the same way twice; the flight then has to get over the pin between
+ * without touching it, which on a crowded plate it often cannot. So this is
+ * the coin, the route is the permission, and `planFlight` is the veto — and
+ * when the veto falls the ball takes the ordinary hop instead. Measured on
+ * twelve rows of a desktop plate, about one contact in six ends up sailing.
+ *
+ * It is a coin rather than "always, when possible" on purpose. At certainty a
+ * ball that went right twice would sail over a pin *every* time, which is a
+ * rule an attentive reader would see: no ball would ever be seen taking two
+ * ordinary hops the same way. The board has to be able to do both.
+ */
+const SKIP_CHANCE = 0.5;
+
+/**
+ * The most lateral acceleration a two-row flight may carry, as a fraction of
+ * gravity, before it is refused and the ball takes the ordinary hop.
+ *
+ * Every flight closes the gap between where the rebound would go and where the
+ * route needs it with a constant lateral acceleration, and the whole claim of
+ * this board is that the correction is small enough to be read as an arc
+ * rather than as steering. A two-row flight is long, which makes the
+ * correction *smaller* for a given miss, but it is also where an impossible
+ * plan would hide: a skip the rebound cannot reach at any strike angle comes
+ * back as a large correction, not as a failure. Refusing it here is what keeps
+ * the residual at a fiftieth of gravity with skips on, as it was without them.
+ */
+const MAX_SKIP_STEER = 0.2;
+
+/**
  * How far either side of a bin's centre line the last peg's rebound may be
  * aimed, in bin widths. A ball has to fall through the mouth; a third of a bin
  * off centre is as far as it can cross and still be unmistakably in it.
@@ -407,6 +455,12 @@ export interface BallView {
   vy: number;
   /** Peg row the ball is flying toward, or `rows` once it is past the last peg. */
   row: number;
+  /**
+   * Peg row this flight left, −1 on the entry drop. Usually `row − 1`, and
+   * `row − 2` when the ball is sailing over a pin — see `SKIP_CHANCE`. The
+   * renderer does not need it; the tests measure the board's motion with it.
+   */
+  fromRow: number;
   /** Bit r set ⇔ the ball went right at peg row r. */
   path: number;
   /** Through the bin mouth: counted in `bins`. */
@@ -489,6 +543,9 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
   const flags = new Uint8Array(capacity);
   const phase = new Uint8Array(capacity);
   const row = new Uint8Array(capacity);
+  // The row the current flight left, −1 on the entry drop, so a flight of two
+  // rows can be told from one of a single row. Signed: −1 is a real value.
+  const fromRowOf = new Int8Array(capacity);
   const binIdx = new Uint8Array(capacity);
   const stackIdx = new Uint32Array(capacity);
   // The current segment: launch point and velocity, lateral and vertical
@@ -552,7 +609,7 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
   let owed = 1;
 
   const view: BallView = {
-    x: 0, y: 0, vx: 0, vy: 0, row: 0, path: 0, done: false, settled: false, bin: 0, stack: 0,
+    x: 0, y: 0, vx: 0, vy: 0, row: 0, fromRow: -1, path: 0, done: false, settled: false, bin: 0, stack: 0,
     age: 0, strike: 0, impact: 0,
   };
 
@@ -635,103 +692,79 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
   let evOutY = 0;
 
   /**
-   * Does the planned flight get past the peg it leaves and the peg it is
-   * flying to without passing through either?
+   * Does this flight get through the lattice without passing into a pin?
    *
-   * The end points are exempt by construction — the flight starts on one
-   * contact circle and ends on the other — so the samples run strictly
-   * between them. Two pegs is enough: a ball crosses half a pitch, and every
-   * other peg in either row is at least a pitch away from the corridor.
+   * The flight is sampled and every sample is tested against the pins it could
+   * be inside — the two rows its height straddles, and in each the one or two
+   * pins its lateral position falls between. That is the whole lattice, found
+   * by arithmetic rather than named in advance, and it is why this one
+   * function serves a flight of one row, a flight of two rows with a pin in
+   * the way, and the rebound coming back off a pin into the row above.
+   *
+   * Naming the pins in advance is what the board used to do, and the board
+   * outgrew it: a ball that has fallen two rows rebounds hard enough to reach
+   * a row further up than any hand-written list expected, and the pin it
+   * clipped was one nobody had thought to check.
+   *
+   * The two end points are the exception. A flight begins on the pin it leaves
+   * and ends on the pin it is flying to, so a margin that applied there would
+   * reject every flight there is: each of those two pins gets its margin ramped
+   * in over the quarter of the flight nearest its own end, and every other pin
+   * on the board is held at the full margin throughout.
+   *
+   * `deepestRow` is the last row this flight has any business with. The
+   * outbound check flies a rebound a whole row down to see whether it gets off
+   * the pin, and a ball a row below its pin is approaching the pin it is *for*
+   * — which this check knows nothing about, and would refuse it for. What
+   * happens down there belongs to the next flight, which is checked in full
+   * the moment it is planned.
    */
-  function clearsInbound(
+  function clears(
     x0: number,
     y0: number,
     vx: number,
     vy: number,
     ax: number,
     T: number,
-    fromX: number,
-    fromY: number,
-    hasFrom: boolean,
-    toX: number,
-    toY: number,
+    fromRow: number,
+    fromIndex: number,
+    toRow: number,
+    toIndex: number,
+    hasTo: boolean,
+    deepestRow: number,
   ): boolean {
-    for (let j = 1; j < CLEARANCE_SAMPLES; j++) {
+    const last = hasTo ? CLEARANCE_SAMPLES - 1 : CLEARANCE_SAMPLES;
+    const full = contact * OUTBOUND_MARGIN;
+    for (let j = 1; j <= last; j++) {
       const t = (T * j) / CLEARANCE_SAMPLES;
+      const u = j / CLEARANCE_SAMPLES;
       const x = x0 + vx * t + (ax * t * t) / 2;
       const y = y0 + vy * t + (g * t * t) / 2;
-      const u = j / CLEARANCE_SAMPLES;
-      // The margin arrives away from each contact and vanishes at it: the
-      // flight sits on one circle at t = 0 and on the other at t = T, so a
-      // margin that applied there would reject every flight there is.
-      const dxT = x - toX;
-      const dyT = y - toY;
-      const toR = contact * (1 + (OUTBOUND_MARGIN - 1) * Math.min(1, 4 * (1 - u)));
-      if (dxT * dxT + dyT * dyT < toR * toR) return false;
-      if (hasFrom) {
-        const dxF = x - fromX;
-        const dyF = y - fromY;
-        const fromR = contact * (1 + (OUTBOUND_MARGIN - 1) * Math.min(1, 4 * u));
-        if (dxF * dxF + dyF * dyF < fromR * fromR) return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * And does the rebound this plan chooses get *off* the peg cleanly?
-   *
-   * A bounce that gives back little speed from a contact well round the
-   * shoulder rises barely at all and comes straight back down onto the flank
-   * it left, which is a ball rolling off a pin rather than bouncing off one.
-   * On a roomy board that cannot happen; where a peg plus a ball is a third
-   * of the peg pitch it can, so the plan that produced the bounce is the
-   * plan that has to reject it. The outgoing flight has no lateral
-   * correction of its own yet, and it is about to be planned with a small
-   * one, so a plain parabola is the right approximation here.
-   */
-  function clearsOutbound(
-    x0: number,
-    y0: number,
-    vx: number,
-    vy: number,
-    r: number,
-    k: number,
-  ): boolean {
-    const T = fallTime(g, vy, ASPECT);
-    const pegX = k - r / 2;
-    const pegY = r * ASPECT;
-    // The peg itself, and its two parents in the row above where they exist:
-    // a lively bounce off a shallow strike hops high enough to reach back into
-    // the row it came from. Row r - 1 holds r pegs, so the apex has no parents
-    // at all and the ends of every row have one — checking a peg that is not
-    // there rejects a perfectly good bounce and costs the board its variety.
-    const upY = pegY - ASPECT;
-    const hasLeft = r >= 1 && k >= 1;
-    const hasRight = r >= 1 && k <= r - 1;
-    for (let j = 1; j <= CLEARANCE_SAMPLES; j++) {
-      const t = (T * j) / CLEARANCE_SAMPLES;
-      const x = x0 + vx * t;
-      const y = y0 + vy * t + (g * t * t) / 2;
-      // The margin has to arrive rather than apply from the first instant:
-      // the ball starts *on* the contact circle, so demanding clearance there
-      // rejects every bounce there is. It reaches full strength a quarter of
-      // the way through, by which time a bounce that is going to get clear has.
-      const ramp = Math.min(1, (4 * j) / CLEARANCE_SAMPLES);
-      const c2 = (contact * (1 + (OUTBOUND_MARGIN - 1) * ramp)) ** 2;
-      const dx = x - pegX;
-      const dy = y - pegY;
-      if (dx * dx + dy * dy < c2) return false;
-      if (!hasLeft && !hasRight) continue;
-      const dyUp = y - upY;
-      const upSq = dyUp * dyUp;
-      if (hasLeft) {
-        const dxL = x - (pegX - 0.5);
-        if (dxL * dxL + upSq < c2) return false;
-      }
-      if (hasRight) {
-        const dxR = x - (pegX + 0.5);
-        if (dxR * dxR + upSq < c2) return false;
+      // A pin reaches `contact` either side of its row, which is well under
+      // the row pitch, so the two rows the sample lies between are all there
+      // is to test — and the row above as well, one row of slack for the
+      // arithmetic to be honest about a sample sitting exactly on a line.
+      const nearest = Math.floor(y / ASPECT);
+      const rLo = Math.max(0, nearest - 1);
+      const rHi = Math.min(rows - 1, nearest + 1, deepestRow);
+      for (let r = rLo; r <= rHi; r++) {
+        const dy = y - r * ASPECT;
+        if (dy * dy >= full * full) continue;
+        // Pin k of row r sits at k − r/2, so the pins this sample lies between
+        // are the two whole numbers either side of x + r/2.
+        const kf = x + r / 2;
+        const kLo = Math.max(0, Math.floor(kf));
+        const kHi = Math.min(r, Math.ceil(kf));
+        for (let k = kLo; k <= kHi; k++) {
+          let rad = full;
+          if (r === fromRow && k === fromIndex) {
+            rad = contact * (1 + (OUTBOUND_MARGIN - 1) * Math.min(1, 4 * u));
+          } else if (hasTo && r === toRow && k === toIndex) {
+            rad = contact * (1 + (OUTBOUND_MARGIN - 1) * Math.min(1, 4 * (1 - u)));
+          }
+          const dx = x - (k - r / 2);
+          if (dx * dx + dy * dy < rad * rad) return false;
+        }
       }
     }
     return true;
@@ -740,6 +773,12 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
   /**
    * Plan the flight of ball `i` from (x0, y0) with velocity (vx, vy) to peg
    * row `r`, index `k`, and settle where on that peg's shoulder it strikes.
+   * Reports whether the plan flies: a flight over a pin is offered here and
+   * refused by the caller if this comes back false — see `SKIP_CHANCE`.
+   *
+   * `r` is `fromRow + 1` for an ordinary hop and `fromRow + 2` over a pin. The
+   * arithmetic below does not care which: the row it is flying to and the row
+   * it left are both given, and the fall time follows from the two heights.
    *
    * The vertical motion is exact: T is the time gravity takes to bring the
    * ball from y0 down to the contact point, so a ball arriving fast is
@@ -759,9 +798,10 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
    *
    * ## What makes one ball's arc different from the next
    *
-   * Two numbers are drawn from the ball's own bounce stream before that
-   * bisection runs, and between them they move the strike angle across most
-   * of the shoulder rather than pinning it to one answer:
+   * Two of the contact's three drawn numbers arrive here — the third decided
+   * whether this flight covers one row or two, and is the caller's — and
+   * between them they move the strike angle across most of the shoulder
+   * rather than pinning it to one answer:
    *
    * - **The restitution this peg will give back.** It is the dominant term,
    *   because the reach of a rebound goes as the square of its speed: a lively
@@ -777,22 +817,37 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
    * the consequence of a collision that differs every time, and two balls
    * taking the same route through the same pegs trace visibly different arcs.
    *
-   * The plan is then flown against the pegs it has to get past, going in
-   * (`clearsInbound`) and coming out again (`clearsOutbound`). A draw that
-   * would put the ball through one is pulled back toward the plain bounce and
-   * replanned — see `RETRY_PULL`. On a roomy board that almost never fires; on
-   * sixteen rows of a narrow phone, where a peg plus a ball is a third of the
-   * peg pitch and the corridor between two pegs is barely wider than the ball,
-   * it is what keeps the lattice solid.
+   * The plan is then flown through the lattice with `clears`, going in and
+   * coming out again. A draw that would put the ball into a pin is pulled back
+   * toward the plain bounce and replanned — see `RETRY_PULL`. On a roomy board
+   * that almost never fires; on sixteen rows of a narrow phone, where a peg
+   * plus a ball is a third of the peg pitch and the corridor between two pegs
+   * is barely wider than the ball, it is what keeps the lattice solid — and it
+   * is the whole of why a flight over a pin is offered rather than decreed.
    */
-  function planFlight(i: number, x0: number, y0: number, vx: number, vy: number, r: number, k: number): void {
+  function planFlight(
+    i: number,
+    x0: number,
+    y0: number,
+    vx: number,
+    vy: number,
+    r: number,
+    k: number,
+    fromRow: number,
+    rand0: number,
+    rand1: number,
+  ): boolean {
     const path = paths[i] ?? 0;
     const s = side(path, r);
 
-    // Both draws happen here, once, whatever the plan does with them: a retry
-    // must not consume a number, or the motion would stop being reproducible.
-    const drawRest = PEG_RESTITUTION_MIN + bounceRand(i) * (PEG_RESTITUTION_MAX - PEG_RESTITUTION_MIN);
-    const drawNext = STRIKE_MIN + bounceRand(i) * (STRIKE_MAX - STRIKE_MIN);
+    // The draws are the caller's, made once per contact, so neither a retry
+    // nor a refused skip costs a number: the ball's stream has to run the same
+    // way whatever the plan does with what it gave.
+    const drawRest = PEG_RESTITUTION_MIN + rand0 * (PEG_RESTITUTION_MAX - PEG_RESTITUTION_MIN);
+    const drawNext = STRIKE_MIN + rand1 * (STRIKE_MAX - STRIKE_MIN);
+    // Two rows covered in one flight: there is a row of pins in the way, and
+    // the plan has to earn it — see `SKIP_CHANCE` and `MAX_SKIP_STEER`.
+    const skip = r - fromRow >= 2;
 
     const lastRow = r + 1 >= rows;
     // Where across the bin's mouth the last peg's rebound is aimed, in [0, 1).
@@ -815,16 +870,15 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
       mouthY = rows * ASPECT;
     }
 
-    // The peg being left and the peg being flown to, for the clearance check.
-    const hasFrom = r >= 1;
-    const fromX = hasFrom ? pegIndex(path, r - 1) - (r - 1) / 2 : 0;
-    const fromY = hasFrom ? (r - 1) * ASPECT : 0;
-    const toX = k - r / 2;
-    const toY = r * ASPECT;
+    // The pin being left, for the clearance check's end-point exemption. It is
+    // not row r − 1 on a skip, and there is none at all on the entry drop.
+    const fromIndex = fromRow >= 0 ? pegIndex(path, fromRow) : -1;
 
     let e = PEG_RESTITUTION_MID;
     let afterX = 0;
     let afterY = 0;
+    /** Did an attempt clear the pegs it had to, rather than the loop running out? */
+    let flew = false;
 
     /** Lateral miss of the rebound's natural flight to `after`, for a strike at `theta`. */
     const evaluate = (theta: number): number => {
@@ -916,9 +970,17 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
       evaluate(bestTheta);
       theta = bestTheta;
       if (
-        clearsInbound(x0, y0, vx, vy, evAx, evT, fromX, fromY, hasFrom, toX, toY) &&
-        clearsOutbound(evXa, evYa, evOutX, evOutY, r, k)
+        clears(x0, y0, vx, vy, evAx, evT, fromRow, fromIndex, r, k, true, r) &&
+        // And the rebound this plan chooses has to get *off* the pin: a dead
+        // bounce from well round the shoulder comes straight back down onto
+        // the flank it left, which is a ball rolling off a pin rather than
+        // bouncing off one. It is flown as a plain parabola, because the small
+        // correction its own flight will carry is not known until that flight
+        // is planned, and OUTBOUND_MARGIN covers the difference.
+        clears(evXa, evYa, evOutX, evOutY, 0, fallTime(g, evOutY, ASPECT), r, k, 0, 0, false, r) &&
+        (!skip || Math.abs(evAx) <= MAX_SKIP_STEER * g)
       ) {
+        flew = true;
         break;
       }
     }
@@ -926,6 +988,7 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
     sRest[i] = e;
     phase[i] = FLIGHT;
     row[i] = r;
+    fromRowOf[i] = fromRow;
     sX[i] = x0;
     sY[i] = y0;
     sVx[i] = vx;
@@ -935,6 +998,7 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
     sTheta[i] = theta;
     sDur[i] = evT;
     sT[i] = 0;
+    return flew;
   }
 
   /** The flight into the bin: from the last peg's rebound down to the ball's place on the pile. */
@@ -943,6 +1007,7 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
     const T = fallTime(g, vy, outY - y0);
     phase[i] = BIN;
     row[i] = rows;
+    fromRowOf[i] = rows - 1;
     sX[i] = x0;
     sY[i] = y0;
     sVx[i] = vx;
@@ -1005,9 +1070,37 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
         const path = paths[i] ?? 0;
         const s = side(path, r);
         reflect(vx, vy, sTheta[i] ?? 0, s, sRest[i] ?? PEG_RESTITUTION_MIN);
+        // Out of the scratch and into locals before anything else runs:
+        // planning reuses `outX`/`outY`, so a refused plan would otherwise
+        // hand the flight that replaces it somebody else's velocity.
+        const launchX = outX;
+        const launchY = outY;
         const k = pegIndex(path, r) + (s > 0 ? 1 : 0);
-        if (r + 1 < rows) planFlight(i, x, y, outX, outY, r + 1, k);
-        else planBin(i, x, y, outX, outY);
+        if (r + 1 < rows) {
+          // Three draws per contact, always, in this order, whatever is done
+          // with them: the ball's stream must not depend on the plate.
+          const rand0 = bounceRand(i);
+          const rand1 = bounceRand(i);
+          const rand2 = bounceRand(i);
+          // Sailing over the next pin needs three things. The route has to go
+          // the same way twice, because that is what puts the ball a whole
+          // pitch across two rows down, with the passed pin beside its path
+          // rather than under it — the other case, where the route doubles
+          // back and the target is the pin *directly* below, is not flyable at
+          // all: a ball that leaves a pin and comes back to its centre line
+          // lands on the pin it left.
+          //
+          // And a skip never targets the last peg row. The flight into that
+          // row is the one that takes the ball its place in the pile, and the
+          // tick hands those places out in arrival order by parking every ball
+          // aimed at the row before it — a ball that jumped over that row
+          // would take its place out of turn. So `r + 2 <= rows - 2`.
+          if (r + 3 < rows && side(path, r) === side(path, r + 1) && rand2 < SKIP_CHANCE) {
+            const k2 = k + (side(path, r + 1) > 0 ? 1 : 0);
+            if (planFlight(i, x, y, launchX, launchY, r + 2, k2, r, rand0, rand1)) return;
+          }
+          planFlight(i, x, y, launchX, launchY, r + 1, k, r, rand0, rand1);
+        } else planBin(i, x, y, launchX, launchY);
         return;
       }
       case BIN:
@@ -1128,6 +1221,7 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
       view.vy = (sVy[i] ?? 0) + (sAy[i] ?? 0) * t;
     }
     view.row = row[i] ?? 0;
+    view.fromRow = fromRowOf[i] ?? -1;
     view.path = path;
     view.done = (f & DONE) !== 0;
     view.settled = (f & SETTLED) !== 0;
@@ -1152,7 +1246,9 @@ export function createSim(rng: Rng, params: GaltonParams, budget = DEFAULT_BUDGE
     flags[i] = 0;
     // From rest, one row pitch above the apex, on the centre line: no rebound
     // to aim, so the lateral drift onto the apex's shoulder is the residual.
-    planFlight(i, 0, -ASPECT, 0, 0, 0, 0);
+    // The entry drop leaves no peg, so it has no skip to offer and takes two
+    // draws where a contact takes three.
+    planFlight(i, 0, -ASPECT, 0, 0, 0, 0, -1, bounceRand(i), bounceRand(i));
     if (age > 0) advance(i, age);
   }
 
