@@ -468,6 +468,25 @@ function stepClock(): void {
   vi.stubGlobal('performance', { now: () => (reading += 1) });
 }
 
+/**
+ * A clock that never advances, so the settle spends no budget and runs to its
+ * tick ceiling instead of its time ceiling.
+ *
+ * The settle is bounded by 400 ms of REAL wall time, so how much of a run it
+ * finishes is a property of how busy the machine is. A test that asserts a
+ * measurement exists afterwards is then asserting machine speed: under a
+ * parallel suite the Galton board landed no balls at all and the test failed at
+ * random. Freezing the clock removes the time ceiling and leaves
+ * `SETTLE_MAX_TICKS`, which is a fixed number, so these tests measure what the
+ * settle GUARANTEES rather than what a fast laptop happens to get through.
+ *
+ * Not for the slicing test above, which needs the budget to expire — that one
+ * wants `stepClock()`.
+ */
+function frozenClock(): void {
+  vi.stubGlobal('performance', { now: () => 0 });
+}
+
 /** The page's one live region. */
 function summary(): string {
   return byClass(dom, 'readouts__summary')[0]?.textContent ?? '';
@@ -504,6 +523,7 @@ describe('the reduced-motion settle', () => {
   });
 
   it('re-settles after a knob instead of leaving the page unmeasured', async () => {
+    frozenClock();
     // A reduced-motion reader gets no autoplay, so a control that restarts the
     // run and walks away leaves an empty plate and a 40 px em dash — under a
     // permalink whose own fresh load settles. Same URL, two different screens.
@@ -520,6 +540,7 @@ describe('the reduced-motion settle', () => {
   });
 
   it('re-settles after a story chip', async () => {
+    frozenClock();
     await bootReduced('#/buffon');
     settleFully();
 

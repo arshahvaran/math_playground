@@ -474,7 +474,7 @@ function matchingPresetId(): string | null {
  * it was painted with. CSS restyles the plate's *bed* on a scheme change, but
  * the two bitmaps on it are ours, and every piece of apparatus a tab draws —
  * Galton's pegs, Buffon's floorboards, the Monte Carlo square and circle, the
- * arcsine axes, DLA's launch circle, the orbits centre of mass — lives on the
+ * arcsine axes, DLA's launch circle — lives on the
  * background layer, which by design repaints only on init, resize and parameter
  * change. So a reader who pressed the scheme key kept the light pens on a dark
  * bed and watched the apparatus disappear, while a page *loaded* in the dark
