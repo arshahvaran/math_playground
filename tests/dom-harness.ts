@@ -141,6 +141,16 @@ export class MElement extends MNode {
     const at = this.childNodes.indexOf(node);
     if (at >= 0) this.childNodes.splice(at, 1);
     node.parentNode = null;
+    // Detaching a subtree blurs whatever was focused inside it: a browser sends
+    // the focus to <body>, and a page that wanted it kept has to put it back.
+    // Without this the harness cannot see the defect restack()'''s focus-carry
+    // exists to prevent, and every assertion about carried focus passes whether
+    // the carrying code is there or not. Verified: with this line, deleting the
+    // held-focus test from restack() fails three tests in shell.test.ts.
+    const active = doc.activeElement;
+    if (active !== null && node instanceof MElement && node.contains(active)) {
+      doc.activeElement = doc.body;
+    }
     return node;
   }
 

@@ -1110,9 +1110,12 @@ canvas {
   min-width: 0;
 }
 
-.figure > :last-child {
-  flex: 1 0 auto;
-}
+/* The figure's last child used to be the fact card, and this grew it to fill
+   the column. Both halves of that are gone: the fact card is in the rail above
+   the breakpoint, and the rule never bit there anyway — `.bench` is
+   `align-items: start`, so the figure is sized to its content and a flex column
+   with no free space has nothing to distribute. Below the breakpoint, where the
+   figure does stretch, §15 says `.fact { flex: 1 0 auto }` in its own words. */
 
 /* The title and its blurb are ONE BLOCK, stacked, sharing a left edge.
 
@@ -1765,8 +1768,15 @@ canvas {
 }
 
 /* --------------------------------------------------------------------------
-   10  Fact card — the second elevated object in the figure column. Two facts,
-   one sentence each, each with its source. No label above them.
+   10  Fact card — two facts, one sentence each, each with its source. No label
+   above them.
+
+   It sits under the control panel in the rail above the breakpoint and under
+   the "Try:" row in the figure below it, so it is written to be width-agnostic:
+   nothing here states a column. At the card's 344 px of content — the 384 px
+   rail less its own 2 × 20 px of padding, and 376 px on the 26rem rail a
+   1440 px window gets — it is 360 px tall against the panel's 444, which is
+   most of what the rail had spare.
    -------------------------------------------------------------------------- */
 
 .fact {
@@ -1778,7 +1788,13 @@ canvas {
   transition: opacity var(--dur-5) var(--ease-out);
 }
 
-/* The one entrance animation in the file, and it fires once, on mount. */
+/* The one entrance animation in the file. It fires on mount, and again each
+   time the viewport crosses 1024 px: `restack()` re-parents this card between
+   the figure and the rail, and a node that is removed and re-inserted is
+   first-rendered again, so @starting-style applies again. Dragging a window
+   across the breakpoint therefore re-fades it. Left alone deliberately — the
+   alternative is a flag class on <html> around a move that is already rare, and
+   §17 collapses the transition to 0.01 ms for a reader who asks for less. */
 @starting-style {
   .fact {
     opacity: 0;
@@ -1824,16 +1840,39 @@ canvas {
    11  Rail, transport, controls
    -------------------------------------------------------------------------- */
 
+/* Three things stacked: the control panel, the fact card, the footer line. The
+   24 px is --bench-gap, so the rail's rhythm is the figure's.
+
+   `gap` rather than margins because the fact card is `hidden` on a tab that
+   declares no facts, and a `display: none` flex item generates neither a box
+   nor a gap — the footer closes up under the panel by itself.
+
+   Below the breakpoint §15 sets `display: contents` here, which switches the
+   whole shape off: the bench becomes the flex container and these three take
+   their place in its single column by `order`. */
 .rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
   min-width: 0;
 }
 
+/* NOT sticky. It was, and the declaration had never once engaged: `.bench` is
+   `align-items: start`, so the rail was sized to this panel and a sticky box
+   with no room in its containing block cannot travel. Putting the fact card and
+   the footer underneath it hands it 434 px of room on the default board — and
+   a sticky box stays in flow and is merely offset, and paints above its
+   non-positioned siblings, so the first scroll would have slid the panel down
+   over the fact card and covered it. The panel now scrolls with the page,
+   which is what it has always actually done. */
 .rail__panel {
-  position: sticky;
-  top: var(--s-6);
   display: flex;
   flex-direction: column;
   gap: var(--s-7);
+  /* A panel taller than the viewport scrolls inside itself rather than running
+     off the bottom of a short window — a laptop in landscape with the browser
+     chrome taken off it is under 600 px. It is the long-parameter-list safety
+     net, not part of the sticky that used to be above. */
   max-height: calc(100dvh - var(--s-12));
   padding: var(--s-5);
   border-radius: var(--radius-4);
@@ -2884,7 +2923,20 @@ input.window:disabled {
 /* --------------------------------------------------------------------------
    14  Footer and utilities
    One quiet line: Source, the licence, the author. That is where the name and
-   the repository belong — the last thing on the page, not the first.
+   the repository belong — last, not first.
+
+   The values here are the rail's, because this file is desktop-first and above
+   the breakpoint the footer is the last thing in the rail, under the fact card.
+   The page-level gutter and the 32 px above it live in §15, where the footer is
+   a child of the page again. Inside the rail it must NOT carry --gutter: the
+   bench already pays that, and a second 32 px each side would inset the line
+   from the two cards it sits under, whose boxes have the rail's full 384 px. The
+   24 px of rail gap plus the 8 px here is the 32 the scale asks for above a
+   footer — and with a tab that declares no facts, where the card is hidden and
+   its gap with it, that 32 is exactly what is left under the panel.
+
+   It still wraps, and now it has to: the three items are one 18 px line in a
+   384 px rail and two lines at 200 % text, which is what `flex-wrap` is for.
    -------------------------------------------------------------------------- */
 
 .footer {
@@ -2892,8 +2944,8 @@ input.window:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2) var(--s-5);
-  margin-top: var(--s-8);
-  padding: var(--s-6) var(--gutter) var(--s-8);
+  margin-top: var(--s-2);
+  padding: 0;
   font-family: var(--font-display);
   font-size: var(--t-12);
   font-weight: var(--wght-ui);
@@ -2921,8 +2973,10 @@ input.window:disabled {
 
 /* --------------------------------------------------------------------------
    15  Responsive
-   >= 1024px: bench — the figure beside a sticky, fixed-width rail.
-   600–1023: one column, the rail's sections interleave with the figure's.
+   >= 1024px: bench — the figure beside a fixed-width rail that carries the
+   control panel, the fact card and the footer line.
+   600–1023: one column, the rail's sections interleave with the figure's and
+   the footer goes back to being the last row of the page.
    <= 599: handheld — a scrolling tab strip, a floating transport deck, and
    the exact table as an almanac.
    -------------------------------------------------------------------------- */
@@ -2931,9 +2985,11 @@ input.window:disabled {
   .bench {
     display: flex;
     flex-direction: column;
-    /* `align-items: start` on the two-column bench keeps the rail from
-       stretching so it can be sticky. In a COLUMN it means "shrink to content",
-       which collapses the plate to the stage's intrinsic width. Restated. */
+    /* `align-items: start` on the two-column bench leaves the rail at its own
+       height, which is what lets the two columns end where their content does —
+       within about 120 px of each other on the default board. In a COLUMN it
+       would mean "shrink to content", which collapses the plate to the stage's
+       intrinsic width. Restated. */
     align-items: stretch;
     gap: var(--s-6);
   }
@@ -2971,6 +3027,18 @@ input.window:disabled {
   .fact {
     order: 8;
     flex: 1 0 auto;
+  }
+
+  /* `restack()` takes the footer out of the rail and back to the page at this
+     width, so in the ordinary path this `order` never applies and these two are
+     the page-level spacing §14 hands over. The order is insurance: a browser
+     with no `matchMedia` at all leaves the desktop arrangement in place at every
+     width, and a footer still inside a `display: contents` rail is a bench flex
+     item at order 0 — the licence line above the title of the page. */
+  .footer {
+    order: 9;
+    margin-top: var(--s-8);
+    padding: var(--s-6) var(--gutter) var(--s-8);
   }
 }
 
@@ -3494,6 +3562,32 @@ input.window:disabled {
     display: none !important;
   }
 
+  /* Its only two children are the transport and the controls, both hidden just
+     above, so on paper it is 40 px of padding in the middle of the reading
+     order. Hidden here rather than left in the flow below. */
+  .rail__panel {
+    display: none !important;
+  }
+
+  /* A portrait Letter page is 816 px and A4 is 794, so §15's `max-width:
+     63.9375rem` MATCHES while printing — and it hands the footer the page
+     gutter — while which box the footer is IN was decided by the screen width,
+     through matchMedia, when the DOM was arranged.
+
+     Only one of the two arrangements needs correcting. Inside the rail the
+     bench has already paid the gutter, so a second one sets the licence line in
+     from the cards above it. As a child of the page nothing else pays it, and
+     zeroing it there printed the line flush to the page box while the plate,
+     the readouts and the fact card all started 24 px in. Hence the child
+     selector: it is the rail's correction, not the footer's. */
+  .footer {
+    margin-top: var(--s-6);
+  }
+
+  .rail > .footer {
+    padding-inline: 0;
+  }
+
   /* Out of the clip and back into the flow: on paper the table of measurements
      against their analytic targets is the point of the handout. */
   .readouts__ledger {
@@ -3510,8 +3604,7 @@ input.window:disabled {
   .page,
   .bench,
   .figure,
-  .rail,
-  .rail__panel {
+  .rail {
     display: block;
     background: #ffffff;
     max-height: none;
@@ -3528,7 +3621,8 @@ input.window:disabled {
 
   .plate,
   .readouts,
-  .fact {
+  .fact,
+  .footer {
     break-inside: avoid;
   }
 

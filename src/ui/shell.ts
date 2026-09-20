@@ -449,6 +449,10 @@ export function createShell(
   on(controls, 'submit', (event) => event.preventDefault());
 
   const railPanel = h('div', { class: 'rail__panel' }, transport, controls);
+  // Above the breakpoint the rail holds the fact card and the footer line under
+  // the panel; `restack()` puts them there. The rail was 444 px of content
+  // beside a 1,300 px figure — 850 px of empty right-hand column, and a reader
+  // scrolling the plate past it to reach the facts underneath.
   const rail = h('div', { class: 'rail' }, railPanel);
 
   // The tab widget's panel is the whole bench: the plate, the readouts and the
@@ -467,9 +471,24 @@ export function createShell(
 
   // One quiet line. The two links are the only ones on the page besides the
   // fact sources that open a new tab: they leave the app.
+  //
+  // `role="contentinfo"` is stated rather than inherited. A <footer> maps to the
+  // contentinfo landmark only while it is scoped to <body>, and above the
+  // breakpoint this one lives in the rail, inside <main class="bench"> — where
+  // HTML-AAM makes it a generic div and the landmark simply disappears. Stating
+  // the role once, at construction, is what keeps the landmark the same at every
+  // width: one that exists at 1,024 px and not at 1,023 is worse for a reader
+  // who zooms than one that is honestly absent.
+  //
+  // The cost is named precisely: axe's `landmark-contentinfo-is-top-level` does
+  // NOT fire here, because the <main> above it carries `role="tabpanel"` and so
+  // is not a main landmark — what a conformance run flags is `aria-allowed-role`,
+  // for a role stated on a <footer> that is not scoped to <body>. That flag is
+  // accepted, and it is the same kind of trade the bench already makes by
+  // carrying `role="tabpanel"` over its own `main`.
   const footer = h(
     'footer',
-    { class: 'footer' },
+    { class: 'footer', role: 'contentinfo' },
     h('a', { class: 'footer__source', href: REPO_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Source'),
     h('a', { href: LICENCE_URL, target: '_blank', rel: 'noopener noreferrer' }, 'CC BY-NC 4.0'),
     h('span', { class: 'footer__author' }, AUTHOR),
@@ -937,7 +956,7 @@ export function createShell(
   // -- bench order ----------------------------------------------------------
 
   /**
-   * Put the rail's keys where the layout paints them.
+   * Put the rail's contents where the layout paints them.
    *
    * Below the breakpoint the figure and the rail are `display: contents` and the
    * bench is one column, with the transport between the plate and the readouts
@@ -948,17 +967,37 @@ export function createShell(
    * comes back up to Play stops later. So the stack is restacked in the DOM
    * as well.
    *
+   * Above it, four things move the other way: the transport and the controls
+   * into the panel, and the fact card and the footer line under it, into the
+   * 850 px of column the panel leaves empty.
+   *
+   * The footer has to come back out again. Below the breakpoint the rail is
+   * `display: contents`, so a footer left inside it is a flex item of the bench
+   * with no `order` — that is, order 0, ahead of the figure's head at 1 — and
+   * the licence line paints above the title of the page. theme.css §15 gives it
+   * `order: 9` as well, because `restack(stackQuery?.matches ?? false)` leaves
+   * the desktop arrangement in place on a browser with no matchMedia at all.
+   *
    * Re-parenting an element blurs it, so the focus is carried across the move —
-   * which is the whole point of the exercise.
+   * which is the whole point of the exercise. The fact card's sources and the
+   * footer's two links are focusable and now move too, so they are held as well.
    */
   function restack(stacked: boolean): void {
     const active = document.activeElement;
-    const held = active !== null && (transport.contains(active) || controls.contains(active));
+    const held =
+      active !== null &&
+      (transport.contains(active) ||
+        controls.contains(active) ||
+        fact.contains(active) ||
+        footer.contains(active));
     if (stacked) {
       figure.insertBefore(transport, readouts);
       figure.insertBefore(controls, story);
+      figure.append(fact);
+      page.append(footer);
     } else {
       railPanel.append(transport, controls);
+      rail.append(fact, footer);
     }
     if (held && active instanceof HTMLElement) active.focus();
   }

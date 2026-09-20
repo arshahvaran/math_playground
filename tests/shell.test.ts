@@ -71,6 +71,11 @@ function focused(): MElement | null {
   return dom.document.activeElement;
 }
 
+/** The class of an element's parent, for asserting where restack() put it. */
+function parentClass(el: MElement | undefined): string {
+  return (el?.parentNode as MElement | null)?.className.split(/\s+/)[0] ?? '';
+}
+
 /** The bench's children in document order, by class — the tab order, in short. */
 function benchOrder(): string[] {
   const bench = byClass(dom, 'bench')[0];
@@ -91,17 +96,24 @@ function benchOrder(): string[] {
 describe('bench order', () => {
   it('follows the two-column layout above the breakpoint', () => {
     mount();
-    // The figure column, then the rail: the paint order at this width.
+    // The figure column, then the rail: the paint order at this width. The fact
+    // card and the footer line are the rail's too — the panel is 444 px of a
+    // column as tall as the figure, and they are what goes in the rest of it.
     expect(benchOrder()).toEqual([
       'figure__head',
       'plate',
       'permalink',
       'readouts',
       'story',
-      'fact',
       'transport',
       'controls',
+      'fact',
+      'footer',
     ]);
+    // Where, not merely "not in the figure": the walk above flattens the rail,
+    // so it would read the same if they had been left inside the panel.
+    expect(parentClass(byClass(dom, 'fact')[0])).toBe('rail');
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('rail');
   });
 
   it('follows the single stack below it', () => {
@@ -121,6 +133,27 @@ describe('bench order', () => {
       'story',
       'fact',
     ]);
+    expect(parentClass(byClass(dom, 'fact')[0])).toBe('figure');
+    // And the footer is out of the bench entirely. Left in the rail it would be
+    // a bench flex item at order 0, which paints it above the figure's title.
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('page');
+  });
+
+  it('puts every moved section back, however many times the query fires', () => {
+    // A MediaQueryList is allowed to fire `change` without the value changing,
+    // and restack() moves four subtrees now. An append() of a node that is
+    // already the last child is a no-op; an insertBefore() against a reference
+    // that has itself just moved is not, so this is worth pinning.
+    mount();
+    const wide = benchOrder();
+    for (let i = 0; i < 3; i++) dom.setMedia(STACKED, true);
+    expect(benchOrder()[3]).toBe('transport');
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('page');
+
+    for (let i = 0; i < 3; i++) dom.setMedia(STACKED, false);
+    expect(benchOrder()).toEqual(wide);
+    expect(parentClass(byClass(dom, 'fact')[0])).toBe('rail');
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('rail');
   });
 
   it('restacks when the layout changes, keeping the focus', () => {
@@ -136,8 +169,50 @@ describe('bench order', () => {
     expect(dom.document.activeElement).toBe(play);
 
     dom.setMedia(STACKED, false);
-    expect(benchOrder()[6]).toBe('transport');
+    expect(benchOrder()[5]).toBe('transport');
     expect(dom.document.activeElement).toBe(play);
+  });
+
+  it('carries the focus out of the two sections that only just started moving', () => {
+    // The fact card's sources and the footer's two links are focusable, and the
+    // move takes them across as well now. Without them in restack()'s `held`
+    // test, a reader who tabs to the licence link and rotates a tablet loses the
+    // focus to <body> and starts the page again — the same WCAG 3.2 failure the
+    // function was written for, in a subtree nobody had moved before.
+    mount();
+    const licence = byClass(dom, 'footer')[0]?.children[1];
+    expect(licence?.textContent).toBe('CC BY-NC 4.0');
+    licence?.focus();
+
+    dom.setMedia(STACKED, true);
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('page');
+    expect(dom.document.activeElement).toBe(licence);
+
+    dom.setMedia(STACKED, false);
+    expect(parentClass(byClass(dom, 'footer')[0])).toBe('rail');
+    expect(dom.document.activeElement).toBe(licence);
+  });
+
+  it('carries it out of the fact card too, which moves the other way', () => {
+    // The footer case above leaves half the new code untested: `held` is an OR,
+    // so deleting the fact card's term alone still passes it. A fact's source is
+    // a link, and the card crosses the breakpoint in the opposite direction to
+    // the footer — into the figure, not out to the page.
+    const handle = mount();
+    const facts = registry.find((viz) => viz.id === 'buffon')?.facts ?? [];
+    expect(facts.length).toBeGreaterThan(0);
+    createFacts(handle.regions.facts as unknown as HTMLElement, facts);
+    const source = byClass(dom, 'fact__source')[0]?.children[0];
+    expect(source?.tagName).toBe('a');
+    source?.focus();
+
+    dom.setMedia(STACKED, true);
+    expect(parentClass(byClass(dom, 'fact')[0])).toBe('figure');
+    expect(dom.document.activeElement).toBe(source);
+
+    dom.setMedia(STACKED, false);
+    expect(parentClass(byClass(dom, 'fact')[0])).toBe('rail');
+    expect(dom.document.activeElement).toBe(source);
   });
 });
 
@@ -235,6 +310,20 @@ describe('the chrome', () => {
       'Ali Reza Shahvaran',
     ]);
     expect(byClass(dom, 'footer__source')[0]?.getAttribute('href')).toMatch(/github\.com/);
+  });
+
+  it('says it is the contentinfo landmark, at both widths', () => {
+    // A <footer> IS contentinfo only while it is scoped to <body>. Above the
+    // breakpoint this one lives in the rail, inside <main class="bench">, where
+    // HTML-AAM makes it a generic div — so the role is stated at construction
+    // rather than inherited, and stated once: a landmark that appears at 1024 px
+    // and is gone at 1023 is worse for a reader who zooms than one that is
+    // always there.
+    mount();
+    expect(byClass(dom, 'footer')[0]?.getAttribute('role')).toBe('contentinfo');
+
+    dom.setMedia(STACKED, true);
+    expect(byClass(dom, 'footer')[0]?.getAttribute('role')).toBe('contentinfo');
   });
 
   it('carries no parameter caption and no figure number under the plate', () => {
