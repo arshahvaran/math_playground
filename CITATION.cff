@@ -9,11 +9,11 @@ authors:
 repository-code: "https://github.com/arshahvaran/math_playground"
 url: "https://arshahvaran.github.io/math_playground/"
 abstract: >-
-  A client-side web application presenting interactive, parameter-driven
-  visualizations of classic results in probability, chaos, and number theory,
-  including the Galton board, the central limit theorem, Buffon's needle,
-  random walks, Fourier series, and the logistic map. Every simulation is
-  seeded and reproducible, and each converges to a value verifiable in closed form.
+  A browser-based application presenting five interactive probability
+  simulations: a Galton board, Buffon's needle, Monte Carlo pi, the arcsine
+  law, and diffusion-limited aggregation. Every run is seeded and
+  reproducible; four of the five converge to a value verifiable in closed
+  form, and the fifth measures a fractal dimension that has none.
 keywords:
   - mathematics
   - visualization

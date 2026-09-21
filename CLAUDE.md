@@ -1,7 +1,7 @@
 # math_playground
 
-Ten interactive math visualizations behind one tab bar. Client-side, no backend,
-deployed to GitHub Pages.
+Five interactive math visualizations behind one tab bar. Runs in the browser,
+no backend, deployed to GitHub Pages.
 
 Design in `docs/ARCHITECTURE.md`. Process in `docs/WORKFLOW.md`. What each tab
 must do, and the analytic value it must converge to, in `docs/VISUALIZATIONS.md`.
