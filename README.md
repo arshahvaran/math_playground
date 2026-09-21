@@ -1,7 +1,8 @@
 # Math Playground
 
-Five interactive probability simulations: a Galton board, Buffon's needle, Monte Carlo π, the
-arcsine law, and diffusion-limited aggregation.
+Interactive, parameter-driven visualizations of classic results in probability, from a
+Galton board and Buffon's needle to Monte Carlo π, the arcsine law, and diffusion-limited
+aggregation, each converging to a verifiable value.
 
 **Live app:** https://arshahvaran.github.io/math_playground/
 
