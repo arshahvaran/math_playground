@@ -1,8 +1,8 @@
 # Math Playground
 
 Interactive, parameter-driven visualizations of classic results in probability, from a
-Galton board and Buffon's needle to Monte Carlo π, the arcsine law, and diffusion-limited
-aggregation, each converging to a verifiable value.
+Galton board, the Maxwell–Boltzmann speed distribution and Buffon's needle to Monte Carlo π,
+the arcsine law, and diffusion-limited aggregation, each converging to a verifiable value.
 
 **Live app:** https://arshahvaran.github.io/math_playground/
 
