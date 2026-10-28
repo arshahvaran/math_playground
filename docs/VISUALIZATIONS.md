@@ -32,6 +32,40 @@ at each one. Where it lands is the sum of `n` coin flips.
 - **Facts:** Galton called it a *quincunx* and built it to argue that inherited
   traits would still produce a stable population distribution.
 
+### 22. Maxwell–Boltzmann — `maxwell-boltzmann` *(done)*
+
+A machine fires beads, one per gas molecule, horizontally out of a port at the
+top of a wall. Every bead falls the same height, so every flight lasts the same
+time and a bead lands at a distance from the wall proportional to its speed: the
+slots along the floor sort the beads by speed, and the piles trace the curve.
+Under the machine, the same slots as a share of the beads, against the curve.
+
+- **Parameters:** gas (nitrogen, argon, xenon), temperature (200–700 K), bead
+  count (50–5,000), seed.
+- **Analytic target:** a molecule's velocity has three independent normal
+  components of standard deviation `a = √(kT/m)` — Maxwell's assumption — so its
+  speed has density `f(v) = √(2/π)·v²/a³·e^(−v²/2a²)`. Mean `√(8kT/πm)`, the
+  headline; root-mean-square `√(3kT/m)`; most probable `√(2kT/m)`. Sound in the
+  same ideal gas travels at `√(γkT/m)`, so the share of molecules faster than
+  sound is `erfc(√(γ/2)) + √(2γ/π)·e^(−γ/2)`, whatever the temperature: 0.7055
+  for a diatomic gas (`γ = 7/5`), 0.6444 for a monatomic one (`γ = 5/3`).
+- **The moment:** room air. The marker for the speed of sound sits on the rising
+  side of the hump, and seven beads in ten land to the right of it. Heat the gas
+  and the molecules and the sound speed up together, so the share never moves.
+- **Why it sits next to the Galton board:** the board builds one bell out of
+  coin flips. This tab takes three of those bells, one per direction, and asks
+  for the length of the arrow they make — a curve that is not a bell at all,
+  lopsided, with a long fast tail.
+- **The machine:** the speed is drawn at release and decides the slot exactly —
+  slot `k` holds the speeds `[100k, 100k + 100)` m/s, the last slot everything
+  from 1,900 m/s up — so the counts are binned Maxwell–Boltzmann by
+  construction, at every frame rate and plate size. The fiction is confined to
+  the hopper's air lift and to the rattle inside a slot; the flight from the port
+  is a true parabola.
+- **Facts:** Maxwell (1860) assumed the three components independent and
+  derived the curve; Boltzmann (1872) showed collisions drive any gas to it; the
+  share faster than sound depends on `γ` alone.
+
 ### 2. Central Limit Machine — `clt` *(planned)*
 
 Sum `N` samples from a distribution you choose, plot the standardized sum, repeat.
@@ -541,6 +575,7 @@ hidden behind another.
 | Tab | id | Group | State |
 |---|---|---|---|
 | Galton Board | `galton` | randomness | **done** |
+| Maxwell–Boltzmann | `maxwell-boltzmann` | randomness | **done** |
 | Buffon's Needle | `buffon` | randomness | **done** |
 | Chaos Game | `chaos-game` | chaos | planned |
 | Monte Carlo π | `montecarlo-pi` | randomness | planned |
